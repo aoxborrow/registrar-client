@@ -3,12 +3,12 @@ import type {
   ConnectionResult,
   Domain,
   OperationResult,
-  RegistrarClientOptions,
+  RegistrarOptions,
   RequestOptions,
 } from '../types.js';
 import { createDomain, sleep } from '../utils.js';
 import { toRegistrarError } from '../errors.js';
-import { BaseRegistrar } from './base.js';
+import { BaseRegistrar, selectBaseUrl } from './base.js';
 import type { RegistrarCredentials } from './types.js';
 
 interface SpaceshipDomain {
@@ -44,12 +44,15 @@ export class SpaceshipRegistrar extends BaseRegistrar {
     { name: 'apiKey', label: 'API Key', type: 'password', required: true },
     { name: 'apiSecret', label: 'API Secret', type: 'password', required: true },
   ];
+  static readonly supportsSandbox = false; // Spaceship has no public sandbox environment
 
-  constructor(credentials: RegistrarCredentials, options?: Partial<RegistrarClientOptions>) {
+  constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
     super(
       credentials,
       {
-        baseUrl: 'https://spaceship.dev/api',
+        baseUrl: selectBaseUrl('Spaceship', options?.environment, {
+          production: 'https://spaceship.dev/api',
+        }),
         headers: {
           'X-API-Key': credentials.apiKey,
           'X-API-Secret': credentials.apiSecret,

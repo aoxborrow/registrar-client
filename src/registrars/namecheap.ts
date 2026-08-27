@@ -3,13 +3,13 @@ import type {
   ConnectionResult,
   Domain,
   OperationResult,
-  RegistrarClientOptions,
+  RegistrarOptions,
   RequestOptions,
 } from '../types.js';
 import { createDomain } from '../utils.js';
 import { toRegistrarError } from '../errors.js';
 import { ensureArray, parseXml } from '../xml.js';
-import { BaseRegistrar } from './base.js';
+import { BaseRegistrar, selectBaseUrl } from './base.js';
 import type { RegistrarCredentials } from './types.js';
 
 // shape of a Namecheap XML response (attributes prefixed with `@_`)
@@ -62,9 +62,21 @@ export class NamecheapRegistrar extends BaseRegistrar {
     { name: 'apiKey', label: 'API Key', type: 'password', required: true },
     { name: 'clientIp', label: 'Client IP', type: 'text', required: false, default: '0.0.0.0' },
   ];
+  // Namecheap runs a sandbox at api.sandbox.namecheap.com (separate account at
+  // sandbox.namecheap.com with its own API key)
+  static readonly supportsSandbox = true;
 
-  constructor(credentials: RegistrarCredentials, options?: Partial<RegistrarClientOptions>) {
-    super(credentials, { baseUrl: 'https://api.namecheap.com/xml.response' }, options);
+  constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
+    super(
+      credentials,
+      {
+        baseUrl: selectBaseUrl('Namecheap', options?.environment, {
+          production: 'https://api.namecheap.com/xml.response',
+          sandbox: 'https://api.sandbox.namecheap.com/xml.response',
+        }),
+      },
+      options
+    );
   }
 
   // common query parameters (credentials + command) for every Namecheap call

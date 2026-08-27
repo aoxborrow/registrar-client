@@ -1,4 +1,4 @@
-import type { RegistrarClientOptions } from '../types.js';
+import type { RegistrarOptions } from '../types.js';
 import { CloudflareRegistrar } from './cloudflare.js';
 import { DynadotRegistrar } from './dynadot.js';
 import { GandiRegistrar } from './gandi.js';
@@ -24,7 +24,7 @@ export type RegistrarName = keyof typeof registrars;
 export function createRegistrar(
   name: RegistrarName,
   credentials: RegistrarCredentials,
-  options?: Partial<RegistrarClientOptions>
+  options?: RegistrarOptions
 ): RegistrarProvider {
   const Registrar = registrars[name];
   return new Registrar(credentials, options);

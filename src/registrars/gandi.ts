@@ -3,12 +3,12 @@ import type {
   ConnectionResult,
   Domain,
   OperationResult,
-  RegistrarClientOptions,
+  RegistrarOptions,
   RequestOptions,
 } from '../types.js';
 import { createDomain } from '../utils.js';
 import { toRegistrarError } from '../errors.js';
-import { BaseRegistrar } from './base.js';
+import { BaseRegistrar, selectBaseUrl } from './base.js';
 import type { RegistrarCredentials } from './types.js';
 
 interface GandiDomain {
@@ -38,12 +38,17 @@ export class GandiRegistrar extends BaseRegistrar {
   static readonly configFields: ConfigField[] = [
     { name: 'apiKey', label: 'API Key', type: 'password', required: true },
   ];
+  // Gandi's v5 API offers a sandbox at api.sandbox.gandi.net (separate account)
+  static readonly supportsSandbox = true;
 
-  constructor(credentials: RegistrarCredentials, options?: Partial<RegistrarClientOptions>) {
+  constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
     super(
       credentials,
       {
-        baseUrl: 'https://api.gandi.net/v5',
+        baseUrl: selectBaseUrl('Gandi', options?.environment, {
+          production: 'https://api.gandi.net/v5',
+          sandbox: 'https://api.sandbox.gandi.net/v5',
+        }),
         headers: {
           'Authorization': `Apikey ${credentials.apiKey}`,
           'Content-Type': 'application/json',

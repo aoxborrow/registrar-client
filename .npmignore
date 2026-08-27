@@ -18,7 +18,10 @@ tsconfig.json
 tsconfig.build.json
 tsup.config.ts
 vitest.config.ts
+vitest.integration.config.ts
 eslint.config.mjs
+.env
+.env.example
 .prettierrc
 .prettierignore
 .editorconfig

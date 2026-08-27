@@ -3,12 +3,12 @@ import type {
   ConnectionResult,
   Domain,
   OperationResult,
-  RegistrarClientOptions,
+  RegistrarOptions,
   RequestOptions,
 } from '../types.js';
 import { createDomain, sleep } from '../utils.js';
 import { toRegistrarError } from '../errors.js';
-import { BaseRegistrar } from './base.js';
+import { BaseRegistrar, selectBaseUrl } from './base.js';
 import type { RegistrarCredentials } from './types.js';
 
 interface DynadotDomainInfo {
@@ -64,10 +64,19 @@ export class DynadotRegistrar extends BaseRegistrar {
   static readonly configFields: ConfigField[] = [
     { name: 'apiKey', label: 'API Key', type: 'password', required: true },
   ];
+  static readonly supportsSandbox = false; // Dynadot has no public sandbox environment
 
-  constructor(credentials: RegistrarCredentials, options?: Partial<RegistrarClientOptions>) {
+  constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
     // baseUrl is the full endpoint; all commands are query-string based
-    super(credentials, { baseUrl: 'https://api.dynadot.com/api3.json' }, options);
+    super(
+      credentials,
+      {
+        baseUrl: selectBaseUrl('Dynadot', options?.environment, {
+          production: 'https://api.dynadot.com/api3.json',
+        }),
+      },
+      options
+    );
   }
 
   // issue a command against the api3.json endpoint (key + command in the query)

@@ -3,7 +3,8 @@ import type {
   ConnectionResult,
   Domain,
   OperationResult,
-  RegistrarClientOptions,
+  RegistrarEnvironment,
+  RegistrarOptions,
   RequestOptions,
 } from '../types.js';
 
@@ -16,6 +17,9 @@ export type RegistrarCredentials = Record<string, string>;
 export interface RegistrarProvider {
   // a short identifier for the provider, e.g. "cloudflare"
   readonly name: string;
+
+  // the API environment this instance targets
+  readonly environment: RegistrarEnvironment;
 
   // verify the configured credentials work
   testConnection(opts?: RequestOptions): Promise<ConnectionResult>;
@@ -41,13 +45,12 @@ export interface RegistrarProvider {
 }
 
 // static side of a registrar class: the constructor plus discovery metadata
-// (display name, the credential fields it needs, and where to get them).
+// (display name, the credential fields it needs, where to get them, and whether
+// it offers a sandbox/test environment).
 export interface RegistrarConstructor {
-  new (
-    credentials: RegistrarCredentials,
-    options?: Partial<RegistrarClientOptions>
-  ): RegistrarProvider;
+  new (credentials: RegistrarCredentials, options?: RegistrarOptions): RegistrarProvider;
   readonly displayName: string;
   readonly configFields: ConfigField[];
   readonly helpText: string;
+  readonly supportsSandbox: boolean;
 }
