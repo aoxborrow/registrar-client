@@ -9,11 +9,13 @@ folder ([cloudflare](cloudflare.md) · [dynadot](dynadot.md) · [gandi](gandi.md
 > method split — not an endpoint reference. See the per-registrar docs for
 > endpoints, auth, and access gates.
 
-> **Also researched since:** [namesilo](namesilo.md) (implemented — broad JSON
-> API), plus [squarespace](squarespace.md) and [networksolutions](networksolutions.md),
-> which are **not implemented** — neither exposes a usable public API (Squarespace
-> is reseller-program-gated; Network Solutions is partner-gated). These aren't in
-> the matrix below yet.
+> **Also researched since (not in the matrix below yet):** implemented —
+> [namesilo](namesilo.md) (broad JSON API), [porkbun](porkbun.md) (JSON API; no
+> transfer-lock write, renewal needs a price handshake), and
+> [namebright](namebright.md) (OAuth2; reads implemented, writes pending
+> verification). Not implemented — [squarespace](squarespace.md),
+> [networksolutions](networksolutions.md), and [edomains](edomains.md), none of
+> which expose a usable public API (reseller/partner-gated or undocumented).
 
 **Legend:** ✓ supported · ~ partial / caveat / indirect · ✗ not in the API
 

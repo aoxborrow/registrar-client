@@ -1,0 +1,90 @@
+# Porkbun — API Research
+
+> Researched: 2026-08-26 · Docs: https://porkbun.com/api/json/v3/documentation · https://porkbun.com/api/json/v3/spec (OpenAPI 3.0, v3.16)
+
+## Overview
+
+Porkbun API v3 is a JSON-over-HTTPS REST API at `https://api.porkbun.com/api/json/v3` (IPv4-only mirror: `api-ipv4.porkbun.com`), covering domain registration/renewal/transfer, nameservers, glue records, DNS + DNSSEC, WHOIS/contacts, URL/email forwarding, SSL bundle retrieval, basic email-hosting password management, marketplace browsing, static-site hosting, and outbound webhooks. All responses are JSON with a `status` field (`SUCCESS`/`ERROR`) plus a `requestId` (UUID) on every call. Porkbun's own docs frame it as agent-friendly: machine-readable error `code`/`next_action`, `dryRun` previews on chargeable operations, a full mock server (`/mock/...`, no credentials needed), and an isolated sandbox (`pk1_sb_...` keys) that simulates registrations/renewals/transfers/DNS with fake credit at the real base URL.
+
+## Authentication
+
+- Two credentials per key pair: `apikey` (public, `pk1_...`) and `secretapikey` (secret, `sk1_...`), generated at https://porkbun.com/account/api.
+- Two equivalent auth methods: put `apikey`/`secretapikey` in the JSON POST body (legacy/classic style, still fully supported and shown in most examples), **or** send `X-API-Key` / `X-Secret-API-Key` request headers (newer, works on GET too). A few endpoints also accept `Authorization: Bearer <token>`. Pick one method per request.
+- **Per-domain API access toggle**: each domain has an `apiAccess` flag (visible in `domain/get`/`domain/listAll`, toggled at porkbun.com/account under the domain). A domain must be opted in before most write operations (renew, updateNs, updateContacts, etc.) will act on it — this is Porkbun's main access gate, not a scope on the key itself.
+- **Per-key IP allowlist**: optional, set via the gear icon next to a key at porkbun.com/account/api. When set, requests from any other source IP fail immediately with HTTP 403 `IP_NOT_ALLOWED`, before other endpoint logic runs. Also supports an optional per-key **domain allowlist** (`DOMAIN_NOT_ALLOWED` if violated).
+- **Sandbox keys**: a `pk1_sb_...`/`sk1_sb_...` pair (created the same way) hits the same base URL but simulates everything — registrations, renewals, transfers, DNS, contacts, nameservers, glue, DNSSEC — against an isolated per-account datastore seeded with $1000 fake credit. Every sandbox response includes `"sandbox": true` and an `X-Porkbun-Sandbox: true` header. Hosting and email endpoints are not simulated (`SANDBOX_UNSUPPORTED`).
+- Rate limits are enforced per-account/per-key and vary by endpoint (e.g. `checkDomain` defaults to 1/10s; `domain/create` and `domain/renew` each have a separate 1/10s attempt limit and a 50/86400s success limit). Exceeding a limit returns HTTP 429 with `RATE_LIMIT_EXCEEDED`, a `Retry-After` header, and `X-RateLimit-Limit`/`Remaining`/`Reset` headers.
+
+## Feature Support
+
+| Feature                              | Support | Notes / endpoint                                                                                                                                                                                                                                                                               |
+| ------------------------------------ | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Test connection / verify credentials | ✓       | `POST/GET /ping` — no creds returns caller IP only; valid creds add `credentialsValid: true`; invalid creds → 400                                                                                                                                                                              |
+| List domains                         | ✓       | `POST/GET /domain/listAll` — paginated (`start`, up to 1000/page), filterable by `domain`, `nameContains`, `tlds`, `expiringWithinDays`, `autoRenew`, `apiAccess`                                                                                                                              |
+| Get single domain details            | ✓       | `GET /domain/get/{domain}`, or `domain/listAll` with `domain=` filter                                                                                                                                                                                                                          |
+| Check domain availability            | ✓       | `POST /domain/checkDomain/{domain}` — also returns registration/renewal/transfer pricing                                                                                                                                                                                                       |
+| Get domain/TLD pricing               | ✓       | `POST/GET /pricing/get` — unauthenticated, all TLDs or filtered by `tlds[]`                                                                                                                                                                                                                    |
+| Register a new domain                | ✓       | `POST /domain/create/{domain}` — account-credit only, registry-minimum term, `dryRun` supported                                                                                                                                                                                                |
+| Renew a domain                       | ✓       | `POST /domain/renew/{domain}` — account-credit only, registry-minimum term, `dryRun` supported; premium renewals not supported via API                                                                                                                                                         |
+| Auto-renew toggle                    | ✓       | `POST /domain/updateAutoRenew/{domain}` — single domain (path) or bulk (`domains[]` in body)                                                                                                                                                                                                   |
+| Transfer domain in                   | ✓       | `POST /domain/transfer/{domain}` — requires `authCode`; async, 5–7 days; `.uk`/manage-only TLDs and premium domains not supported via API; `dryRun` supported                                                                                                                                  |
+| Transfer out / get auth-EPP code     | ✗       | No API endpoint retrieves an outbound auth/EPP code — must be requested from the porkbun.com dashboard. `authCode` only appears as an _input_ param for inbound transfers.                                                                                                                     |
+| Update nameservers                   | ✓       | `POST /domain/updateNs/{domain}` — full replace via ordered `ns[]` array                                                                                                                                                                                                                       |
+| Get nameservers                      | ✓       | `POST/GET /domain/getNs/{domain}`                                                                                                                                                                                                                                                              |
+| Lock / unlock domain (transfer lock) | ~       | Read-only: `domain/get`/`listAll` expose `securityLock` (1/0). **No endpoint sets it** — no lock/unlock/toggle call exists anywhere in the spec.                                                                                                                                               |
+| Get/set WHOIS privacy                | ~       | `whoisPrivacy` is readable on `domain/get`/`listAll` and settable **only at registration time** (`whoisPrivacy` on `domain/create`, defaults to account-level setting). No standalone toggle endpoint for an already-registered domain was found in the spec.                                  |
+| Update contact info                  | ✓       | `GET /domain/getContacts/{domain}`, `POST /domain/updateContacts/{domain}` — per-role (`registrant`/`admin`/`tech`/`billing`); registrant changes on address-validated TLDs run Google Address Validation; `.au` registrant/org change unsupported via API (`REGISTRANT_CHANGE_NOT_SUPPORTED`) |
+| DNS record management                | ✓       | Full CRUD: `dns/create`, `dns/edit(ByNameType)`, `dns/delete(ByNameType)`, `dns/retrieve(ByNameType)` under `/{domain}`                                                                                                                                                                        |
+| DNSSEC management                    | ✓       | `dns/createDnssecRecord/{domain}`, `dns/deleteDnssecRecord/{domain}/{keytag}`, `dns/getDnssecRecords/{domain}`                                                                                                                                                                                 |
+| Glue / host records                  | ✓       | `domain/createGlue`, `domain/updateGlue`, `domain/deleteGlue`, `domain/getGlue`, all under `/{domain}/{subdomain}`                                                                                                                                                                             |
+| Email forwarding                     | ~       | No mail-forwarding-rule endpoint found; only `email/setPassword` (set password for an existing hosted mailbox). Forwarding rules appear to be dashboard-only.                                                                                                                                  |
+| Domain forwarding / URL redirect     | ✓       | `domain/addUrlForward/{domain}`, `domain/getUrlForwarding/{domain}`, `domain/deleteUrlForward/{domain}/{id}` — 301/302/masked                                                                                                                                                                  |
+| Webhooks                             | ✓       | `webhook/create`, `update`, `delete`, `list`, `get/{id}`, `eventTypes`, `test`, `resend`, `rotateSecret`, `deliveries`, `delivery/{id}` — HMAC-signed (`X-Porkbun-Signature`), up to 20 endpoints/account, delivered in sandbox too                                                            |
+
+## Implementation quick-reference
+
+Base URL: `https://api.porkbun.com/api/json/v3` (IPv4-only fallback: `https://api-ipv4.porkbun.com/api/json/v3`). Success/failure signalled by `status: "SUCCESS"` / `"ERROR"` in the JSON body; errors also carry a machine-readable `code` (e.g. `INVALID_DOMAIN`, `RATE_LIMIT_EXCEEDED`, `IP_NOT_ALLOWED`) and often a `next_action` hint. Every response includes a `requestId` UUID (also `X-Request-Id` header).
+
+1. **Verify credentials / test connection** — `POST /ping` (also `GET`)
+   Body (optional): `{"apikey": "...", "secretapikey": "..."}`. No credentials → returns caller IP only. Valid credentials → adds `credentialsValid: true`. Invalid → HTTP 400 error body. `domain/checkDomain` is also commonly used as a de-facto connection test since it requires valid credentials.
+
+2. **List domains** — `POST /domain/listAll` (also `GET`)
+   Body: `{"apikey": "...", "secretapikey": "...", "start": 0, "includeLabels": "yes", "domain": "...", "nameContains": "...", "tlds": [...], "expiringWithinDays": 30, "autoRenew": "yes|no", "apiAccess": "yes|no", "sortName": "domain|tld|create_date|expire_date", "sortDirection": "asc|desc"}`
+   Response: `{"status": "SUCCESS", "domains": [{domain, status, tld, createDate, expireDate, securityLock, whoisPrivacy, autoRenew, apiAccess, notLocal, ...}]}`, up to 1000 per page.
+
+3. **Renew a domain** — `POST /domain/renew/{domain}` (supported)
+   Body: `{"apikey": "...", "secretapikey": "...", "cost": <pennies, must equal current renewal price>, "dryRun": true|false}`
+   Requirements: domain must be in-account, active, opted in to `apiAccess`; account email/phone verified; sufficient account credit; domain registered >30 days ago; not renewed successfully in the last 30 days; premium renewals unsupported via API. Always renews for the registry-minimum term (usually 1 year). Rate limits: 1 attempt/10s, 50 successes/86400s (both configurable per key). `dryRun: true` validates and returns the cost without charging.
+
+4. **Update/set nameservers** — `POST /domain/updateNs/{domain}`
+   Body: `{"apikey": "...", "secretapikey": "...", "ns": ["ns1.example.com", "ns2.example.com"]}` — full replace, ordered array. Response is the generic `{"status": "SUCCESS"}` shape.
+
+5. **Lock domain (transfer lock)** — **not supported.** No write endpoint exists for `securityLock`. It is exposed as a read-only integer field (`1`/`0`) on `domain/get` and `domain/listAll` only.
+
+6. **Unlock domain** — **not supported**, same reasoning as above; no toggle endpoint anywhere in the v3.16 spec.
+
+## Notable / Unique Features
+
+- **Dry-run previews** — `dryRun: true` on `domain/create`, `domain/renew`, and `domain/transfer` validates everything (funds, eligibility, price) and returns the would-be cost without creating an order or charging. Suggested generic method: pass a `dryRun` option through `registerDomain`/`renewDomain`/`transferIn`.
+- **Mock server** — every real path is mirrored under `/mock/...` with zero credentials needed, returning schema-accurate example responses (`?status=error` for the error shape). Useful for building/testing a client library against a stable fixture before wiring real keys.
+- **Sandbox environment** — `pk1_sb_...` keys simulate the full domain/DNS lifecycle (including webhook delivery) with fake credit, resettable via `/sandbox/reset` and toppable via `/sandbox/topup`; `/sandbox/triggerWebhook` fires any event on demand for testing signature verification.
+- **TLD registration requirements as JSON Schema** — `GET /domain/getRegistrationRequirements/{tld}` returns whether a TLD is `apiRegisterable`, the exact `domain/create` request body as JSON Schema, fixed term, and any registry eligibility fields (e.g. `.us` nexus, `.ca` legal type) as a second schema. Suggested generic method: `getRegistrationRequirements(tld)`.
+- **Free SSL bundle retrieval** — `POST/GET /ssl/retrieve/{domain}` returns the Let's Encrypt certificate bundle Porkbun auto-issues for the domain (requires status `HAVECERT`). Suggested generic method: `getSslBundle(domain)`.
+- **Static site hosting** — `hosting/create`, `hosting/get`, `hosting/delete`, `hosting/files`, `hosting/deploy`, `hosting/makeDir`, `hosting/deleteFile`, `hosting/plans` under `/{domain}` — provision and deploy static sites directly to a Porkbun-hosted domain. Suggested generic method: out of scope for a registrar-only client, but worth a `hosting` sub-namespace if ever wanted.
+- **Marketplace browsing** — `GET/POST /marketplace/getAll` with server-side filtering (`query`, `tlds`, SLD length, sort). Suggested generic method: `browseMarketplace(filters)`.
+- **Signed webhooks with replay tooling** — `X-Porkbun-Signature` HMAC header, `webhook/test` (send a test event), `webhook/resend` and `webhook/deliveries`/`delivery/{id}` (delivery history + manual redelivery), `webhook/rotateSecret`. Suggested generic method: `subscribeWebhook(url, events[])`.
+- **Address-validated contact updates** — registrant changes on TLDs requiring validated addresses (`.de`, `.us`, `.ca`, `.au`, `.eu`, `.uk`, `.nz`, `.in`, etc.) run through Google Address Validation server-side, returning `ADDRESS_VALIDATION_REQUIRED` with a `suggestedAddress` if correction is needed.
+
+## Auth / Access Notes for Implementors
+
+- Get API credentials at https://porkbun.com/account/api — generates an `apikey`/`secretapikey` pair; each key can be given an optional IP allowlist and domain allowlist via its gear icon.
+- **Per-domain API access must be enabled** separately from key creation — each domain has its own `apiAccess` yes/no flag (toggle at porkbun.com under domain settings); most write operations on a domain will fail until that domain opts in. This is a bigger gotcha than the key-level scope and worth checking/surfacing early (e.g. as part of `testConnection()` or a pre-flight check before mutating calls).
+- Rate limits are per-account and per-endpoint-category, generally configurable per key by Porkbun support; defaults are tight on sensitive ops (e.g. 1 domain-check per 10s, 1 create/renew attempt per 10s with a 50/day success cap). Always branch on `Retry-After` / `X-RateLimit-Reset` rather than hardcoding backoff.
+- Full sandbox at the same base URL via `pk1_sb_...` keys — no separate sandbox hostname. Combine with the credential-free `/mock/...` endpoints for a two-tier testing story (mock = shape-only, sandbox = stateful simulation).
+- No documented endpoint for toggling transfer lock (`securityLock`) or setting WHOIS privacy post-registration, and no endpoint to fetch an outbound transfer auth/EPP code — all three currently require the porkbun.com web dashboard. Treat these as `NotImplementedError`/unsupported in a generic client rather than guessing at undocumented paths.
+
+## Sources
+
+- https://porkbun.com/api/json/v3/documentation
+- https://porkbun.com/api/json/v3/spec (OpenAPI 3.0 JSON spec, `info.version` 3.16)
+- https://porkbun.com/account/api
