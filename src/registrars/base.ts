@@ -1,74 +1,70 @@
-import { HttpClient, type HttpClientConfig } from '../http.js';
+import { DEFAULT_OPTIONS } from '../constants.js';
 import { NotImplementedError } from '../errors.js';
+import { HttpClient, type HttpClientConfig } from '../http.js';
 import type {
+  ConnectionResult,
   Domain,
-  DomainAvailability,
-  DomainPricing,
-  RegisterDomainParams,
-  RenewDomainParams,
+  OperationResult,
+  RegistrarClientOptions,
   RequestOptions,
-  TransferDomainParams,
 } from '../types.js';
-import type { RegistrarProvider } from './types.js';
+import type { RegistrarCredentials, RegistrarProvider } from './types.js';
 
-// Base class for registrar providers. Owns the shared HTTP/auth/retry plumbing
-// via an `HttpClient`, and provides `NotImplementedError`-throwing defaults for
-// every operation. Concrete providers extend this and override the operations
-// their API supports, mapping payloads to/from the shared types.
+// Abstract base for registrar providers. Owns the shared HTTP/auth/retry
+// plumbing (via `HttpClient`) and provides `NotImplementedError`-rejecting
+// defaults for every operation. Concrete providers extend this, build their
+// base URL + auth from the credentials passed to `super()`, and override the
+// operations their API supports.
 export abstract class BaseRegistrar implements RegistrarProvider {
   abstract readonly name: string;
 
   protected http: HttpClient;
+  protected credentials: RegistrarCredentials;
+  protected options: RegistrarClientOptions;
 
-  constructor(config: HttpClientConfig) {
-    this.http = new HttpClient(config);
+  constructor(
+    credentials: RegistrarCredentials,
+    httpConfig: Omit<HttpClientConfig, 'options'>,
+    options?: Partial<RegistrarClientOptions>
+  ) {
+    this.credentials = credentials;
+    this.options = { ...DEFAULT_OPTIONS, ...options };
+    this.http = new HttpClient({ ...httpConfig, options: this.options });
   }
 
-  checkAvailability(_domains: string[], _opts?: RequestOptions): Promise<DomainAvailability[]> {
+  testConnection(_opts?: RequestOptions): Promise<ConnectionResult> {
     return Promise.reject(
-      new NotImplementedError(`${this.name}: checkAvailability is not implemented`)
+      new NotImplementedError(`${this.name}: testConnection is not implemented`)
     );
-  }
-
-  getPricing(_domain: string, _opts?: RequestOptions): Promise<DomainPricing> {
-    return Promise.reject(new NotImplementedError(`${this.name}: getPricing is not implemented`));
   }
 
   listDomains(_opts?: RequestOptions): Promise<Domain[]> {
     return Promise.reject(new NotImplementedError(`${this.name}: listDomains is not implemented`));
   }
 
-  getDomain(_domain: string, _opts?: RequestOptions): Promise<Domain> {
-    return Promise.reject(new NotImplementedError(`${this.name}: getDomain is not implemented`));
-  }
-
-  registerDomain(_params: RegisterDomainParams, _opts?: RequestOptions): Promise<Domain> {
-    return Promise.reject(
-      new NotImplementedError(`${this.name}: registerDomain is not implemented`)
-    );
-  }
-
-  renewDomain(_params: RenewDomainParams, _opts?: RequestOptions): Promise<Domain> {
+  renewDomain(
+    _domainName: string,
+    _years?: number,
+    _opts?: RequestOptions
+  ): Promise<OperationResult> {
     return Promise.reject(new NotImplementedError(`${this.name}: renewDomain is not implemented`));
   }
 
-  transferDomain(_params: TransferDomainParams, _opts?: RequestOptions): Promise<Domain> {
+  updateNameservers(
+    _domainName: string,
+    _nameservers: string[],
+    _opts?: RequestOptions
+  ): Promise<OperationResult> {
     return Promise.reject(
-      new NotImplementedError(`${this.name}: transferDomain is not implemented`)
+      new NotImplementedError(`${this.name}: updateNameservers is not implemented`)
     );
   }
 
-  setNameservers(_domain: string, _nameservers: string[], _opts?: RequestOptions): Promise<Domain> {
-    return Promise.reject(
-      new NotImplementedError(`${this.name}: setNameservers is not implemented`)
-    );
+  lockDomain(_domainName: string, _opts?: RequestOptions): Promise<OperationResult> {
+    return Promise.reject(new NotImplementedError(`${this.name}: lockDomain is not implemented`));
   }
 
-  setAutoRenew(_domain: string, _enabled: boolean, _opts?: RequestOptions): Promise<Domain> {
-    return Promise.reject(new NotImplementedError(`${this.name}: setAutoRenew is not implemented`));
-  }
-
-  setLock(_domain: string, _locked: boolean, _opts?: RequestOptions): Promise<Domain> {
-    return Promise.reject(new NotImplementedError(`${this.name}: setLock is not implemented`));
+  unlockDomain(_domainName: string, _opts?: RequestOptions): Promise<OperationResult> {
+    return Promise.reject(new NotImplementedError(`${this.name}: unlockDomain is not implemented`));
   }
 }

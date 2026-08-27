@@ -1,10 +1,6 @@
 // Shared, provider-agnostic types for the registrar client.
-//
-// These describe the *common* shape the client exposes to callers. Individual
-// registrar providers map their own API payloads onto these types. They are
-// intentionally minimal for now and will grow as concrete providers land.
 
-// client-level options
+// client-level request options
 export interface RegistrarClientOptions {
   // request timeout in milliseconds
   timeout: number;
@@ -19,90 +15,67 @@ export interface RegistrarClientOptions {
 // per-request options that can override client-level options
 export type RequestOptions = Partial<RegistrarClientOptions>;
 
-// a domain availability check result
-export interface DomainAvailability {
-  domain: string;
-  available: boolean;
-  // whether the domain is a premium registration, if known
-  premium?: boolean;
-  // raw provider payload for escape-hatch access
-  raw?: unknown;
+// result of a connection/credential test
+export interface ConnectionResult {
+  success: boolean;
+  message: string;
 }
 
-// pricing for a registrar operation (register/renew/transfer), per period
-export interface DomainPricing {
-  domain: string;
-  // ISO 4217 currency code, e.g. "USD"
-  currency: string;
-  // registration price for `years`, if quoted
-  registration?: number;
-  renewal?: number;
-  transfer?: number;
-  // number of years the quote covers
-  years?: number;
-  raw?: unknown;
+// result of a mutating operation (renew, nameserver update, lock/unlock)
+export interface OperationResult {
+  success: boolean;
+  message: string;
 }
 
-// a registrant/admin/tech/billing contact
-export interface Contact {
-  firstName?: string;
-  lastName?: string;
-  organization?: string;
-  email?: string;
-  phone?: string;
-  addressLine1?: string;
-  addressLine2?: string;
-  city?: string;
-  state?: string;
-  postalCode?: string;
-  country?: string;
+// a configuration field a registrar needs (used to build credential UIs generically)
+export interface ConfigField {
+  // property name on the credentials object
+  name: string;
+  // human-readable label
+  label: string;
+  // input type
+  type: 'text' | 'password' | 'select';
+  // whether the field is required
+  required: boolean;
+  // allowed values for `select` fields
+  options?: string[];
+  // default value
+  default?: string;
 }
 
-// the set of contacts attached to a domain
-export interface DomainContacts {
-  registrant?: Contact;
-  admin?: Contact;
-  tech?: Contact;
-  billing?: Contact;
-}
-
-// registered domain details
+// normalized, cross-registrar view of a domain
 export interface Domain {
-  domain: string;
-  status?: string[];
-  nameservers?: string[];
-  contacts?: DomainContacts;
+  domainName: string;
+  // id of the registrar that owns this record, e.g. "cloudflare"
+  registrar: string;
+  // registry/registrar status, always lowercased
+  status: string;
+  createdDate: Date | null;
+  expirationDate: Date | null;
+  renewalDate: Date | null;
+  autoRenew: boolean;
+  locked: boolean;
+  privacy: boolean;
+  nameservers: string[];
+  // when this record was fetched
+  syncedAt: Date;
+  // whether the domain has been removed at the registrar
+  deleted: boolean;
+}
+
+// loose input accepted by `createDomain`; providers pass raw-ish API values
+export interface DomainInput {
+  domainName?: string;
+  registrar?: string;
+  status?: string;
+  createdDate?: Date | string | number | null;
+  expirationDate?: Date | string | number | null;
+  renewalDate?: Date | string | number | null;
   autoRenew?: boolean;
   locked?: boolean;
-  createdAt?: string;
-  expiresAt?: string;
-  raw?: unknown;
-}
-
-// parameters for registering a new domain
-export interface RegisterDomainParams {
-  domain: string;
-  years?: number;
-  nameservers?: string[];
-  contacts?: DomainContacts;
-  autoRenew?: boolean;
-  // additional provider-specific fields
-  extra?: Record<string, unknown>;
-}
-
-// parameters for renewing a domain
-export interface RenewDomainParams {
-  domain: string;
-  years?: number;
-  extra?: Record<string, unknown>;
-}
-
-// parameters for transferring a domain in
-export interface TransferDomainParams {
-  domain: string;
-  authCode: string;
-  years?: number;
-  nameservers?: string[];
-  contacts?: DomainContacts;
-  extra?: Record<string, unknown>;
+  privacy?: boolean;
+  // accepts string[], objects with a `hosts` array, or objects with ServerName
+  nameservers?: unknown;
+  syncedAt?: Date;
+  deleted?: boolean;
 }

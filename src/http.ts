@@ -49,13 +49,33 @@ export class HttpClient {
 
   // perform a request and parse a JSON response body
   async request<T = unknown>(req: RequestConfig): Promise<T> {
+    return this.withRetries(req, async () => {
+      const text = await this.send(req);
+      if (text.length === 0) return undefined as T;
+      try {
+        return JSON.parse(text) as T;
+      } catch (error) {
+        throw new ParsingError(
+          `Failed to parse JSON response from '${this.buildUrl(req)}': ${errorMessage(error)}`
+        );
+      }
+    });
+  }
+
+  // perform a request and return the raw response body text (e.g. XML APIs)
+  async requestText(req: RequestConfig): Promise<string> {
+    return this.withRetries(req, () => this.send(req));
+  }
+
+  // shared retry-with-backoff wrapper around a single-attempt operation
+  protected async withRetries<T>(req: RequestConfig, attemptFn: () => Promise<T>): Promise<T> {
     const retries = req.retries ?? this.config.options.retries;
     const backoff = req.backoff ?? this.config.options.backoff;
 
     let lastError: RegistrarError | undefined;
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
-        return await this.send<T>(req);
+        return await attemptFn();
       } catch (error) {
         lastError = toRegistrarError(error);
 
@@ -79,9 +99,16 @@ export class HttpClient {
 
   // build the full URL for a request, applying query parameters
   protected buildUrl(req: RequestConfig): string {
-    const base = /^https?:\/\//.test(req.path)
-      ? req.path
-      : `${this.config.baseUrl.replace(/\/$/, '')}/${req.path.replace(/^\//, '')}`;
+    let base: string;
+    if (/^https?:\/\//.test(req.path)) {
+      // absolute URL
+      base = req.path;
+    } else if (req.path === '') {
+      // empty path: the baseUrl is itself the full endpoint (e.g. Namecheap/Dynadot)
+      base = this.config.baseUrl;
+    } else {
+      base = `${this.config.baseUrl.replace(/\/$/, '')}/${req.path.replace(/^\//, '')}`;
+    }
     const url = new URL(base);
     if (req.query) {
       for (const [key, value] of Object.entries(req.query)) {
@@ -91,8 +118,8 @@ export class HttpClient {
     return url.toString();
   }
 
-  // send a single request (no retries) and map errors
-  protected async send<T>(req: RequestConfig): Promise<T> {
+  // send a single request (no retries), map errors, and return the raw body text
+  protected async send(req: RequestConfig): Promise<string> {
     const timeout = req.timeout ?? this.config.options.timeout;
     const externalSignal = req.signal ?? this.config.options.signal;
 
@@ -138,21 +165,11 @@ export class HttpClient {
         throw await this.toStatusError(response, url);
       }
 
-      // 204 No Content and empty bodies parse to undefined
+      // 204 No Content yields an empty string
       if (response.status === 204) {
-        return undefined as T;
+        return '';
       }
-      const text = await response.text();
-      if (text.length === 0) {
-        return undefined as T;
-      }
-      try {
-        return JSON.parse(text) as T;
-      } catch (error) {
-        throw new ParsingError(
-          `Failed to parse JSON response from '${url}': ${errorMessage(error)}`
-        );
-      }
+      return await response.text();
     } finally {
       clearTimeout(timeoutId);
       externalSignal?.removeEventListener('abort', onAbort);
