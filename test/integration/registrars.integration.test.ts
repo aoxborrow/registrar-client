@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { createRegistrar, type RegistrarProvider } from '../../src/index.js';
+import { createRegistrar, type Registrar } from '../../src/index.js';
 import { loadSandboxCredentials, SANDBOX_TARGETS } from './helpers.js';
 
 // One suite per sandbox-capable registrar. Each suite is skipped unless its
@@ -14,7 +14,7 @@ for (const target of SANDBOX_TARGETS) {
 
   describe.skipIf(!credentials)(`${target.name} (sandbox)`, () => {
     // constructed lazily in beforeAll so nothing runs when the suite is skipped
-    let provider: RegistrarProvider;
+    let provider: Registrar;
 
     beforeAll(() => {
       provider = createRegistrar(target.name, credentials!, { environment: 'sandbox' });

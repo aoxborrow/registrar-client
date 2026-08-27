@@ -8,8 +8,9 @@ import type {
 } from '../types.js';
 import { createDomain, sleep } from '../utils.js';
 import { toRegistrarError } from '../errors.js';
-import { BaseRegistrar, selectBaseUrl } from './base.js';
-import type { RegistrarCredentials } from './types.js';
+import { BaseRegistrar, selectBaseUrl } from '../registrar.js';
+import { Feature, type RegistrarFeature } from '../features.js';
+import type { RegistrarCredentials } from '../types.js';
 
 interface SpaceshipDomain {
   name: string;
@@ -45,6 +46,17 @@ export class SpaceshipRegistrar extends BaseRegistrar {
     { name: 'apiSecret', label: 'API Secret', type: 'password', required: true },
   ];
   static readonly supportsSandbox = false; // Spaceship has no public sandbox environment
+  // Modern REST API. Beyond core, auth-code retrieval, glue records (first-class
+  // "personal nameservers"), and marketplace listing. No DNSSEC, domain
+  // forwarding, or webhooks; Spacemail (email) has no public API. Core
+  // `getPricing` has no documented endpoint yet — it stays NotImplementedError
+  // until an API path is found.
+  static readonly extendedFeatures: readonly RegistrarFeature[] = [
+    Feature.GetAuthCode,
+    Feature.GetGlueRecords,
+    Feature.SetGlueRecords,
+    Feature.ListOnMarketplace,
+  ];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
     super(

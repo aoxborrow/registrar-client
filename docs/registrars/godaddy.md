@@ -1,0 +1,67 @@
+# GoDaddy — Domains API Research
+
+> Researched: 2026-08-26 · Docs: https://developer.godaddy.com/doc · https://developer.godaddy.com/en/docs/references/rest/domains
+
+## Overview
+
+GoDaddy exposes domain search, registration, DNS, contact, privacy, forwarding, and transfer management through a REST API spanning three concurrent version namespaces (v1 account-scoped, v2 v1+async operations, v3 quote-execute discovery/registration). Base URL is `https://api.godaddy.com`; docs also reference a separate OTE (test) environment at `https://api.ote-godaddy.com` for the classic/v1-v2 API surface, though GoDaddy's newest (2026) developer-platform docs describe production as the only environment for the new v3 API ("no local dev server — all requests go to production"), so OTE availability may now be limited to the legacy v1/v2 surface — treat this as ambiguous and verify per-version at implementation time.
+
+## Authentication
+
+Two auth schemes coexist: the legacy `sso-key {API_KEY}:{API_SECRET}` header (used with v1/v2, noted as deprecating in 2026) and newer scoped Personal Access Tokens (PAT) sent as `Authorization: Bearer <PAT>` (required for v3, supported everywhere). PATs are generated from the developer dashboard, can carry granular scopes (e.g. `domains.domain:read`, `domains.dns:update`, `domains.transfer:execute`), can be set to expire, and can be revoked individually. Auth is account-scoped (acts on the domains owned by the authenticated GoDaddy account); v2 additionally paths requests under `/v2/customers/{customerId}/domains/...` for reseller/customer scoping. No IP allowlisting is documented. Rate limits apply per-credential (recent docs cite roughly 600 requests per ~23-minute window; legacy docs cited 60 req/min), returning `429` with a `Retry-After` header; `RateLimit-*` response headers report remaining quota.
+
+## Feature Support
+
+| Feature                                     | Support | Notes / endpoint                                                                                                                                                                               |
+| ------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Test connection / verify credentials        | ~       | No dedicated ping endpoint documented; typically verified via `GET /v1/domains` or a scoped read call.                                                                                         |
+| List domains                                | ✓       | `GET /v1/domains` — domains owned by the authenticated account.                                                                                                                                |
+| Get single domain details                   | ✓       | `GET /v1/domains/{domain}` (v1); `GET /v3/domains/registrations/{registrationId}` for v3-registered domains.                                                                                   |
+| Check domain availability                   | ✓       | `GET /v3/domains/check-availability` (or legacy `GET /v1/domains/available`); returns pricing options.                                                                                         |
+| Get domain/TLD pricing                      | ✓       | Returned inline with availability check; v3 quote flow (`POST /v3/domains/registration-quotes`) price-locks via `quoteToken`.                                                                  |
+| Register a new domain                       | ✓       | v3 quote-then-execute: `POST /v3/domains/registration-quotes` → `POST /v3/domains/registrations` (async, poll `GET /v3/domains/operations/{operationId}`); legacy `POST /v1/domains/purchase`. |
+| Renew a domain                              | ✓       | v1/v2 endpoint (`POST /v1/domains/{domain}/renew`); stated as remaining on v1/v2, out of scope for v3.                                                                                         |
+| Auto-renew toggle                           | ✓       | Managed via domain settings update on `PATCH /v1/domains/{domain}`.                                                                                                                            |
+| Transfer domain in                          | ✓       | v1/v2 `POST /v1/domains/{domain}/transfer` (inbound transfer initiation).                                                                                                                      |
+| Transfer out / get auth/EPP code            | ~       | Outbound transfer supported per doc summary ("inbound and outbound transfers"); explicit EPP/auth-code retrieval endpoint not confirmed in fetched pages.                                      |
+| Update nameservers                          | ✓       | `PATCH /v1/domains/{domain}` (nameservers field) and v3 nameserver management endpoints.                                                                                                       |
+| Get nameservers                             | ✓       | Included in `GET /v1/domains/{domain}` / v3 domain read.                                                                                                                                       |
+| Lock / unlock domain (transfer lock)        | ✓       | Registry lock flag on domain settings (`PATCH /v1/domains/{domain}`), read/toggle per domain-management-concepts doc.                                                                          |
+| Get/set WHOIS privacy                       | ✓       | `DELETE /v1/domains/{domain}/privacy` (cancel privacy); privacy purchase/status via domain settings — full CRUD not fully confirmed.                                                           |
+| Update contact info (registrant/admin/tech) | ✓       | `PATCH /v1/domains/{domain}/contacts` (v1); registrant changes trigger ICANN approval workflow.                                                                                                |
+| DNS record management                       | ✓       | `GET/PUT/PATCH/DELETE /v1/domains/{domain}/records[/{type}/{name}]` — full CRUD, but only for domains on GoDaddy's authoritative nameservers.                                                  |
+| DNSSEC management                           | ~       | No dedicated DNSSEC endpoint documented; DS records manageable via the generic DNS records endpoint (`/v1/domains/{domain}/records/DS`).                                                       |
+| Glue / host records                         | ✗       | Not documented in fetched pages.                                                                                                                                                               |
+| Email forwarding / mailbox provisioning     | ✗       | Not part of the Domains API; email/Microsoft 365 products are separate GoDaddy offerings.                                                                                                      |
+| Domain forwarding / URL redirect            | ✓       | Forwarding capability listed under v1 (and v2 async variant); exact endpoint path not confirmed.                                                                                               |
+| Webhooks / event notifications              | ~       | v2 adds "async operation tracking — action queues, status polling, notifications" — notification mechanism unclear (polling vs. push webhook) from available docs.                             |
+
+## Notable / Unique Features
+
+- **Quote-then-execute registration (v3)**: price is locked via a `quoteToken` before purchase, then executed with an idempotency key — reduces race conditions between availability check and purchase. Generic method: `quoteRegistration(domain, params)` → `executeRegistration(quoteToken, idempotencyKey)`.
+- **Agent/LLM-oriented platform**: GoDaddy's 2026 developer platform relaunch explicitly targets AI agents as first-class API consumers, with a CLI tool and machine-readable OpenAPI specs designed for programmatic/LLM tooling.
+- **Scoped, expiring Personal Access Tokens**: fine-grained per-capability scopes (read/write per domain, DNS, transfer) and token expiry/revocation, beyond a single static API key/secret pair. Generic: `createScopedToken(scopes[], expiry)`.
+- **Async operation polling model (v2/v3)**: write operations return `202 Accepted` with an operation/status URL to poll rather than synchronous completion — useful pattern for a common `pollOperation(operationId)` abstraction.
+
+## Auth / Access Notes for Implementors
+
+- Credentials: generate via the GoDaddy developer dashboard (https://developer.godaddy.com) — legacy API Key/Secret pair (`sso-key`) or a new Personal Access Token with selected scopes.
+- **Account requirements (critical, historically restrictive)**: As of a April 30 – May 1, 2024 policy change, GoDaddy cut off production API access for smaller accounts — the Availability API required 50+ domains in the account, and Management/DNS APIs required 10+ domains and/or an active Discount Domain Club – Premier Membership. GoDaddy's newer (2026) developer-platform announcement states "any GoDaddy account can generate a token and start calling," which suggests this may have loosened for the new v3 surface — but this is not confirmed against the legacy v1/v2 domain-count gating, and the two statements are not reconciled in the docs fetched. **Verify current eligibility directly with GoDaddy (or via a live token call) before assuming either policy applies**, especially for accounts with few domains.
+- Reseller/API-reseller accounts have a separate onboarding path (`Set up my API Reseller account`) and are subject to GoDaddy's API Terms of Use, which prohibit reselling/sublicensing API access to third parties without written authorization.
+- Sandbox: classic docs describe a free, pre-funded OTE environment (`api.ote-godaddy.com`) using a separate Test API key/secret, isolated from production (no data crossover). It is unclear whether OTE is available for the new v3 endpoints.
+- Rate limits: per-credential; recent docs cite ~600 requests per ~23-minute window (older docs cited 60 req/min per endpoint) — treat published numbers as illustrative and read `RateLimit-*` response headers at runtime. Contact GoDaddy developer support for higher limits.
+
+## Sources
+
+- https://developer.godaddy.com/doc
+- https://developer.godaddy.com/en/docs/references/rest/domains
+- https://developer.godaddy.com/en/docs/references/rest/domains/v1
+- https://developer.godaddy.com/en/docs/references/rest/domains/v3
+- https://developer.godaddy.com/en/docs/references/rest/domains/v2/domains-api-usage
+- https://developer.godaddy.com/en/docs/api-users/how-godaddy-apis-work
+- https://developer.godaddy.com/en/docs/api-users/concepts/domain-management-concepts
+- https://developer.godaddy.com/getstarted
+- https://developer.godaddy.com/docs/api-users/rate-limits
+- https://www.godaddy.com/resources/news/introducing-the-godaddy-developer-platform-domain-apis-for-developers-and-their-agents
+- https://community.letsencrypt.org/t/godaddy-no-longer-allows-api-access-to-clients-e-g-for-dns-based-cert-renewal-if-you-have-less-than-50-domains/219377
+- https://www.godaddy.com/legal/agreements/godaddy-api-terms-of-use

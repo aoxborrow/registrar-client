@@ -8,8 +8,9 @@ import type {
 } from '../types.js';
 import { createDomain, sleep } from '../utils.js';
 import { toRegistrarError } from '../errors.js';
-import { BaseRegistrar, selectBaseUrl } from './base.js';
-import type { RegistrarCredentials } from './types.js';
+import { BaseRegistrar, selectBaseUrl } from '../registrar.js';
+import { Feature, type RegistrarFeature } from '../features.js';
+import type { RegistrarCredentials } from '../types.js';
 
 interface DynadotDomainInfo {
   Name?: string;
@@ -65,6 +66,22 @@ export class DynadotRegistrar extends BaseRegistrar {
     { name: 'apiKey', label: 'API Key', type: 'password', required: true },
   ];
   static readonly supportsSandbox = false; // Dynadot has no public sandbox environment
+  // Broadest coverage of the set: on top of core, it adds DNSSEC, glue records,
+  // email + domain forwarding, webhooks, aftermarket/marketplace, push,
+  // appraisal, and bulk (Smart Folder) settings. Email is forwarding-only.
+  static readonly extendedFeatures: readonly RegistrarFeature[] = [
+    Feature.GetAuthCode,
+    Feature.ConfigureDnssec,
+    Feature.GetGlueRecords,
+    Feature.SetGlueRecords,
+    Feature.SetEmailForwarding,
+    Feature.SetDomainForwarding,
+    Feature.SubscribeWebhooks,
+    Feature.ListOnMarketplace,
+    Feature.PushToAccount,
+    Feature.AppraiseDomain,
+    Feature.ApplyBulkSettings,
+  ];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
     // baseUrl is the full endpoint; all commands are query-string based

@@ -57,6 +57,34 @@ await client.updateNameservers('example.com', ['ns1.example.net', 'ns2.example.n
 Every provider implements the same interface: `testConnection`, `listDomains`,
 `renewDomain`, `updateNameservers`, `lockDomain`, `unlockDomain`.
 
+## Capabilities
+
+Registrars don't all support the same operations. **Core** is a fixed contract
+every provider is expected to fulfil (inherited by extending `BaseRegistrar`);
+**extended** capabilities are opt-in and declared per provider. Where a core
+method's API path isn't wired up yet, it throws `NotImplementedError` — the
+contract is the promise, not a claim that every byte is implemented today.
+
+Reference capabilities through the `Feature` object (autocomplete +
+find-all-references), and introspect statically — no instance or credentials
+needed, which makes this easy to surface to a UI or an MCP tool:
+
+```ts
+import { registrars, createRegistrar, Feature, CORE_FEATURES } from '@aoxborrow/registrar-client';
+
+registrars.dynadot.features; // full set: core + Dynadot's extras
+registrars.dynadot.extendedFeatures; // just the extras
+CORE_FEATURES.includes(Feature.GetDnsRecords); // true — DNS is core
+
+const gd = createRegistrar('godaddy', creds);
+gd.supports(Feature.RegisterDomain); // true (core)
+gd.supports(Feature.SetDomainForwarding); // true (its extended)
+gd.supports(Feature.SubscribeWebhooks); // false
+```
+
+See [docs/registrars/FEATURES.md](docs/registrars/FEATURES.md) for the full
+feature matrix and the core vs. extended breakdown.
+
 ## Sandbox environments
 
 Providers that offer a test environment accept `{ environment: 'sandbox' }` at
@@ -91,13 +119,14 @@ implementations**:
 
 - **`RegistrarClient`** — a thin, provider-agnostic facade. Normalizes input and
   delegates to the configured provider.
-- **`RegistrarProvider`** — the interface every backend implements
+- **`Registrar`** — the core interface every backend implements
   (`testConnection`, `listDomains`, `renewDomain`, `updateNameservers`,
-  `lockDomain`, `unlockDomain`).
-- **`BaseRegistrar`** — an abstract base that owns the shared HTTP/auth/retry
-  plumbing (via `HttpClient`) and provides `NotImplementedError`-rejecting
-  defaults. Concrete providers extend it and override only what their API
-  supports.
+  `lockDomain`, `unlockDomain`, plus the capability accessors). Defined in
+  `src/types.ts`.
+- **`BaseRegistrar`** (`src/registrar.ts`) — an abstract base that owns the
+  shared HTTP/auth/retry plumbing (via `HttpClient`) and provides
+  `NotImplementedError`-rejecting defaults. Concrete providers under
+  `src/registrars/` extend it and override only what their API supports.
 - **`HttpClient`** — a small `fetch` wrapper with timeout, `AbortSignal`
   linking, retry-with-backoff, `request`/`requestText` (JSON and raw/XML), and
   typed error mapping. No Node built-ins.

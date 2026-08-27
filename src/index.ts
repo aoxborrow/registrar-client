@@ -4,17 +4,23 @@ export { RegistrarClient } from './client.js';
 export { HttpClient } from './http.js';
 export type { HttpClientConfig, RequestConfig } from './http.js';
 
-// provider abstraction
-export { BaseRegistrar, selectBaseUrl } from './registrars/base.js';
-export type {
-  RegistrarProvider,
-  RegistrarConstructor,
-  RegistrarCredentials,
-} from './registrars/types.js';
+// core registrar abstraction (the `Registrar` interface itself is exported via
+// `export * from './types.js'` below)
+export { BaseRegistrar, selectBaseUrl } from './registrar.js';
 
 // built-in providers lookup + factory
 export { registrars, createRegistrar } from './registrars/index.js';
 export type { RegistrarName } from './registrars/index.js';
+
+// capability model: feature constants, the core contract, and helpers
+export {
+  Feature,
+  CORE_FEATURES,
+  EXTENDED_FEATURES,
+  ALL_FEATURES,
+  isCoreFeature,
+} from './features.js';
+export type { RegistrarFeature } from './features.js';
 
 // bundled providers
 export { CloudflareRegistrar } from './registrars/cloudflare.js';

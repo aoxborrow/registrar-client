@@ -9,6 +9,11 @@ import {
   selectBaseUrl,
   ConfigurationError,
   RegistrarClient,
+  Feature,
+  CORE_FEATURES,
+  EXTENDED_FEATURES,
+  ALL_FEATURES,
+  isCoreFeature,
 } from '../src/index.js';
 
 describe('normalizeDomain', () => {
@@ -68,6 +73,59 @@ describe('registrars catalog', () => {
       createRegistrar('cloudflare', { apiToken: 'x', accountId: 'y' })
     );
     expect(client.provider.name).toBe('cloudflare');
+  });
+});
+
+describe('capabilities / features', () => {
+  it('core and extended partition the full feature catalog with no overlap', () => {
+    const core = new Set<string>(CORE_FEATURES);
+    const extended = new Set<string>(EXTENDED_FEATURES);
+    // every Feature constant is in exactly one of core / extended
+    for (const feature of Object.values(Feature)) {
+      expect(core.has(feature) !== extended.has(feature), `${feature} is in exactly one set`).toBe(
+        true
+      );
+    }
+    expect(ALL_FEATURES.length).toBe(core.size + extended.size);
+    expect(new Set(ALL_FEATURES).size).toBe(ALL_FEATURES.length); // no duplicates
+  });
+
+  it('isCoreFeature reflects membership in CORE_FEATURES', () => {
+    expect(isCoreFeature(Feature.GetPricing)).toBe(true);
+    expect(isCoreFeature(Feature.SetAutoRenew)).toBe(true);
+    expect(isCoreFeature(Feature.ConfigureDnssec)).toBe(false);
+  });
+
+  it('every provider inherits core and its extended features are valid extras', () => {
+    const extended = new Set<string>(EXTENDED_FEATURES);
+    for (const [id, Registrar] of Object.entries(registrars)) {
+      // core is guaranteed by the contract, not re-declared per provider
+      for (const feature of CORE_FEATURES) {
+        expect(Registrar.features.includes(feature), `${id} is missing core ${feature}`).toBe(true);
+      }
+      // declared extras are real extended features, unique and never core
+      expect(new Set(Registrar.extendedFeatures).size, `${id} extras are unique`).toBe(
+        Registrar.extendedFeatures.length
+      );
+      for (const feature of Registrar.extendedFeatures) {
+        expect(extended.has(feature), `${id} declares ${feature} as extended`).toBe(true);
+      }
+    }
+  });
+
+  it('provider.features is core plus its extended features', () => {
+    expect(registrars.godaddy.features).toEqual([
+      ...CORE_FEATURES,
+      ...registrars.godaddy.extendedFeatures,
+    ]);
+  });
+
+  it('instances expose features and a working supports() check', () => {
+    const gd = createRegistrar('godaddy', {});
+    expect(gd.features).toEqual(registrars.godaddy.features);
+    expect(gd.supports(Feature.RegisterDomain)).toBe(true); // core
+    expect(gd.supports(Feature.SetDomainForwarding)).toBe(true); // its extended
+    expect(gd.supports(Feature.SubscribeWebhooks)).toBe(false); // not declared
   });
 });
 
