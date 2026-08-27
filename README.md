@@ -21,14 +21,14 @@ npm install @aoxborrow/registrar-client
 
 ## Providers
 
-| id           | Provider   | Auth                       | Notes                                 |
-| ------------ | ---------- | -------------------------- | ------------------------------------- |
-| `cloudflare` | Cloudflare | API token + Account ID     | manages existing domains only         |
-| `dynadot`    | Dynadot    | API key                    | key sent in query string (API design) |
-| `gandi`      | Gandi.net  | API key                    |                                       |
-| `godaddy`    | GoDaddy    | key + secret + environment | `production` or `ote`                 |
-| `namecheap`  | Namecheap  | username + key + client IP | XML API; IP allowlisting required     |
-| `spaceship`  | Spaceship  | key + secret               |                                       |
+| id           | Provider   | Auth                       | Sandbox | Notes                                 |
+| ------------ | ---------- | -------------------------- | ------- | ------------------------------------- |
+| `cloudflare` | Cloudflare | API token + Account ID     | —       | manages existing domains only         |
+| `dynadot`    | Dynadot    | API key                    | —       | key sent in query string (API design) |
+| `gandi`      | Gandi.net  | API key                    | ✓       | `api.sandbox.gandi.net`               |
+| `godaddy`    | GoDaddy    | key + secret               | ✓       | sandbox = OTE test environment        |
+| `namecheap`  | Namecheap  | username + key + client IP | ✓       | XML API; IP allowlisting required     |
+| `spaceship`  | Spaceship  | key + secret               | —       |                                       |
 
 Each provider class exposes static discovery metadata — `displayName`,
 `configFields` (the credential fields it needs), and `helpText` (where to get
@@ -56,6 +56,33 @@ await client.updateNameservers('example.com', ['ns1.example.net', 'ns2.example.n
 
 Every provider implements the same interface: `testConnection`, `listDomains`,
 `renewDomain`, `updateNameservers`, `lockDomain`, `unlockDomain`.
+
+## Sandbox environments
+
+Providers that offer a test environment accept `{ environment: 'sandbox' }` at
+construction, so you can exercise real API calls without touching live domains:
+
+```ts
+const gd = createRegistrar('godaddy', oteCredentials, { environment: 'sandbox' });
+```
+
+Requesting `sandbox` on a provider that has none (`cloudflare`, `dynadot`,
+`spaceship`) throws a `ConfigurationError` — a test can never silently hit
+production. Check `SomeRegistrar.supportsSandbox` to discover which do.
+
+### Integration tests
+
+Real sandbox integration tests live in `test/integration/` and are **credential-
+gated**: each registrar's suite skips unless its env vars are set, so the default
+suite stays offline.
+
+```bash
+cp .env.example .env    # fill in sandbox credentials for the registrars you want
+npm run test:integration
+```
+
+They exercise read-only operations (`testConnection`, `listDomains`) against each
+configured sandbox. Unit tests (`npm test`) never make network calls.
 
 ## Architecture
 

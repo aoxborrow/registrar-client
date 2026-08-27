@@ -5,7 +5,7 @@ export { HttpClient } from './http.js';
 export type { HttpClientConfig, RequestConfig } from './http.js';
 
 // provider abstraction
-export { BaseRegistrar } from './registrars/base.js';
+export { BaseRegistrar, selectBaseUrl } from './registrars/base.js';
 export type {
   RegistrarProvider,
   RegistrarConstructor,

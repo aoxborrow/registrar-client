@@ -3,12 +3,12 @@ import type {
   ConnectionResult,
   Domain,
   OperationResult,
-  RegistrarClientOptions,
+  RegistrarOptions,
   RequestOptions,
 } from '../types.js';
 import { createDomain } from '../utils.js';
 import { toRegistrarError } from '../errors.js';
-import { BaseRegistrar } from './base.js';
+import { BaseRegistrar, selectBaseUrl } from './base.js';
 import type { RegistrarCredentials } from './types.js';
 
 // Cloudflare's standard response envelope
@@ -53,12 +53,15 @@ export class CloudflareRegistrar extends BaseRegistrar {
     { name: 'apiToken', label: 'API Token', type: 'password', required: true },
     { name: 'accountId', label: 'Account ID', type: 'text', required: true },
   ];
+  static readonly supportsSandbox = false; // Cloudflare Registrar has no test environment
 
-  constructor(credentials: RegistrarCredentials, options?: Partial<RegistrarClientOptions>) {
+  constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
     super(
       credentials,
       {
-        baseUrl: 'https://api.cloudflare.com/client/v4',
+        baseUrl: selectBaseUrl('Cloudflare', options?.environment, {
+          production: 'https://api.cloudflare.com/client/v4',
+        }),
         headers: {
           'Authorization': `Bearer ${credentials.apiToken}`,
           'Content-Type': 'application/json',

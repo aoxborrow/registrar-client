@@ -1,14 +1,33 @@
 import { DEFAULT_OPTIONS } from '../constants.js';
-import { NotImplementedError } from '../errors.js';
+import { ConfigurationError, NotImplementedError } from '../errors.js';
 import { HttpClient, type HttpClientConfig } from '../http.js';
 import type {
   ConnectionResult,
   Domain,
   OperationResult,
   RegistrarClientOptions,
+  RegistrarEnvironment,
+  RegistrarOptions,
   RequestOptions,
 } from '../types.js';
 import type { RegistrarCredentials, RegistrarProvider } from './types.js';
+
+// pick the base URL for the requested environment. Throws if `sandbox` is
+// requested but the provider defines no sandbox URL — so integration tests
+// fail loudly rather than silently hitting production.
+export function selectBaseUrl(
+  registrar: string,
+  environment: RegistrarEnvironment | undefined,
+  urls: { production: string; sandbox?: string }
+): string {
+  if (environment === 'sandbox') {
+    if (!urls.sandbox) {
+      throw new ConfigurationError(`${registrar} does not provide a sandbox environment`);
+    }
+    return urls.sandbox;
+  }
+  return urls.production;
+}
 
 // Abstract base for registrar providers. Owns the shared HTTP/auth/retry
 // plumbing (via `HttpClient`) and provides `NotImplementedError`-rejecting
@@ -21,14 +40,17 @@ export abstract class BaseRegistrar implements RegistrarProvider {
   protected http: HttpClient;
   protected credentials: RegistrarCredentials;
   protected options: RegistrarClientOptions;
+  readonly environment: RegistrarEnvironment;
 
   constructor(
     credentials: RegistrarCredentials,
     httpConfig: Omit<HttpClientConfig, 'options'>,
-    options?: Partial<RegistrarClientOptions>
+    options?: RegistrarOptions
   ) {
+    const { environment = 'production', ...clientOptions } = options ?? {};
     this.credentials = credentials;
-    this.options = { ...DEFAULT_OPTIONS, ...options };
+    this.environment = environment;
+    this.options = { ...DEFAULT_OPTIONS, ...clientOptions };
     this.http = new HttpClient({ ...httpConfig, options: this.options });
   }
 

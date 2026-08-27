@@ -3,12 +3,12 @@ import type {
   ConnectionResult,
   Domain,
   OperationResult,
-  RegistrarClientOptions,
+  RegistrarOptions,
   RequestOptions,
 } from '../types.js';
 import { createDomain } from '../utils.js';
 import { toRegistrarError } from '../errors.js';
-import { BaseRegistrar } from './base.js';
+import { BaseRegistrar, selectBaseUrl } from './base.js';
 import type { RegistrarCredentials } from './types.js';
 
 interface GoDaddyDomain {
@@ -38,29 +38,23 @@ export class GoDaddyRegistrar extends BaseRegistrar {
   static readonly helpText =
     'Create API keys in your GoDaddy account under Account Settings > API Keys. ' +
     'You can create production keys or OTE (test environment) keys. Save both the ' +
-    'API Key and Secret when generated, and pick the matching environment.';
+    'API Key and Secret when generated. Pass { environment: "sandbox" } to target ' +
+    'the OTE test environment (use OTE keys with it).';
   static readonly configFields: ConfigField[] = [
     { name: 'apiKey', label: 'API Key', type: 'password', required: true },
     { name: 'apiSecret', label: 'API Secret', type: 'password', required: true },
-    {
-      name: 'environment',
-      label: 'Environment',
-      type: 'select',
-      options: ['production', 'ote'],
-      required: true,
-      default: 'production',
-    },
   ];
+  // GoDaddy's OTE ("Operational Test Environment") is its sandbox
+  static readonly supportsSandbox = true;
 
-  constructor(credentials: RegistrarCredentials, options?: Partial<RegistrarClientOptions>) {
-    const baseUrl =
-      credentials.environment === 'ote'
-        ? 'https://api.ote-godaddy.com/v1'
-        : 'https://api.godaddy.com/v1';
+  constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
     super(
       credentials,
       {
-        baseUrl,
+        baseUrl: selectBaseUrl('GoDaddy', options?.environment, {
+          production: 'https://api.godaddy.com/v1',
+          sandbox: 'https://api.ote-godaddy.com/v1',
+        }),
         headers: {
           'Authorization': `sso-key ${credentials.apiKey}:${credentials.apiSecret}`,
           'Accept': 'application/json',

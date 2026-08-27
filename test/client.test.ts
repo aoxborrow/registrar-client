@@ -6,6 +6,8 @@ import {
   parseDate,
   registrars,
   createRegistrar,
+  selectBaseUrl,
+  ConfigurationError,
   RegistrarClient,
 } from '../src/index.js';
 
@@ -66,5 +68,39 @@ describe('registry', () => {
       createRegistrar('cloudflare', { apiToken: 'x', accountId: 'y' })
     );
     expect(client.provider.name).toBe('cloudflare');
+  });
+});
+
+describe('sandbox / environment', () => {
+  it('selectBaseUrl picks production by default and sandbox when asked', () => {
+    const urls = { production: 'https://prod', sandbox: 'https://sbx' };
+    expect(selectBaseUrl('X', undefined, urls)).toBe('https://prod');
+    expect(selectBaseUrl('X', 'production', urls)).toBe('https://prod');
+    expect(selectBaseUrl('X', 'sandbox', urls)).toBe('https://sbx');
+  });
+
+  it('selectBaseUrl throws when sandbox is requested but unavailable', () => {
+    expect(() => selectBaseUrl('X', 'sandbox', { production: 'https://prod' })).toThrow(
+      ConfigurationError
+    );
+  });
+
+  it('constructing a no-sandbox provider with environment:sandbox throws', () => {
+    expect(() =>
+      createRegistrar('cloudflare', { apiToken: 'x', accountId: 'y' }, { environment: 'sandbox' })
+    ).toThrow(ConfigurationError);
+  });
+
+  it('sandbox-capable providers accept environment:sandbox', () => {
+    const gandi = createRegistrar('gandi', { apiKey: 'x' }, { environment: 'sandbox' });
+    expect(gandi.environment).toBe('sandbox');
+  });
+
+  it('supportsSandbox flags match the known set', () => {
+    const supported = Object.entries(registrars)
+      .filter(([, R]) => R.supportsSandbox)
+      .map(([id]) => id)
+      .sort();
+    expect(supported).toEqual(['gandi', 'godaddy', 'namecheap']);
   });
 });

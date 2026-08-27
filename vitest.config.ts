@@ -1,10 +1,13 @@
-import { defineConfig } from 'vitest/config';
+import { defineConfig, configDefaults } from 'vitest/config';
 
+// Default (unit) test config. Fast, offline, no credentials required.
+// Integration tests live in test/integration/*.integration.test.ts and run
+// under vitest.integration.config.ts instead.
 export default defineConfig({
   test: {
-    // unit tests run under Node by default; browser/edge-env suites can be added later
     environment: 'node',
     include: ['test/**/*.test.ts', 'src/**/*.test.ts'],
+    exclude: [...configDefaults.exclude, '**/*.integration.test.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov'],

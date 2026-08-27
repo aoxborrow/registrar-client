@@ -15,6 +15,16 @@ export interface RegistrarClientOptions {
 // per-request options that can override client-level options
 export type RequestOptions = Partial<RegistrarClientOptions>;
 
+// which API environment a provider targets. "sandbox" covers registrar test
+// environments (GoDaddy calls theirs "OTE") so integration tests never touch
+// real domains. Requesting "sandbox" on a provider without one throws.
+export type RegistrarEnvironment = 'production' | 'sandbox';
+
+// options passed when constructing a registrar provider
+export interface RegistrarOptions extends Partial<RegistrarClientOptions> {
+  environment?: RegistrarEnvironment;
+}
+
 // result of a connection/credential test
 export interface ConnectionResult {
   success: boolean;
