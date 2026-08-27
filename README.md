@@ -27,11 +27,18 @@ npm install @aoxborrow/registrar-client
 | `gandi`      | Gandi.net  | API key                    | ✓       | `api.sandbox.gandi.net`               |
 | `godaddy`    | GoDaddy    | key + secret               | ✓       | sandbox = OTE test environment        |
 | `namecheap`  | Namecheap  | username + key + client IP | ✓       | XML API; IP allowlisting required     |
+| `namesilo`   | NameSilo   | API key                    | ✓       | JSON API; key sent in query string    |
 | `spaceship`  | Spaceship  | key + secret               | —       |                                       |
 
 Each provider class exposes static discovery metadata — `displayName`,
 `configFields` (the credential fields it needs), and `helpText` (where to get
 them) — so you can build a credential UI generically.
+
+Research notes for additional registrars live in
+[`docs/registrars/`](docs/registrars). Two are documented but **not** implemented
+because they have no usable public API: **Squarespace** (reseller-program-gated)
+and **Network Solutions** (partner-gated Partner Protocol / SRSplus). They can be
+added if partner API access is obtained.
 
 ## Usage
 

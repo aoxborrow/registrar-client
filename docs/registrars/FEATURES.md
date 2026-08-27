@@ -1,13 +1,19 @@
 # Registrar Feature Matrix
 
-Cross-provider synthesis of the six per-registrar research docs in this folder
-([cloudflare](cloudflare.md) · [dynadot](dynadot.md) · [gandi](gandi.md) ·
+Cross-provider synthesis of the six original per-registrar research docs in this
+folder ([cloudflare](cloudflare.md) · [dynadot](dynadot.md) · [gandi](gandi.md) ·
 [godaddy](godaddy.md) · [namecheap](namecheap.md) · [spaceship](spaceship.md)).
 
 > Researched 2026-08-26 against each provider's latest public API docs. This is a
 > capability map to drive the library's **common core** vs. **optional/generic**
 > method split — not an endpoint reference. See the per-registrar docs for
 > endpoints, auth, and access gates.
+
+> **Also researched since:** [namesilo](namesilo.md) (implemented — broad JSON
+> API), plus [squarespace](squarespace.md) and [networksolutions](networksolutions.md),
+> which are **not implemented** — neither exposes a usable public API (Squarespace
+> is reseller-program-gated; Network Solutions is partner-gated). These aren't in
+> the matrix below yet.
 
 **Legend:** ✓ supported · ~ partial / caveat / indirect · ✗ not in the API
 
