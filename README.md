@@ -10,9 +10,9 @@ Workers, Deno, Bun, and other edge runtimes. Its one runtime dependency —
 itself edge-safe.
 
 > **Status:** early. Nine registrar providers are implemented, and the full
-> 18-method core contract is being filled in one provider at a time (GoDaddy
-> first). Methods not yet wired up throw `NotImplementedError`. Nothing here has
-> been exercised against live APIs with real credentials yet.
+> 18-method core contract is being filled in one provider at a time (GoDaddy and
+> Namecheap so far). Methods not yet wired up throw `NotImplementedError`.
+> Nothing here has been exercised against live APIs with real credentials yet.
 
 ## Install
 
@@ -74,9 +74,12 @@ contract is `testConnection`, `listDomains`, `getDomain`, `checkAvailability`,
 `setPrivacy`, `getContacts`, `updateContacts`, `getDnsRecords`, and
 `setDnsRecords`. Coverage is filled in per provider; where a provider hasn't
 wired up a core method yet it throws `NotImplementedError` (see
-[Capabilities](#capabilities)). **GoDaddy** is the most complete today —
-everything above except `registerDomain`/`transferIn` (which need GoDaddy's
-paid agreements-and-consent flow) and enabling `setPrivacy` (a paid add-on).
+[Capabilities](#capabilities)). **GoDaddy** and **Namecheap** are the most
+complete today. Both defer `registerDomain`/`transferIn` (which spend money and
+need a consent/agreements flow). GoDaddy additionally defers enabling
+`setPrivacy` (a paid add-on); Namecheap additionally defers `setAutoRenew` (no
+public API command) and `setPrivacy` (its WhoisGuard flow needs a separate id +
+forwarding email). Namecheap is the first with real per-TLD `getPricing`.
 
 ## Capabilities
 
