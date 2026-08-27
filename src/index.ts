@@ -1,40 +1,34 @@
 // Public API surface.
 
-export { RegistrarClient } from './client.js';
-export { HttpClient } from './http.js';
-export type { HttpClientConfig, RequestConfig } from './http.js';
+export { RegistrarClient } from './client';
+export { HttpClient } from './http';
+export type { HttpClientConfig, RequestConfig } from './http';
 
 // core registrar abstraction (the `Registrar` interface itself is exported via
-// `export * from './types.js'` below)
-export { BaseRegistrar, selectBaseUrl } from './registrar.js';
+// `export * from './types'` below)
+export { BaseRegistrar, selectBaseUrl } from './registrar';
 
 // built-in providers lookup + factory
-export { registrars, createRegistrar } from './registrars/index.js';
-export type { RegistrarName } from './registrars/index.js';
+export { registrars, createRegistrar } from './registrars/index';
+export type { RegistrarName } from './registrars/index';
 
 // capability model: feature constants, the core contract, and helpers
-export {
-  Feature,
-  CORE_FEATURES,
-  EXTENDED_FEATURES,
-  ALL_FEATURES,
-  isCoreFeature,
-} from './features.js';
-export type { RegistrarFeature } from './features.js';
+export { Feature, CORE_FEATURES, EXTENDED_FEATURES, ALL_FEATURES, isCoreFeature } from './features';
+export type { RegistrarFeature } from './features';
 
 // bundled providers
-export { CloudflareRegistrar } from './registrars/cloudflare.js';
-export { DynadotRegistrar } from './registrars/dynadot.js';
-export { GandiRegistrar } from './registrars/gandi.js';
-export { GoDaddyRegistrar } from './registrars/godaddy.js';
-export { NamecheapRegistrar } from './registrars/namecheap.js';
-export { SpaceshipRegistrar } from './registrars/spaceship.js';
+export { CloudflareRegistrar } from './registrars/cloudflare';
+export { DynadotRegistrar } from './registrars/dynadot';
+export { GandiRegistrar } from './registrars/gandi';
+export { GoDaddyRegistrar } from './registrars/godaddy';
+export { NamecheapRegistrar } from './registrars/namecheap';
+export { SpaceshipRegistrar } from './registrars/spaceship';
 
 // XML parsing helpers for XML-based registrar APIs
-export { parseXml, ensureArray } from './xml.js';
+export { parseXml, ensureArray } from './xml';
 
 // shared types, constants, utils, and errors
-export * from './types.js';
-export * from './constants.js';
-export * from './utils.js';
-export * from './errors.js';
+export * from './types';
+export * from './constants';
+export * from './utils';
+export * from './errors';

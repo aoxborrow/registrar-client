@@ -1,4 +1,4 @@
-import type { RegistrarCredentials, RegistrarName } from '../../src/index.js';
+import type { RegistrarCredentials, RegistrarName } from '../../src/index';
 
 // Describes how to assemble one registrar's SANDBOX credentials from env vars.
 // `required` env vars must all be present for the target to be enabled;

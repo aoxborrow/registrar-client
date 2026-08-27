@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseXml, ensureArray } from '../src/index.js';
+import { parseXml, ensureArray } from '../src/index';
 
 // a trimmed Namecheap-style getList response with two domains
 const NAMECHEAP_XML = `<?xml version="1.0" encoding="utf-8"?>

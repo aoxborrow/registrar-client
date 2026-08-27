@@ -3,13 +3,13 @@ import type {
   RegistrarConstructor,
   RegistrarCredentials,
   RegistrarOptions,
-} from '../types.js';
-import { CloudflareRegistrar } from './cloudflare.js';
-import { DynadotRegistrar } from './dynadot.js';
-import { GandiRegistrar } from './gandi.js';
-import { GoDaddyRegistrar } from './godaddy.js';
-import { NamecheapRegistrar } from './namecheap.js';
-import { SpaceshipRegistrar } from './spaceship.js';
+} from '../types';
+import { CloudflareRegistrar } from './cloudflare';
+import { DynadotRegistrar } from './dynadot';
+import { GandiRegistrar } from './gandi';
+import { GoDaddyRegistrar } from './godaddy';
+import { NamecheapRegistrar } from './namecheap';
+import { SpaceshipRegistrar } from './spaceship';
 
 // the built-in registrar providers, keyed by id
 export const registrars = {

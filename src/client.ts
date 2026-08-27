@@ -1,11 +1,5 @@
-import { normalizeDomain } from './utils.js';
-import type {
-  ConnectionResult,
-  Domain,
-  OperationResult,
-  Registrar,
-  RequestOptions,
-} from './types.js';
+import { normalizeDomain } from './utils';
+import type { ConnectionResult, Domain, OperationResult, Registrar, RequestOptions } from './types';
 
 // A thin, provider-agnostic facade over a single `Registrar`. Normalizes
 // domain names and delegates to the underlying provider.

@@ -14,7 +14,7 @@ import {
   EXTENDED_FEATURES,
   ALL_FEATURES,
   isCoreFeature,
-} from '../src/index.js';
+} from '../src/index';
 
 describe('normalizeDomain', () => {
   it('trims, lowercases, and strips a trailing dot', () => {

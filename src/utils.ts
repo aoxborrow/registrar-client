@@ -1,4 +1,4 @@
-import type { Domain, DomainInput } from './types.js';
+import type { Domain, DomainInput } from './types';
 
 // sleep helper for retry backoff
 export function sleep(ms: number): Promise<void> {
