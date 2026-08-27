@@ -9,8 +9,9 @@ Workers, Deno, Bun, and other edge runtimes. Its one runtime dependency —
 (pure JS, no Node built-ins) — is used to parse XML registrar responses and is
 itself edge-safe.
 
-> **Status:** early. Six registrar providers are implemented but have not yet
-> been exercised against live APIs with real credentials.
+> **Status:** early. Nine registrar providers are implemented but have not yet
+> been exercised against live APIs with real credentials (NameBright and Porkbun
+> are partial — see the providers table).
 
 ## Install
 
@@ -20,25 +21,28 @@ npm install @aoxborrow/registrar-client
 
 ## Providers
 
-| id           | Provider   | Auth                       | Sandbox | Notes                                 |
-| ------------ | ---------- | -------------------------- | ------- | ------------------------------------- |
-| `cloudflare` | Cloudflare | API token + Account ID     | —       | manages existing domains only         |
-| `dynadot`    | Dynadot    | API key                    | —       | key sent in query string (API design) |
-| `gandi`      | Gandi.net  | API key                    | ✓       | `api.sandbox.gandi.net`               |
-| `godaddy`    | GoDaddy    | key + secret               | ✓       | sandbox = OTE test environment        |
-| `namecheap`  | Namecheap  | username + key + client IP | ✓       | XML API; IP allowlisting required     |
-| `namesilo`   | NameSilo   | API key                    | ✓       | JSON API; key sent in query string    |
-| `spaceship`  | Spaceship  | key + secret               | —       |                                       |
+| id           | Provider   | Auth                       | Sandbox | Notes                                  |
+| ------------ | ---------- | -------------------------- | ------- | -------------------------------------- |
+| `cloudflare` | Cloudflare | API token + Account ID     | —       | manages existing domains only          |
+| `dynadot`    | Dynadot    | API key                    | —       | key sent in query string (API design)  |
+| `gandi`      | Gandi.net  | API key                    | ✓       | `api.sandbox.gandi.net`                |
+| `godaddy`    | GoDaddy    | key + secret               | ✓       | sandbox = OTE test environment         |
+| `namebright` | NameBright | client ID + secret         | —       | OAuth2 bearer; reads only for now      |
+| `namecheap`  | Namecheap  | username + key + client IP | ✓       | XML API; IP allowlisting required      |
+| `namesilo`   | NameSilo   | API key                    | ✓       | JSON API; key sent in query string     |
+| `porkbun`    | Porkbun    | key + secret               | —       | JSON API; per-domain API-access opt-in |
+| `spaceship`  | Spaceship  | key + secret               | —       |                                        |
 
 Each provider class exposes static discovery metadata — `displayName`,
 `configFields` (the credential fields it needs), and `helpText` (where to get
 them) — so you can build a credential UI generically.
 
 Research notes for additional registrars live in
-[`docs/registrars/`](docs/registrars). Two are documented but **not** implemented
-because they have no usable public API: **Squarespace** (reseller-program-gated)
-and **Network Solutions** (partner-gated Partner Protocol / SRSplus). They can be
-added if partner API access is obtained.
+[`docs/registrars/`](docs/registrars). Three are documented but **not**
+implemented because they have no usable public API: **Squarespace**
+(reseller-program-gated), **Network Solutions** (partner-gated Partner Protocol /
+SRSplus), and **eDomains** (WHMCS-based, no documented API). They can be added if
+API access becomes available.
 
 ## Usage
 
@@ -147,8 +151,8 @@ implementations**:
 Extend `BaseRegistrar`, pass a `baseUrl` + auth headers to `super()`, add the
 static `displayName` / `configFields` / `helpText` metadata, override the
 operations the API supports (mapping payloads to the shared types in
-`src/types.ts`), and add the class to `src/registrars/index.ts`. The six
-existing providers under `src/registrars/` are working references.
+`src/types.ts`), and add the class to `src/registrars/index.ts`. The existing
+providers under `src/registrars/` are working references.
 
 ## Errors
 

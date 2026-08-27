@@ -8,8 +8,10 @@ import { CloudflareRegistrar } from './cloudflare';
 import { DynadotRegistrar } from './dynadot';
 import { GandiRegistrar } from './gandi';
 import { GoDaddyRegistrar } from './godaddy';
+import { NameBrightRegistrar } from './namebright';
 import { NamecheapRegistrar } from './namecheap';
 import { NameSiloRegistrar } from './namesilo';
+import { PorkbunRegistrar } from './porkbun';
 import { SpaceshipRegistrar } from './spaceship';
 
 // the built-in registrar providers, keyed by id
@@ -18,8 +20,10 @@ export const registrars = {
   dynadot: DynadotRegistrar,
   gandi: GandiRegistrar,
   godaddy: GoDaddyRegistrar,
+  namebright: NameBrightRegistrar,
   namecheap: NamecheapRegistrar,
   namesilo: NameSiloRegistrar,
+  porkbun: PorkbunRegistrar,
   spaceship: SpaceshipRegistrar,
 } satisfies Record<string, RegistrarConstructor>;
 
