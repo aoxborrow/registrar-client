@@ -176,10 +176,23 @@ p.supports(Feature.SubscribeWebhooks); // false
 A unit test asserts core and extended partition the catalog with no overlap, and
 that every provider's `extendedFeatures` are valid, unique, non-core entries.
 
+### Implementation status
+
+The full 18-method core contract now exists on the `Registrar` interface (with
+shared payload types — `Contact`, `DnsRecord`, `DomainAvailability`,
+`TldPricing`, `RegisterDomainInput`), and is being implemented one provider at a
+time. **GoDaddy** is done first: every core method except `registerDomain` and
+`transferIn` (both need GoDaddy's per-TLD legal-agreements + `consent` flow and
+spend real money) plus enabling `setPrivacy` (a paid add-on). Its `getPricing`
+works per-domain via the availability endpoint; GoDaddy has no per-TLD price API.
+
 ### Still open (future work)
 
-- **Wire up the core methods** that are declared-by-contract but not yet
-  implemented (get/register/contacts/DNS/pricing/…) with shared payload types.
+- **Wire up the remaining providers' core methods** (Dynadot, Namecheap,
+  Spaceship, …), reusing the shared payload types.
+- **A shared consent/agreements abstraction** for the paid register/transfer
+  flows (GoDaddy needs it; others will too), so those two core methods can be
+  implemented without duplicating the legal-agreement dance per provider.
 - **Cloudflare DNS via the Zones API**, so its core `getDnsRecords`/
   `setDnsRecords` (and DNSSEC) stop throwing `NotImplementedError`.
 - **Async operation model**: GoDaddy v3 and Spaceship return `202 + poll`; a
