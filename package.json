@@ -1,0 +1,92 @@
+{
+  "name": "@aoxborrow/registrar-client",
+  "version": "0.0.0",
+  "description": "Fully-typed, browser- and edge-safe client for domain registrar APIs with a pluggable multi-provider interface",
+  "author": "Aaron Oxborrow <aaron@oxborrow.com>",
+  "license": "MIT",
+  "homepage": "https://github.com/aoxborrow/registrar-client",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aoxborrow/registrar-client.git"
+  },
+  "bugs": {
+    "url": "https://github.com/aoxborrow/registrar-client/issues"
+  },
+  "keywords": [
+    "registrar",
+    "domains",
+    "domain-registration",
+    "epp",
+    "whois",
+    "rdap",
+    "namecheap",
+    "porkbun",
+    "gandi",
+    "browser",
+    "cloudflare-workers",
+    "edge",
+    "typescript"
+  ],
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup",
+    "lint": "npm run tsc && npm run eslint && npm run prettier",
+    "lint:fix": "npm run eslint:fix && npm run prettier:fix",
+    "eslint": "eslint --cache --cache-location .eslintcache .",
+    "eslint:fix": "eslint --cache --cache-location .eslintcache . --fix",
+    "prettier": "prettier --check .",
+    "prettier:fix": "prettier --write --list-different .",
+    "ts": "npm run lint",
+    "ts:fix": "npm run lint:fix",
+    "tsc": "tsc --noEmit",
+    "typecheck": "npm run tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "clear:ts": "rm -rf tsconfig.tsbuildinfo tsconfig.build.tsbuildinfo",
+    "clear:eslint": "rm -rf .eslintcache",
+    "clear": "npm run clear:ts && npm run clear:eslint && rm -rf dist coverage",
+    "prepublishOnly": "npm run build",
+    "release:patch": "npm version patch && git push --follow-tags && gh release create v$(node -p \"require('./package.json').version\") --generate-notes",
+    "release:minor": "npm version minor && git push --follow-tags && gh release create v$(node -p \"require('./package.json').version\") --generate-notes",
+    "release:major": "npm version major && git push --follow-tags && gh release create v$(node -p \"require('./package.json').version\") --generate-notes"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@types/node": "^18.19.0",
+    "@typescript-eslint/eslint-plugin": "^8.46.3",
+    "@typescript-eslint/parser": "^8.46.3",
+    "@vitest/coverage-v8": "^3.2.4",
+    "eslint": "^9.39.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-import-resolver-typescript": "^4.4.4",
+    "eslint-plugin-import": "^2.32.0",
+    "globals": "^16.5.0",
+    "prettier": "^3.6.2",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.3",
+    "vitest": "^3.2.4"
+  }
+}
