@@ -3,7 +3,7 @@
 A fully-typed, **browser- and edge-safe** client for domain registrar APIs, with a
 pluggable multi-provider interface. Speaks both JSON and XML registrar APIs.
 
-Runs anywhere `fetch` is available: modern Node.js (18+), browsers, Cloudflare
+Runs anywhere `fetch` is available: modern Node.js (20+), browsers, Cloudflare
 Workers, Deno, Bun, and other edge runtimes. Its one runtime dependency —
 [`fast-xml-parser`](https://github.com/NaturalIntelligence/fast-xml-parser)
 (pure JS, no Node built-ins) — is used to parse XML registrar responses and is

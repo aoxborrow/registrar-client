@@ -4,7 +4,7 @@ import eslint from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import typescriptEslint from '@typescript-eslint/eslint-plugin';
 import tsParser from '@typescript-eslint/parser';
-import importPlugin from 'eslint-plugin-import';
+import importPlugin from 'eslint-plugin-import-x';
 import prettier from 'eslint-config-prettier';
 import globals from 'globals';
 
@@ -20,7 +20,7 @@ export default tseslint.config(
     extends: [eslint.configs.recommended, tseslint.configs.recommendedTypeChecked],
     plugins: {
       '@typescript-eslint': typescriptEslint,
-      'import': importPlugin,
+      'import-x': importPlugin,
     },
     languageOptions: {
       parser: tsParser,
@@ -40,10 +40,10 @@ export default tseslint.config(
       },
     },
     settings: {
-      'import/parsers': {
+      'import-x/parsers': {
         '@typescript-eslint/parser': ['.ts'],
       },
-      'import/resolver': {
+      'import-x/resolver': {
         typescript: {
           alwaysTryTypes: true,
           project: './tsconfig.json',
@@ -64,7 +64,7 @@ export default tseslint.config(
       ],
       // no file extension on relative imports; tsup/esbuild bundles the output,
       // and TS uses "bundler" module resolution, so extensions aren't needed
-      'import/extensions': [
+      'import-x/extensions': [
         'error',
         'ignorePackages',
         {
