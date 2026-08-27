@@ -8,8 +8,34 @@ import type {
 } from '../types.js';
 import { createDomain } from '../utils.js';
 import { toRegistrarError } from '../errors.js';
+import { ensureArray, parseXml } from '../xml.js';
 import { BaseRegistrar } from './base.js';
 import type { RegistrarCredentials } from './types.js';
+
+// shape of a Namecheap XML response (attributes prefixed with `@_`)
+interface NcError {
+  '#text'?: string;
+  '@_Number'?: string;
+}
+
+interface NcDomainEl {
+  '@_Name'?: string;
+  '@_Created'?: string;
+  '@_Expires'?: string;
+  '@_AutoRenew'?: string;
+  '@_IsLocked'?: string;
+  '@_WhoisGuard'?: string;
+}
+
+interface NcResponse {
+  ApiResponse?: {
+    '@_Status'?: string;
+    'Errors'?: { Error?: NcError | NcError[] | string };
+    'CommandResponse'?: {
+      DomainGetListResult?: { Domain?: NcDomainEl | NcDomainEl[] };
+    };
+  };
+}
 
 /**
  * Namecheap Registrar
@@ -20,9 +46,8 @@ import type { RegistrarCredentials } from './types.js';
  * enforces IP whitelisting). Supply that whitelisted IP as `clientIp`.
  *
  * Note: Namecheap authenticates via query-string parameters (ApiUser, ApiKey,
- * UserName, ClientIp) and responds with XML. Responses are parsed with a small
- * built-in extractor rather than a full XML parser so the client stays
- * dependency-free and runs in browsers, Workers, and Node alike.
+ * UserName, ClientIp) and responds with XML, parsed via the shared `parseXml`
+ * helper (fast-xml-parser).
  */
 export class NamecheapRegistrar extends BaseRegistrar {
   readonly name = 'namecheap';
@@ -55,21 +80,26 @@ export class NamecheapRegistrar extends BaseRegistrar {
     };
   }
 
-  private call(
+  // issue a command and parse the XML response
+  private async call(
     command: string,
     extra: Record<string, string>,
     opts?: RequestOptions
-  ): Promise<string> {
-    return this.http.requestText({ path: '', query: this.baseQuery(command, extra), ...opts });
+  ): Promise<NcResponse> {
+    const xml = await this.http.requestText({
+      path: '',
+      query: this.baseQuery(command, extra),
+      ...opts,
+    });
+    return parseXml<NcResponse>(xml);
   }
 
   override async testConnection(opts?: RequestOptions): Promise<ConnectionResult> {
     try {
-      const xml = await this.call('namecheap.domains.getList', {}, opts);
-      if (getRootStatus(xml) === 'OK') {
-        return { success: true, message: 'Connection successful' };
-      }
-      return { success: false, message: getErrorText(xml) ?? 'Unknown error' };
+      const res = await this.call('namecheap.domains.getList', {}, opts);
+      return isOk(res)
+        ? { success: true, message: 'Connection successful' }
+        : { success: false, message: errorText(res) ?? 'Unknown error' };
     } catch (error) {
       return { success: false, message: toRegistrarError(error).message };
     }
@@ -82,28 +112,28 @@ export class NamecheapRegistrar extends BaseRegistrar {
     let hasMore = true;
 
     while (hasMore) {
-      const xml = await this.call(
+      const res = await this.call(
         'namecheap.domains.getList',
         { PageSize: String(pageSize), Page: String(page) },
         opts
       );
-      if (getRootStatus(xml) !== 'OK') {
-        throw new Error(getErrorText(xml) ?? 'API request failed');
+      if (!isOk(res)) {
+        throw new Error(errorText(res) ?? 'API request failed');
       }
 
-      const elements = parseDomainElements(xml);
-      for (const attrs of elements) {
+      const elements = ensureArray(res.ApiResponse?.CommandResponse?.DomainGetListResult?.Domain);
+      for (const d of elements) {
         domains.push(
           createDomain({
-            domainName: attrs.Name,
+            domainName: d['@_Name'],
             registrar: this.name,
             status: 'ok', // the list endpoint does not return a per-domain status
-            createdDate: attrs.Created,
-            expirationDate: attrs.Expires,
-            renewalDate: attrs.Expires,
-            autoRenew: attrs.AutoRenew === 'true',
-            locked: attrs.IsLocked === 'true',
-            privacy: attrs.WhoisGuard === 'ENABLED',
+            createdDate: d['@_Created'],
+            expirationDate: d['@_Expires'],
+            renewalDate: d['@_Expires'],
+            autoRenew: d['@_AutoRenew'] === 'true',
+            locked: d['@_IsLocked'] === 'true',
+            privacy: d['@_WhoisGuard'] === 'ENABLED',
             nameservers: [], // the list endpoint does not return nameservers
           })
         );
@@ -120,12 +150,12 @@ export class NamecheapRegistrar extends BaseRegistrar {
     years = 1,
     opts?: RequestOptions
   ): Promise<OperationResult> {
-    const xml = await this.call(
+    const res = await this.call(
       'namecheap.domains.renew',
       { DomainName: domainName, Years: String(years) },
       opts
     );
-    return statusResult(xml);
+    return statusResult(res);
   }
 
   override async updateNameservers(
@@ -140,71 +170,49 @@ export class NamecheapRegistrar extends BaseRegistrar {
     const dot = domainName.indexOf('.');
     const sld = dot === -1 ? domainName : domainName.slice(0, dot);
     const tld = dot === -1 ? '' : domainName.slice(dot + 1);
-    const xml = await this.call(
+    const res = await this.call(
       'namecheap.domains.dns.setCustom',
       { SLD: sld, TLD: tld, Nameservers: nameservers.join(',') },
       opts
     );
-    return statusResult(xml);
+    return statusResult(res);
   }
 
   override async lockDomain(domainName: string, opts?: RequestOptions): Promise<OperationResult> {
-    const xml = await this.call(
+    const res = await this.call(
       'namecheap.domains.setRegistrarLock',
       { DomainName: domainName, LockAction: 'LOCK' },
       opts
     );
-    return statusResult(xml);
+    return statusResult(res);
   }
 
   override async unlockDomain(domainName: string, opts?: RequestOptions): Promise<OperationResult> {
-    const xml = await this.call(
+    const res = await this.call(
       'namecheap.domains.setRegistrarLock',
       { DomainName: domainName, LockAction: 'UNLOCK' },
       opts
     );
-    return statusResult(xml);
+    return statusResult(res);
   }
 }
 
-// --- minimal, dependency-free XML extraction for Namecheap responses ---
-// These read only the specific attributes/elements the API returns. They are
-// deliberately narrow, not a general XML parser.
-
-// read the Status attribute from the root <ApiResponse Status="...">
-function getRootStatus(xml: string): string | null {
-  const match = /<ApiResponse\b[^>]*\bStatus="([^"]*)"/i.exec(xml);
-  return match ? match[1] : null;
+// whether the response's root Status attribute is "OK"
+function isOk(res: NcResponse): boolean {
+  return res.ApiResponse?.['@_Status'] === 'OK';
 }
 
-// read the first <Error ...>message</Error> text, if present
-function getErrorText(xml: string): string | null {
-  const match = /<Error\b[^>]*>([^<]*)<\/Error>/i.exec(xml);
-  return match ? match[1].trim() : null;
-}
-
-// extract each <Domain .../> element as a map of its attributes
-function parseDomainElements(xml: string): Record<string, string>[] {
-  const results: Record<string, string>[] = [];
-  const domainRe = /<Domain\b([^>]*?)\/?>/gi;
-  let el: RegExpExecArray | null;
-  while ((el = domainRe.exec(xml)) !== null) {
-    const attrs: Record<string, string> = {};
-    const attrRe = /(\w+)="([^"]*)"/g;
-    let a: RegExpExecArray | null;
-    while ((a = attrRe.exec(el[1])) !== null) {
-      attrs[a[1]] = a[2];
-    }
-    results.push(attrs);
-  }
-  return results;
+// extract the first error message from an error response, if present
+function errorText(res: NcResponse): string | null {
+  const error = res.ApiResponse?.Errors?.Error;
+  if (!error) return null;
+  const first = ensureArray(error)[0];
+  if (typeof first === 'string') return first.trim() || null;
+  return first?.['#text']?.trim() ?? null;
 }
 
 // map a Namecheap response's root Status to an OperationResult
-function statusResult(xml: string): OperationResult {
-  const status = getRootStatus(xml);
-  return {
-    success: status === 'OK',
-    message: status === 'OK' ? 'OK' : (getErrorText(xml) ?? status ?? 'Unknown response'),
-  };
+function statusResult(res: NcResponse): OperationResult {
+  if (isOk(res)) return { success: true, message: 'OK' };
+  return { success: false, message: errorText(res) ?? 'Unknown response' };
 }
