@@ -165,7 +165,7 @@ export class CloudflareRegistrar extends BaseRegistrar {
   }
 
   // look up a domain by name to obtain its Cloudflare id
-  private async getDomain(domainName: string, opts?: RequestOptions): Promise<CfDomain | null> {
+  private async findDomain(domainName: string, opts?: RequestOptions): Promise<CfDomain | null> {
     const res = await this.http.request<CfEnvelope<CfDomain[]>>({
       path: this.accountPath,
       query: { name: domainName },
@@ -181,7 +181,7 @@ export class CloudflareRegistrar extends BaseRegistrar {
     opts?: RequestOptions
   ): Promise<OperationResult> {
     try {
-      const domain = await this.getDomain(domainName, opts);
+      const domain = await this.findDomain(domainName, opts);
       if (!domain) return { success: false, message: 'Domain not found' };
 
       const res = await this.http.request<CfEnvelope<CfDomain>>({

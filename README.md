@@ -9,9 +9,10 @@ Workers, Deno, Bun, and other edge runtimes. Its one runtime dependency —
 (pure JS, no Node built-ins) — is used to parse XML registrar responses and is
 itself edge-safe.
 
-> **Status:** early. Nine registrar providers are implemented but have not yet
-> been exercised against live APIs with real credentials (NameBright and Porkbun
-> are partial — see the providers table).
+> **Status:** early. Nine registrar providers are implemented, and the full
+> 18-method core contract is being filled in one provider at a time (GoDaddy
+> first). Methods not yet wired up throw `NotImplementedError`. Nothing here has
+> been exercised against live APIs with real credentials yet.
 
 ## Install
 
@@ -61,11 +62,21 @@ const client = new RegistrarClient(
 
 await client.testConnection();
 const domains = await client.listDomains();
+const [availability] = await client.checkAvailability(['example.com']);
+const records = await client.getDnsRecords('example.com');
 await client.updateNameservers('example.com', ['ns1.example.net', 'ns2.example.net']);
 ```
 
-Every provider implements the same interface: `testConnection`, `listDomains`,
-`renewDomain`, `updateNameservers`, `lockDomain`, `unlockDomain`.
+Every provider implements the same `Registrar` interface — the full core
+contract is `testConnection`, `listDomains`, `getDomain`, `checkAvailability`,
+`getPricing`, `registerDomain`, `renewDomain`, `setAutoRenew`, `transferIn`,
+`updateNameservers`, `getNameservers`, `lockDomain`, `unlockDomain`,
+`setPrivacy`, `getContacts`, `updateContacts`, `getDnsRecords`, and
+`setDnsRecords`. Coverage is filled in per provider; where a provider hasn't
+wired up a core method yet it throws `NotImplementedError` (see
+[Capabilities](#capabilities)). **GoDaddy** is the most complete today —
+everything above except `registerDomain`/`transferIn` (which need GoDaddy's
+paid agreements-and-consent flow) and enabling `setPrivacy` (a paid add-on).
 
 ## Capabilities
 
@@ -129,10 +140,10 @@ implementations**:
 
 - **`RegistrarClient`** — a thin, provider-agnostic facade. Normalizes input and
   delegates to the configured provider.
-- **`Registrar`** — the core interface every backend implements
-  (`testConnection`, `listDomains`, `renewDomain`, `updateNameservers`,
-  `lockDomain`, `unlockDomain`, plus the capability accessors). Defined in
-  `src/types.ts`.
+- **`Registrar`** — the core interface every backend implements (the 18 core
+  operations listed under [Usage](#usage), plus the capability accessors).
+  Defined in `src/types.ts`, with shared payload types (`Contact`, `DnsRecord`,
+  `DomainAvailability`, `TldPricing`, `RegisterDomainInput`) alongside it.
 - **`BaseRegistrar`** (`src/registrar.ts`) — an abstract base that owns the
   shared HTTP/auth/retry plumbing (via `HttpClient`) and provides
   `NotImplementedError`-rejecting defaults. Concrete providers under

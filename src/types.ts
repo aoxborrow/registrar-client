@@ -92,6 +92,92 @@ export interface DomainInput {
   deleted?: boolean;
 }
 
+// A normalized registrant/admin/tech/billing contact, mapped to and from each
+// registrar's own contact shape.
+export interface Contact {
+  firstName: string;
+  lastName: string;
+  organization?: string;
+  email: string;
+  // international phone format, e.g. "+1.4805551234"
+  phone: string;
+  fax?: string;
+  address1: string;
+  address2?: string;
+  city: string;
+  // state / province / region; may be empty where the country has none
+  state?: string;
+  postalCode: string;
+  // ISO 3166-1 alpha-2 country code, e.g. "US"
+  country: string;
+}
+
+// The set of contacts on a domain. `registrant` is the legal owner; most
+// registrars also track admin, tech, and billing roles (often the same person).
+export interface ContactSet {
+  registrant?: Contact;
+  admin?: Contact;
+  tech?: Contact;
+  billing?: Contact;
+}
+
+// A single DNS record in provider-agnostic form.
+export interface DnsRecord {
+  // record type, uppercased: "A", "AAAA", "CNAME", "MX", "TXT", "NS", "SRV", "CAA", …
+  type: string;
+  // host/subdomain relative to the zone apex; "@" denotes the apex
+  name: string;
+  // record data / value (target host, IP address, text, etc.)
+  value: string;
+  // time-to-live in seconds
+  ttl?: number;
+  // priority, for MX and SRV records
+  priority?: number;
+  // SRV-only fields
+  weight?: number;
+  port?: number;
+}
+
+// Result of an availability check for a single domain.
+export interface DomainAvailability {
+  domainName: string;
+  available: boolean;
+  // whether the name is a premium/aftermarket registration
+  premium?: boolean;
+  // registration price in major currency units (e.g. 11.99), when the API reports it
+  price?: number;
+  // ISO 4217 currency code, e.g. "USD"
+  currency?: string;
+  // the registration period the price covers, in years
+  period?: number;
+}
+
+// Pricing for a TLD (or a specific domain), in major currency units. Fields are
+// optional because not every registrar exposes all three price points.
+export interface TldPricing {
+  // the TLD the prices apply to, without a leading dot, e.g. "com"
+  tld: string;
+  // ISO 4217 currency code, e.g. "USD"
+  currency: string;
+  registration?: number;
+  renewal?: number;
+  transfer?: number;
+}
+
+// Input for registering a new domain.
+export interface RegisterDomainInput {
+  // registration length in years (defaults to 1)
+  years?: number;
+  // contacts for the registration; every registrar requires at least a registrant
+  contacts: ContactSet;
+  // initial nameservers; omitting them uses the registrar's defaults
+  nameservers?: string[];
+  // enable WHOIS privacy at registration, where supported
+  privacy?: boolean;
+  // enable auto-renew at registration
+  autoRenew?: boolean;
+}
+
 // credentials for a registrar, as a flat string map keyed by `ConfigField.name`
 export type RegistrarCredentials = Record<string, string>;
 
@@ -117,8 +203,34 @@ export interface Registrar {
   // list all domains in the account
   listDomains(opts?: RequestOptions): Promise<Domain[]>;
 
+  // fetch a single domain's details
+  getDomain(domainName: string, opts?: RequestOptions): Promise<Domain>;
+
+  // check whether one or more domains are available to register
+  checkAvailability(domainNames: string[], opts?: RequestOptions): Promise<DomainAvailability[]>;
+
+  // look up pricing for a TLD (or a specific domain)
+  getPricing(tldOrDomain: string, opts?: RequestOptions): Promise<TldPricing>;
+
+  // register a new domain
+  registerDomain(
+    domainName: string,
+    input: RegisterDomainInput,
+    opts?: RequestOptions
+  ): Promise<OperationResult>;
+
   // renew a domain for `years` years
   renewDomain(domainName: string, years?: number, opts?: RequestOptions): Promise<OperationResult>;
+
+  // toggle auto-renew for a domain
+  setAutoRenew(
+    domainName: string,
+    enabled: boolean,
+    opts?: RequestOptions
+  ): Promise<OperationResult>;
+
+  // transfer a domain into the account using its auth/EPP code
+  transferIn(domainName: string, authCode: string, opts?: RequestOptions): Promise<OperationResult>;
 
   // replace the nameservers for a domain
   updateNameservers(
@@ -127,11 +239,37 @@ export interface Registrar {
     opts?: RequestOptions
   ): Promise<OperationResult>;
 
+  // read the nameservers currently set on a domain
+  getNameservers(domainName: string, opts?: RequestOptions): Promise<string[]>;
+
   // lock a domain against transfers
   lockDomain(domainName: string, opts?: RequestOptions): Promise<OperationResult>;
 
   // unlock a domain
   unlockDomain(domainName: string, opts?: RequestOptions): Promise<OperationResult>;
+
+  // toggle WHOIS privacy for a domain
+  setPrivacy(domainName: string, enabled: boolean, opts?: RequestOptions): Promise<OperationResult>;
+
+  // read the registrant/admin/tech/billing contacts for a domain
+  getContacts(domainName: string, opts?: RequestOptions): Promise<ContactSet>;
+
+  // update the contacts for a domain
+  updateContacts(
+    domainName: string,
+    contacts: ContactSet,
+    opts?: RequestOptions
+  ): Promise<OperationResult>;
+
+  // read the DNS records for a domain
+  getDnsRecords(domainName: string, opts?: RequestOptions): Promise<DnsRecord[]>;
+
+  // replace the DNS records for a domain
+  setDnsRecords(
+    domainName: string,
+    records: DnsRecord[],
+    opts?: RequestOptions
+  ): Promise<OperationResult>;
 }
 
 // static side of a registrar class: the constructor plus discovery metadata

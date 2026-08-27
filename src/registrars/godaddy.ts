@@ -1,16 +1,42 @@
 import type {
   ConfigField,
   ConnectionResult,
+  Contact,
+  ContactSet,
+  DnsRecord,
   Domain,
+  DomainAvailability,
   OperationResult,
   RegistrarOptions,
   RequestOptions,
+  TldPricing,
 } from '../types';
 import { createDomain } from '../utils';
-import { toRegistrarError } from '../errors';
+import { NotImplementedError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
+
+// a mailing address as GoDaddy models it
+interface GoDaddyAddress {
+  address1?: string;
+  address2?: string;
+  city?: string;
+  state?: string;
+  postalCode?: string;
+  country?: string;
+}
+
+// a contact as GoDaddy models it (registrant / admin / tech / billing)
+interface GoDaddyContact {
+  nameFirst?: string;
+  nameLast?: string;
+  organization?: string;
+  email?: string;
+  phone?: string;
+  fax?: string;
+  addressMailing?: GoDaddyAddress;
+}
 
 interface GoDaddyDomain {
   domain: string;
@@ -22,7 +48,38 @@ interface GoDaddyDomain {
   locked?: boolean;
   privacy?: boolean;
   nameServers?: string[];
+  contactRegistrant?: GoDaddyContact;
+  contactAdmin?: GoDaddyContact;
+  contactTech?: GoDaddyContact;
+  contactBilling?: GoDaddyContact;
 }
+
+// one entry from POST /v1/domains/available; `price` is in micro-units of `currency`
+interface GoDaddyAvailability {
+  domain: string;
+  available?: boolean;
+  price?: number;
+  currency?: string;
+  period?: number;
+}
+
+interface GoDaddyAvailabilityResponse {
+  domains?: GoDaddyAvailability[];
+}
+
+// a DNS record as GoDaddy models it
+interface GoDaddyRecord {
+  type: string;
+  name: string;
+  data: string;
+  ttl?: number;
+  priority?: number;
+  weight?: number;
+  port?: number;
+}
+
+// GoDaddy reports availability prices in micro-units (1,000,000 = 1 unit of currency)
+const PRICE_MICRO_UNITS = 1_000_000;
 
 /**
  * GoDaddy Registrar
@@ -31,6 +88,14 @@ interface GoDaddyDomain {
  * Credentials: create API keys under Account Settings > API Keys. Choose the
  * `production` or `ote` (test) environment to match the key you generated;
  * both the key and secret are required and sent as an `sso-key` header.
+ *
+ * This provider targets GoDaddy's stable v1 Domains API. Two core methods are
+ * intentionally left unimplemented for now: `registerDomain` and `transferIn`
+ * both require GoDaddy's legal-agreements + consent flow (fetching agreement
+ * keys per TLD and submitting a `consent` block with the consenting party's IP
+ * as `agreedBy`), spend real money, and can't be verified without a funded
+ * account. They warrant a shared consent abstraction rather than a rushed,
+ * unverifiable body, so they still throw `NotImplementedError` for now.
  */
 export class GoDaddyRegistrar extends BaseRegistrar {
   readonly name = 'godaddy';
@@ -87,20 +152,65 @@ export class GoDaddyRegistrar extends BaseRegistrar {
       path: '/domains?limit=1000&statusGroups=VISIBLE&statusGroups=RENEWABLE&statusGroups=REDEMPTION',
       ...opts,
     });
-    return (res ?? []).map(d =>
-      createDomain({
-        domainName: d.domain,
-        registrar: this.name,
-        status: d.status,
-        createdDate: d.createdAt,
-        expirationDate: d.expires,
-        renewalDate: d.renewDeadline,
-        autoRenew: d.renewAuto ?? false,
-        locked: d.locked ?? false,
-        privacy: d.privacy ?? false,
-        nameservers: d.nameServers ?? [],
-      })
-    );
+    return (res ?? []).map(d => this.toDomain(d));
+  }
+
+  override async getDomain(domainName: string, opts?: RequestOptions): Promise<Domain> {
+    const d = await this.http.request<GoDaddyDomain>({
+      path: `/domains/${encodeURIComponent(domainName)}`,
+      ...opts,
+    });
+    return this.toDomain(d);
+  }
+
+  override async getNameservers(domainName: string, opts?: RequestOptions): Promise<string[]> {
+    const domain = await this.getDomain(domainName, opts);
+    return domain.nameservers;
+  }
+
+  override async checkAvailability(
+    domainNames: string[],
+    opts?: RequestOptions
+  ): Promise<DomainAvailability[]> {
+    // bulk check: POST an array of domains. checkType=FULL consults the registry
+    // (slower but authoritative) rather than GoDaddy's cache.
+    const res = await this.http.request<GoDaddyAvailabilityResponse>({
+      method: 'POST',
+      path: '/domains/available?checkType=FULL',
+      body: domainNames,
+      ...opts,
+    });
+    return (res.domains ?? []).map(d => ({
+      domainName: d.domain,
+      available: d.available ?? false,
+      price: d.price != null ? d.price / PRICE_MICRO_UNITS : undefined,
+      currency: d.currency,
+      period: d.period,
+    }));
+  }
+
+  /**
+   * GoDaddy has no standalone TLD-pricing endpoint — registration price is
+   * returned inline with an availability check. So `getPricing` requires a full
+   * domain (e.g. "example.com"), checks its availability, and reports the
+   * registration price. A bare TLD throws, since GoDaddy can't price a TLD
+   * without a specific name. Only `registration` is known here (GoDaddy's
+   * availability response carries no separate renewal/transfer price).
+   */
+  override async getPricing(tldOrDomain: string, opts?: RequestOptions): Promise<TldPricing> {
+    if (!tldOrDomain.includes('.')) {
+      throw new NotImplementedError(
+        `${this.name}: getPricing needs a full domain (e.g. "example.com"); ` +
+          'GoDaddy exposes pricing only per-domain via availability, not per-TLD'
+      );
+    }
+    const [result] = await this.checkAvailability([tldOrDomain], opts);
+    const tld = tldOrDomain.slice(tldOrDomain.indexOf('.') + 1);
+    return {
+      tld,
+      currency: result?.currency ?? 'USD',
+      registration: result?.price,
+    };
   }
 
   override async renewDomain(
@@ -109,8 +219,28 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     opts?: RequestOptions
   ): Promise<OperationResult> {
     return this.mutate(
-      { method: 'POST', path: `/domains/${domainName}/renew`, body: { period: years } },
+      {
+        method: 'POST',
+        path: `/domains/${encodeURIComponent(domainName)}/renew`,
+        body: { period: years },
+      },
       'Domain renewed successfully',
+      opts
+    );
+  }
+
+  override async setAutoRenew(
+    domainName: string,
+    enabled: boolean,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    return this.mutate(
+      {
+        method: 'PATCH',
+        path: `/domains/${encodeURIComponent(domainName)}`,
+        body: { renewAuto: enabled },
+      },
+      `Auto-renew ${enabled ? 'enabled' : 'disabled'} successfully`,
       opts
     );
   }
@@ -124,7 +254,11 @@ export class GoDaddyRegistrar extends BaseRegistrar {
       throw new Error('GoDaddy requires 1-13 nameservers');
     }
     return this.mutate(
-      { method: 'PATCH', path: `/domains/${domainName}`, body: { nameServers: nameservers } },
+      {
+        method: 'PATCH',
+        path: `/domains/${encodeURIComponent(domainName)}`,
+        body: { nameServers: nameservers },
+      },
       'Nameservers updated successfully',
       opts
     );
@@ -132,7 +266,11 @@ export class GoDaddyRegistrar extends BaseRegistrar {
 
   override async lockDomain(domainName: string, opts?: RequestOptions): Promise<OperationResult> {
     return this.mutate(
-      { method: 'PATCH', path: `/domains/${domainName}`, body: { locked: true } },
+      {
+        method: 'PATCH',
+        path: `/domains/${encodeURIComponent(domainName)}`,
+        body: { locked: true },
+      },
       'Domain locked successfully',
       opts
     );
@@ -140,10 +278,132 @@ export class GoDaddyRegistrar extends BaseRegistrar {
 
   override async unlockDomain(domainName: string, opts?: RequestOptions): Promise<OperationResult> {
     return this.mutate(
-      { method: 'PATCH', path: `/domains/${domainName}`, body: { locked: false } },
+      {
+        method: 'PATCH',
+        path: `/domains/${encodeURIComponent(domainName)}`,
+        body: { locked: false },
+      },
       'Domain unlocked successfully',
       opts
     );
+  }
+
+  /**
+   * Disabling privacy is a simple DELETE. Enabling it is a paid purchase
+   * (`POST /v1/domains/{domain}/privacy/purchase`) requiring a consent block and
+   * payment, so it's left unimplemented rather than silently spending money.
+   */
+  override async setPrivacy(
+    domainName: string,
+    enabled: boolean,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    if (enabled) {
+      throw new NotImplementedError(
+        `${this.name}: enabling privacy is a paid purchase and is not implemented; ` +
+          'only disabling privacy is supported via the API'
+      );
+    }
+    return this.mutate(
+      { method: 'DELETE', path: `/domains/${encodeURIComponent(domainName)}/privacy` },
+      'Privacy disabled successfully',
+      opts
+    );
+  }
+
+  override async getContacts(domainName: string, opts?: RequestOptions): Promise<ContactSet> {
+    const d = await this.http.request<GoDaddyDomain>({
+      path: `/domains/${encodeURIComponent(domainName)}`,
+      ...opts,
+    });
+    return {
+      registrant: fromGoDaddyContact(d.contactRegistrant),
+      admin: fromGoDaddyContact(d.contactAdmin),
+      tech: fromGoDaddyContact(d.contactTech),
+      billing: fromGoDaddyContact(d.contactBilling),
+    };
+  }
+
+  override async updateContacts(
+    domainName: string,
+    contacts: ContactSet,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    // include only the roles the caller supplied
+    const body: Record<string, GoDaddyContact> = {};
+    if (contacts.registrant) body.contactRegistrant = toGoDaddyContact(contacts.registrant);
+    if (contacts.admin) body.contactAdmin = toGoDaddyContact(contacts.admin);
+    if (contacts.tech) body.contactTech = toGoDaddyContact(contacts.tech);
+    if (contacts.billing) body.contactBilling = toGoDaddyContact(contacts.billing);
+    if (Object.keys(body).length === 0) {
+      throw new Error('GoDaddy updateContacts requires at least one contact');
+    }
+    return this.mutate(
+      { method: 'PATCH', path: `/domains/${encodeURIComponent(domainName)}/contacts`, body },
+      'Contacts updated successfully',
+      opts
+    );
+  }
+
+  override async getDnsRecords(domainName: string, opts?: RequestOptions): Promise<DnsRecord[]> {
+    const records = await this.http.request<GoDaddyRecord[]>({
+      path: `/domains/${encodeURIComponent(domainName)}/records`,
+      ...opts,
+    });
+    return (records ?? []).map(r => ({
+      type: r.type,
+      name: r.name,
+      value: r.data,
+      ttl: r.ttl,
+      priority: r.priority,
+      weight: r.weight,
+      port: r.port,
+    }));
+  }
+
+  /**
+   * Replaces the entire record set (PUT semantics): any record not present in
+   * `records` is removed. GoDaddy requires a minimum TTL of 600 seconds, so
+   * records without an explicit TTL default to 3600.
+   */
+  override async setDnsRecords(
+    domainName: string,
+    records: DnsRecord[],
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const body: GoDaddyRecord[] = records.map(r => {
+      const record: GoDaddyRecord = {
+        type: r.type.toUpperCase(),
+        name: r.name,
+        data: r.value,
+        ttl: r.ttl ?? 3600,
+      };
+      if (r.priority != null) record.priority = r.priority;
+      if (r.weight != null) record.weight = r.weight;
+      if (r.port != null) record.port = r.port;
+      return record;
+    });
+    return this.mutate(
+      { method: 'PUT', path: `/domains/${encodeURIComponent(domainName)}/records`, body },
+      'DNS records updated successfully',
+      opts
+    );
+  }
+
+  // map a GoDaddy domain payload to the normalized Domain shape
+  private toDomain(d: GoDaddyDomain): Domain {
+    return createDomain({
+      domainName: d.domain,
+      registrar: this.name,
+      status: d.status,
+      createdDate: d.createdAt,
+      expirationDate: d.expires,
+      renewalDate: d.renewDeadline,
+      autoRenew: d.renewAuto ?? false,
+      locked: d.locked ?? false,
+      privacy: d.privacy ?? false,
+      nameservers: d.nameServers ?? [],
+    });
   }
 
   private async mutate(
@@ -158,4 +418,44 @@ export class GoDaddyRegistrar extends BaseRegistrar {
       return { success: false, message: toRegistrarError(error).message };
     }
   }
+}
+
+// --- contact mapping between GoDaddy's shape and the normalized Contact ---
+
+function fromGoDaddyContact(c: GoDaddyContact | undefined): Contact | undefined {
+  if (!c) return undefined;
+  const a = c.addressMailing ?? {};
+  return {
+    firstName: c.nameFirst ?? '',
+    lastName: c.nameLast ?? '',
+    organization: c.organization,
+    email: c.email ?? '',
+    phone: c.phone ?? '',
+    fax: c.fax,
+    address1: a.address1 ?? '',
+    address2: a.address2,
+    city: a.city ?? '',
+    state: a.state,
+    postalCode: a.postalCode ?? '',
+    country: a.country ?? '',
+  };
+}
+
+function toGoDaddyContact(c: Contact): GoDaddyContact {
+  return {
+    nameFirst: c.firstName,
+    nameLast: c.lastName,
+    organization: c.organization,
+    email: c.email,
+    phone: c.phone,
+    fax: c.fax,
+    addressMailing: {
+      address1: c.address1,
+      address2: c.address2,
+      city: c.city,
+      state: c.state ?? '',
+      postalCode: c.postalCode,
+      country: c.country,
+    },
+  };
 }
