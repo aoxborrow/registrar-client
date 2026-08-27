@@ -36,7 +36,7 @@ them) — so you can build a credential UI generically.
 
 ## Usage
 
-Construct a provider (directly or via the registry) and, optionally, wrap it in
+Construct a provider (directly or via the `createRegistrar` factory) and, optionally, wrap it in
 the `RegistrarClient` facade:
 
 ```ts
@@ -104,7 +104,7 @@ implementations**:
 - **`parseXml` / `ensureArray`** — shared XML helpers (backed by
   `fast-xml-parser`) with one consistent config across XML providers: attributes
   kept, values left as raw strings so providers coerce them explicitly.
-- **`registrars` / `createRegistrar`** — a registry of the built-in providers by
+- **`registrars` / `createRegistrar`** — a lookup of the built-in providers by
   id, and a factory to construct one.
 
 ### Adding a provider
@@ -112,7 +112,7 @@ implementations**:
 Extend `BaseRegistrar`, pass a `baseUrl` + auth headers to `super()`, add the
 static `displayName` / `configFields` / `helpText` metadata, override the
 operations the API supports (mapping payloads to the shared types in
-`src/types.ts`), and register the class in `src/registrars/registry.ts`. The six
+`src/types.ts`), and add the class to `src/registrars/index.ts`. The six
 existing providers under `src/registrars/` are working references.
 
 ## Errors

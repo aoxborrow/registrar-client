@@ -12,9 +12,9 @@ export type {
   RegistrarCredentials,
 } from './registrars/types.js';
 
-// provider registry
-export { registrars, createRegistrar } from './registrars/registry.js';
-export type { RegistrarName } from './registrars/registry.js';
+// built-in providers lookup + factory
+export { registrars, createRegistrar } from './registrars/index.js';
+export type { RegistrarName } from './registrars/index.js';
 
 // bundled providers
 export { CloudflareRegistrar } from './registrars/cloudflare.js';
