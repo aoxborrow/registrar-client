@@ -9,9 +9,8 @@ Workers, Deno, Bun, and other edge runtimes. Its one runtime dependency —
 (pure JS, no Node built-ins) — is used to parse XML registrar responses and is
 itself edge-safe.
 
-> **Status:** early. Six registrar providers are implemented (ported from a
-> prior Google-Apps-Script domain-sync project); they have not yet been
-> exercised against live APIs with real credentials.
+> **Status:** early. Six registrar providers are implemented but have not yet
+> been exercised against live APIs with real credentials.
 
 ## Install
 
