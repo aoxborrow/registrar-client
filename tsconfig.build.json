@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM"],
+    // tsup drives dts emit; incremental conflicts with its single-file dts build
+    "incremental": false,
+    "declaration": true,
+    "declarationMap": true,
+    "rootDir": "./src",
+    "removeComments": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "test", "**/*.test.ts"]
+}
