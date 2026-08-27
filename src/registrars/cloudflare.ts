@@ -8,8 +8,9 @@ import type {
 } from '../types.js';
 import { createDomain } from '../utils.js';
 import { toRegistrarError } from '../errors.js';
-import { BaseRegistrar, selectBaseUrl } from './base.js';
-import type { RegistrarCredentials } from './types.js';
+import { BaseRegistrar, selectBaseUrl } from '../registrar.js';
+import type { RegistrarFeature } from '../features.js';
+import type { RegistrarCredentials } from '../types.js';
 
 // Cloudflare's standard response envelope
 interface CfEnvelope<T> {
@@ -54,6 +55,13 @@ export class CloudflareRegistrar extends BaseRegistrar {
     { name: 'accountId', label: 'Account ID', type: 'text', required: true },
   ];
   static readonly supportsSandbox = false; // Cloudflare Registrar has no test environment
+  // No extended capabilities. Cloudflare is held to the core contract like any
+  // provider, but several core features route through Cloudflare APIs *outside*
+  // the Registrar API — DNS/DNSSEC via the Zones API, and nameserver changes are
+  // constrained — and its Registrar API is mid-migration (old endpoints EOL
+  // 2026-09-27). Those core methods stay `NotImplementedError` until wired up
+  // against the right Cloudflare API. See docs/registrars/cloudflare.md.
+  static readonly extendedFeatures: readonly RegistrarFeature[] = [];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
     super(

@@ -8,8 +8,9 @@ import type {
 } from '../types.js';
 import { createDomain } from '../utils.js';
 import { toRegistrarError } from '../errors.js';
-import { BaseRegistrar, selectBaseUrl } from './base.js';
-import type { RegistrarCredentials } from './types.js';
+import { BaseRegistrar, selectBaseUrl } from '../registrar.js';
+import { Feature, type RegistrarFeature } from '../features.js';
+import type { RegistrarCredentials } from '../types.js';
 
 interface GoDaddyDomain {
   domain: string;
@@ -46,6 +47,10 @@ export class GoDaddyRegistrar extends BaseRegistrar {
   ];
   // GoDaddy's OTE ("Operational Test Environment") is its sandbox
   static readonly supportsSandbox = true;
+  // Beyond core, only domain forwarding. DNSSEC has no dedicated endpoint (DS
+  // records go through the generic DNS API), there's no glue-record or email
+  // API, and auth-code retrieval and push webhooks aren't confirmed via API.
+  static readonly extendedFeatures: readonly RegistrarFeature[] = [Feature.SetDomainForwarding];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
     super(

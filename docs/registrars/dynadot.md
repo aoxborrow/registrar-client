@@ -1,0 +1,68 @@
+# Dynadot — API Research
+
+> Researched: 2026-08-26 · Docs: https://www.dynadot.com/domain/api-document · https://www.dynadot.com/domain/api3.html · https://www.dynadot.com/domain/api
+
+## Overview
+
+Dynadot offers two parallel APIs: a legacy request/response API3 (XML or JSON over simple query-string calls to `api.dynadot.com/api3.xml`/`.json`) and a newer RESTful API (`api.dynadot.com/restful/v1`) with resource-oriented endpoints and HMAC request signing. Both cover domain search/registration, transfer, DNS, contacts, forwarding, and aftermarket operations (120+ actions total). A full sandbox environment mirrors both APIs at `api-sandbox.dynadot.com`.
+
+## Authentication
+
+- **Legacy API3**: two required query-string parameters on every call — `key` (account API key) and `command` (operation name), e.g. `https://api.dynadot.com/api3.json?key=API_KEY&command=domain_info&domain=example.com`. No signing.
+- **RESTful API v1**: `Authorization: Bearer <API Key>` header, plus a mandatory `X-Signature` header (HMAC-SHA256 over the request, signed with a separate API Secret Key) for sensitive operations.
+- Credentials (Production Key/Secret and Sandbox Key/Secret) are generated per-account under Tools → API in the Dynadot control panel; the account must be "unlocked" first to reveal them.
+- No documented IP allowlisting requirement; rate limits instead scale with account spending tier (Regular: 1 thread/60 req-min; Bulk: 5 threads/600 req-min; Super Bulk: 35 threads/6000 req-min; Premium Bulk similar to Super Bulk).
+
+## Feature Support
+
+| Feature                                     | Support | Notes / endpoint                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Test connection / verify credentials        | ✓       | `account_info` / `get_info` (legacy `account_info`, REST `GET /accounts/info`)                                                                                                                                                                                                                                                    |
+| List domains                                | ✓       | `list_domain` (legacy) / `GET /domains/list` (REST)                                                                                                                                                                                                                                                                               |
+| Get single domain details                   | ✓       | `domain_info` (legacy) / `GET /domains/{domain}/info` (REST)                                                                                                                                                                                                                                                                      |
+| Check domain availability                   | ✓       | `search`, `bulk_search`, `power_search`, `suggestion_search`                                                                                                                                                                                                                                                                      |
+| Get domain/TLD pricing                      | ✓       | `tld_price` (legacy) / `domain_get_tld_price` (REST)                                                                                                                                                                                                                                                                              |
+| Register a new domain                       | ✓       | `register`, `bulk_register`                                                                                                                                                                                                                                                                                                       |
+| Renew a domain                              | ✓       | `renew`                                                                                                                                                                                                                                                                                                                           |
+| Auto-renew toggle                           | ✓       | `set_renew_option` — also settable as an account-level default                                                                                                                                                                                                                                                                    |
+| Transfer domain in                          | ✓       | `transfer` (legacy) / `transfer_in` + `get_transfer_status` (REST)                                                                                                                                                                                                                                                                |
+| Transfer out / get auth/EPP code            | ✓       | `get_transfer_auth_code`, `set_transfer_auth_code`, `authorize_transfer_away`, `cancel_transfer`                                                                                                                                                                                                                                  |
+| Update nameservers                          | ✓       | `set_ns` / `set_nameserver`; also `register_ns`, `add_ns` (external NS), `set_ns_ip`, `delete_ns`                                                                                                                                                                                                                                 |
+| Get nameservers                             | ✓       | `get_ns` / `get_nameserver`                                                                                                                                                                                                                                                                                                       |
+| Lock / unlock domain (transfer lock)        | ✓       | `lock_domain` (legacy) / `set_domain_lock_status` (REST)                                                                                                                                                                                                                                                                          |
+| Get/set WHOIS privacy                       | ✓       | `set_privacy`                                                                                                                                                                                                                                                                                                                     |
+| Update contact info (registrant/admin/tech) | ✓       | `create_contact`, `edit_contact`, `delete_contact`, `contact_list`, `get_contact`, `set_whois`/`set_contacts`; plus TLD-specific contact extensions (.ca, .eu, .fr, .it, .us, etc.)                                                                                                                                               |
+| DNS record management                       | ✓       | `set_dns2`/`get_dns` (legacy) / `GET`/`POST`/`DELETE /domains/{domain}/dns` (REST)                                                                                                                                                                                                                                                |
+| DNSSEC management                           | ✓       | `set_dnssec`, `get_dnssec`, `clear_dnssec`                                                                                                                                                                                                                                                                                        |
+| Glue / host records                         | ✓       | `register_ns` (create host/glue record), `set_ns_ip`, `delete_ns`                                                                                                                                                                                                                                                                 |
+| Email forwarding / mailbox provisioning     | ~       | `set_email_forward` provides mail _forwarding_ (redirect to another mailbox); no evidence of full hosted-mailbox provisioning                                                                                                                                                                                                     |
+| Domain forwarding / URL redirect            | ✓       | `set_forwarding` (standard redirect), `set_stealth`/`set_stealth_forwarding` (frame/cloaked redirect)                                                                                                                                                                                                                             |
+| Webhooks / event notifications              | ✓       | Configurable webhook endpoints for `order_completed`, `domain_transfer_away`, `domain_expiring`, `account_balance_reminder`, `whois_verification_required/notification`, `order_payment_required`, `domain_status_changed`, `domain_suspension_status_changed`, `maintenance_notice`; authenticated via webhook key + X-Signature |
+
+## Notable / Unique Features
+
+- **Aftermarket integration** — backorders, auctions, expired-domain closeouts, buy-it-now, and cross-listing to Afternic/Sedo, all via API. Suggested generic method: `listOnMarketplace(domain, targets[])` / `placeBackorder(domain)`.
+- **Domain push** — instant intra-registrar ownership transfer between two Dynadot accounts without a full transfer-out (`push` / `accept_push`). Suggested generic method: `pushToAccount(domain, targetAccountId)`.
+- **Smart Folders** — group domains and bulk-apply DNS, nameserver, contact, forwarding, or renewal settings to an entire folder in one call. Suggested generic method: `applyBulkSettings(folderId, settings)`.
+- **Account-level defaults** — set default nameservers, DNS, contacts, forwarding, parking, hosting, and renewal option that apply automatically to newly registered/transferred domains. Suggested generic method: `setAccountDefaults(category, config)`.
+- **Stealth (cloaked) forwarding** distinct from standard redirect forwarding — frames the destination so the domain stays in the address bar. Suggested generic method: `setCloakedForwarding(domain, targetUrl)`.
+- **Domain appraisal** — API-based estimated valuation lookup for a domain (rate-limited separately: 50–300/day by tier). Suggested generic method: `appraiseDomain(domain)`.
+- **Reseller program endpoints** — additional management actions available to reseller-tier accounts.
+
+## Auth / Access Notes for Implementors
+
+- Credentials are self-service: Dynadot control panel → Tools → API → unlock account to reveal Production/Sandbox API Key and Secret Key.
+- Legacy API3 needs only the API key (query string); the RESTful API additionally requires the Secret Key to compute the `X-Signature` HMAC-SHA256 header on sensitive calls.
+- Full sandbox environments exist for both APIs at `api-sandbox.dynadot.com` (mirrors `api3.xml`/`.json` and `restful/v1` paths) using separate sandbox key/secret pairs.
+- Rate limits are tiered by account spending level (thread count and requests/minute); bulk/super-bulk tiers require higher account spend to unlock. Domain appraisal has its own separate daily quota.
+- Some higher-risk write operations (e.g., transfer authorization, lock status) may require the signed RESTful flow rather than the legacy key-only flow — verify per-command before implementing against production.
+
+## Sources
+
+- https://www.dynadot.com/domain/api-document
+- https://www.dynadot.com/domain/api3.html
+- https://www.dynadot.com/domain/api
+- https://www.dynadot.com/domain/api-commands
+- https://www.dynadot.com/help/question/find-API-settings
+- https://www.dynadot.com/help/question/api-key
+- https://www.dynadot.com/help/question/api-sandbox

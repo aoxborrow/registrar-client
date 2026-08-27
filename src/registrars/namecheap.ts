@@ -9,8 +9,9 @@ import type {
 import { createDomain } from '../utils.js';
 import { toRegistrarError } from '../errors.js';
 import { ensureArray, parseXml } from '../xml.js';
-import { BaseRegistrar, selectBaseUrl } from './base.js';
-import type { RegistrarCredentials } from './types.js';
+import { BaseRegistrar, selectBaseUrl } from '../registrar.js';
+import { Feature, type RegistrarFeature } from '../features.js';
+import type { RegistrarCredentials } from '../types.js';
 
 // shape of a Namecheap XML response (attributes prefixed with `@_`)
 interface NcError {
@@ -65,6 +66,14 @@ export class NamecheapRegistrar extends BaseRegistrar {
   // Namecheap runs a sandbox at api.sandbox.namecheap.com (separate account at
   // sandbox.namecheap.com with its own API key)
   static readonly supportsSandbox = true;
+  // XML API. Beyond core, email forwarding (alias-only) and domain forwarding
+  // (URL/FRAME pseudo-records). No DNSSEC or webhooks; auth-code retrieval and
+  // glue records are dashboard-gated / unconfirmed, so they're left undeclared
+  // until verified against a live account.
+  static readonly extendedFeatures: readonly RegistrarFeature[] = [
+    Feature.SetEmailForwarding,
+    Feature.SetDomainForwarding,
+  ];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
     super(

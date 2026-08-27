@@ -1,11 +1,15 @@
-import type { RegistrarOptions } from '../types.js';
+import type {
+  Registrar,
+  RegistrarConstructor,
+  RegistrarCredentials,
+  RegistrarOptions,
+} from '../types.js';
 import { CloudflareRegistrar } from './cloudflare.js';
 import { DynadotRegistrar } from './dynadot.js';
 import { GandiRegistrar } from './gandi.js';
 import { GoDaddyRegistrar } from './godaddy.js';
 import { NamecheapRegistrar } from './namecheap.js';
 import { SpaceshipRegistrar } from './spaceship.js';
-import type { RegistrarConstructor, RegistrarCredentials, RegistrarProvider } from './types.js';
 
 // the built-in registrar providers, keyed by id
 export const registrars = {
@@ -25,7 +29,7 @@ export function createRegistrar(
   name: RegistrarName,
   credentials: RegistrarCredentials,
   options?: RegistrarOptions
-): RegistrarProvider {
-  const Registrar = registrars[name];
-  return new Registrar(credentials, options);
+): Registrar {
+  const RegistrarClass = registrars[name];
+  return new RegistrarClass(credentials, options);
 }

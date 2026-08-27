@@ -1,14 +1,19 @@
 import { normalizeDomain } from './utils.js';
-import type { ConnectionResult, Domain, OperationResult, RequestOptions } from './types.js';
-import type { RegistrarProvider } from './registrars/types.js';
+import type {
+  ConnectionResult,
+  Domain,
+  OperationResult,
+  Registrar,
+  RequestOptions,
+} from './types.js';
 
-// A thin, provider-agnostic facade over a single `RegistrarProvider`. Normalizes
+// A thin, provider-agnostic facade over a single `Registrar`. Normalizes
 // domain names and delegates to the underlying provider.
 //
 //   const client = new RegistrarClient(createRegistrar('cloudflare', creds));
 //   await client.listDomains();
 export class RegistrarClient {
-  constructor(public readonly provider: RegistrarProvider) {}
+  constructor(public readonly provider: Registrar) {}
 
   testConnection(opts?: RequestOptions): Promise<ConnectionResult> {
     return this.provider.testConnection(opts);

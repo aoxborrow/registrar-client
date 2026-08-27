@@ -1,16 +1,18 @@
-import { DEFAULT_OPTIONS } from '../constants.js';
-import { ConfigurationError, NotImplementedError } from '../errors.js';
-import { HttpClient, type HttpClientConfig } from '../http.js';
+import { DEFAULT_OPTIONS } from './constants.js';
+import { ConfigurationError, NotImplementedError } from './errors.js';
+import { HttpClient, type HttpClientConfig } from './http.js';
+import { CORE_FEATURES, type RegistrarFeature } from './features.js';
 import type {
   ConnectionResult,
   Domain,
   OperationResult,
+  Registrar,
   RegistrarClientOptions,
+  RegistrarCredentials,
   RegistrarEnvironment,
   RegistrarOptions,
   RequestOptions,
-} from '../types.js';
-import type { RegistrarCredentials, RegistrarProvider } from './types.js';
+} from './types.js';
 
 // pick the base URL for the requested environment. Throws if `sandbox` is
 // requested but the provider defines no sandbox URL — so integration tests
@@ -34,13 +36,34 @@ export function selectBaseUrl(
 // defaults for every operation. Concrete providers extend this, build their
 // base URL + auth from the credentials passed to `super()`, and override the
 // operations their API supports.
-export abstract class BaseRegistrar implements RegistrarProvider {
+export abstract class BaseRegistrar implements Registrar {
   abstract readonly name: string;
 
   protected http: HttpClient;
   protected credentials: RegistrarCredentials;
   protected options: RegistrarClientOptions;
   readonly environment: RegistrarEnvironment;
+
+  // Extended capabilities this provider opts into, beyond the core contract.
+  // Subclasses override this; core features are inherited and not re-declared.
+  static readonly extendedFeatures: readonly RegistrarFeature[] = [];
+
+  // The provider's full capability set: the core contract plus its extended
+  // features. Available statically (no instance/credentials needed) for catalog
+  // UIs and MCP tooling.
+  static get features(): readonly RegistrarFeature[] {
+    return [...CORE_FEATURES, ...this.extendedFeatures];
+  }
+
+  // instance mirror of the static `features`
+  get features(): readonly RegistrarFeature[] {
+    return (this.constructor as typeof BaseRegistrar).features;
+  }
+
+  // whether this provider supports a given capability
+  supports(feature: RegistrarFeature): boolean {
+    return this.features.includes(feature);
+  }
 
   constructor(
     credentials: RegistrarCredentials,

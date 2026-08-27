@@ -8,8 +8,9 @@ import type {
 } from '../types.js';
 import { createDomain } from '../utils.js';
 import { toRegistrarError } from '../errors.js';
-import { BaseRegistrar, selectBaseUrl } from './base.js';
-import type { RegistrarCredentials } from './types.js';
+import { BaseRegistrar, selectBaseUrl } from '../registrar.js';
+import { Feature, type RegistrarFeature } from '../features.js';
+import type { RegistrarCredentials } from '../types.js';
 
 interface GandiDomain {
   fqdn: string;
@@ -40,6 +41,18 @@ export class GandiRegistrar extends BaseRegistrar {
   ];
   // Gandi's v5 API offers a sandbox at api.sandbox.gandi.net (separate account)
   static readonly supportsSandbox = true;
+  // Rich API on top of core: DNSSEC and glue records (LiveDNS), real hosted
+  // mailboxes plus forwarding. Note core `setPrivacy` is automatic/GDPR-driven
+  // on Gandi rather than a clean toggle — the method treats an already-correct
+  // state as idempotent success.
+  static readonly extendedFeatures: readonly RegistrarFeature[] = [
+    Feature.GetAuthCode,
+    Feature.ConfigureDnssec,
+    Feature.GetGlueRecords,
+    Feature.SetGlueRecords,
+    Feature.ProvisionMailbox,
+    Feature.SetEmailForwarding,
+  ];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
     super(
