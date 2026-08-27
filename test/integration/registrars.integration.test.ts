@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { createRegistrar, type Registrar } from '../../src/index.js';
-import { loadSandboxCredentials, SANDBOX_TARGETS } from './helpers.js';
+import { createRegistrar, type Registrar } from '../../src/index';
+import { loadSandboxCredentials, SANDBOX_TARGETS } from './helpers';
 
 // One suite per sandbox-capable registrar. Each suite is skipped unless its
 // credentials are present in the environment (see test/integration/helpers.ts

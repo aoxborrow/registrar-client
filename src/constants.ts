@@ -1,4 +1,4 @@
-import type { RegistrarClientOptions } from './types.js';
+import type { RegistrarClientOptions } from './types';
 
 // default client-level options
 export const DEFAULT_OPTIONS: RegistrarClientOptions = {

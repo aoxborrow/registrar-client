@@ -1,4 +1,4 @@
-import { USER_AGENT } from './constants.js';
+import { USER_AGENT } from './constants';
 import {
   AbortError,
   AuthenticationError,
@@ -11,9 +11,9 @@ import {
   RegistrarError,
   TimeoutError,
   toRegistrarError,
-} from './errors.js';
-import type { RegistrarClientOptions } from './types.js';
-import { backoffDelay, sleep } from './utils.js';
+} from './errors';
+import type { RegistrarClientOptions } from './types';
+import { backoffDelay, sleep } from './utils';
 
 // configuration for an HttpClient instance
 export interface HttpClientConfig {

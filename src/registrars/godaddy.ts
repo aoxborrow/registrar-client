@@ -5,12 +5,12 @@ import type {
   OperationResult,
   RegistrarOptions,
   RequestOptions,
-} from '../types.js';
-import { createDomain } from '../utils.js';
-import { toRegistrarError } from '../errors.js';
-import { BaseRegistrar, selectBaseUrl } from '../registrar.js';
-import { Feature, type RegistrarFeature } from '../features.js';
-import type { RegistrarCredentials } from '../types.js';
+} from '../types';
+import { createDomain } from '../utils';
+import { toRegistrarError } from '../errors';
+import { BaseRegistrar, selectBaseUrl } from '../registrar';
+import { Feature, type RegistrarFeature } from '../features';
+import type { RegistrarCredentials } from '../types';
 
 interface GoDaddyDomain {
   domain: string;

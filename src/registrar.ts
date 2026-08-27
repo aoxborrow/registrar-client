@@ -1,7 +1,7 @@
-import { DEFAULT_OPTIONS } from './constants.js';
-import { ConfigurationError, NotImplementedError } from './errors.js';
-import { HttpClient, type HttpClientConfig } from './http.js';
-import { CORE_FEATURES, type RegistrarFeature } from './features.js';
+import { DEFAULT_OPTIONS } from './constants';
+import { ConfigurationError, NotImplementedError } from './errors';
+import { HttpClient, type HttpClientConfig } from './http';
+import { CORE_FEATURES, type RegistrarFeature } from './features';
 import type {
   ConnectionResult,
   Domain,
@@ -12,7 +12,7 @@ import type {
   RegistrarEnvironment,
   RegistrarOptions,
   RequestOptions,
-} from './types.js';
+} from './types';
 
 // pick the base URL for the requested environment. Throws if `sandbox` is
 // requested but the provider defines no sandbox URL — so integration tests

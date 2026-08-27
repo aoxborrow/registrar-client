@@ -1,5 +1,5 @@
 import { XMLParser, type X2jOptions } from 'fast-xml-parser';
-import { ParsingError } from './errors.js';
+import { ParsingError } from './errors';
 
 // Shared XML parsing for registrar APIs that speak XML (e.g. Namecheap, Enom).
 // fast-xml-parser is pure JS with no Node built-ins, so this stays safe in

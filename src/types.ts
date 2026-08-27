@@ -1,6 +1,6 @@
 // Shared, provider-agnostic types for the registrar client.
 
-import type { RegistrarFeature } from './features.js';
+import type { RegistrarFeature } from './features';
 
 // client-level request options
 export interface RegistrarClientOptions {

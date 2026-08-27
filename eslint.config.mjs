@@ -62,12 +62,13 @@ export default tseslint.config(
           caughtErrorsIgnorePattern: '^_',
         },
       ],
-      // enforce .js extension for ESM imports
+      // no file extension on relative imports; tsup/esbuild bundles the output,
+      // and TS uses "bundler" module resolution, so extensions aren't needed
       'import/extensions': [
         'error',
         'ignorePackages',
         {
-          js: 'always',
+          js: 'never',
           ts: 'never',
         },
       ],
