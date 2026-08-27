@@ -51,13 +51,13 @@ describe('parseDate', () => {
   });
 });
 
-describe('registry', () => {
+describe('registrars catalog', () => {
   it('exposes all built-in registrars with metadata', () => {
     for (const [id, Registrar] of Object.entries(registrars)) {
       expect(typeof Registrar.displayName).toBe('string');
       expect(Array.isArray(Registrar.configFields)).toBe(true);
       expect(typeof Registrar.helpText).toBe('string');
-      // the instance's name matches its registry id
+      // the instance's name matches its catalog id
       const instance = createRegistrar(id as keyof typeof registrars, {});
       expect(instance.name).toBe(id);
     }

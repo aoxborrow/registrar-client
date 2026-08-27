@@ -7,7 +7,7 @@ import { NamecheapRegistrar } from './namecheap.js';
 import { SpaceshipRegistrar } from './spaceship.js';
 import type { RegistrarConstructor, RegistrarCredentials, RegistrarProvider } from './types.js';
 
-// registry of built-in registrar providers, keyed by id
+// the built-in registrar providers, keyed by id
 export const registrars = {
   cloudflare: CloudflareRegistrar,
   dynadot: DynadotRegistrar,
