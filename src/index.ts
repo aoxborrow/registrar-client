@@ -24,6 +24,9 @@ export { GoDaddyRegistrar } from './registrars/godaddy.js';
 export { NamecheapRegistrar } from './registrars/namecheap.js';
 export { SpaceshipRegistrar } from './registrars/spaceship.js';
 
+// XML parsing helpers for XML-based registrar APIs
+export { parseXml, ensureArray } from './xml.js';
+
 // shared types, constants, utils, and errors
 export * from './types.js';
 export * from './constants.js';

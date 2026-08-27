@@ -1,10 +1,13 @@
 # @aoxborrow/registrar-client
 
 A fully-typed, **browser- and edge-safe** client for domain registrar APIs, with a
-pluggable multi-provider interface. Zero runtime dependencies — just `fetch`.
+pluggable multi-provider interface. Speaks both JSON and XML registrar APIs.
 
 Runs anywhere `fetch` is available: modern Node.js (18+), browsers, Cloudflare
-Workers, Deno, Bun, and other edge runtimes.
+Workers, Deno, Bun, and other edge runtimes. Its one runtime dependency —
+[`fast-xml-parser`](https://github.com/NaturalIntelligence/fast-xml-parser)
+(pure JS, no Node built-ins) — is used to parse XML registrar responses and is
+itself edge-safe.
 
 > **Status:** early. Six registrar providers are implemented (ported from a
 > prior internal project); they have not yet been
@@ -71,6 +74,9 @@ implementations**:
 - **`HttpClient`** — a small `fetch` wrapper with timeout, `AbortSignal`
   linking, retry-with-backoff, `request`/`requestText` (JSON and raw/XML), and
   typed error mapping. No Node built-ins.
+- **`parseXml` / `ensureArray`** — shared XML helpers (backed by
+  `fast-xml-parser`) with one consistent config across XML providers: attributes
+  kept, values left as raw strings so providers coerce them explicitly.
 - **`registrars` / `createRegistrar`** — a registry of the built-in providers by
   id, and a factory to construct one.
 
