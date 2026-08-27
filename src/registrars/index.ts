@@ -9,6 +9,7 @@ import { DynadotRegistrar } from './dynadot';
 import { GandiRegistrar } from './gandi';
 import { GoDaddyRegistrar } from './godaddy';
 import { NamecheapRegistrar } from './namecheap';
+import { NameSiloRegistrar } from './namesilo';
 import { SpaceshipRegistrar } from './spaceship';
 
 // the built-in registrar providers, keyed by id
@@ -18,6 +19,7 @@ export const registrars = {
   gandi: GandiRegistrar,
   godaddy: GoDaddyRegistrar,
   namecheap: NamecheapRegistrar,
+  namesilo: NameSiloRegistrar,
   spaceship: SpaceshipRegistrar,
 } satisfies Record<string, RegistrarConstructor>;
 

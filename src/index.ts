@@ -22,6 +22,7 @@ export { DynadotRegistrar } from './registrars/dynadot';
 export { GandiRegistrar } from './registrars/gandi';
 export { GoDaddyRegistrar } from './registrars/godaddy';
 export { NamecheapRegistrar } from './registrars/namecheap';
+export { NameSiloRegistrar } from './registrars/namesilo';
 export { SpaceshipRegistrar } from './registrars/spaceship';
 
 // XML parsing helpers for XML-based registrar APIs
