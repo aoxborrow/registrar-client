@@ -186,10 +186,23 @@ time. **GoDaddy** is done first: every core method except `registerDomain` and
 spend real money) plus enabling `setPrivacy` (a paid add-on). Its `getPricing`
 works per-domain via the availability endpoint; GoDaddy has no per-TLD price API.
 
+**Dynadot** is done next, against its legacy **API3 JSON** endpoint. Every core
+method is implemented except `registerDomain`/`transferIn` (paid + consent, same
+as GoDaddy) and `getContacts`/`updateContacts` (api3 references a domain's
+contacts only by numeric `ContactId`, needing a second `get_contact` per role and
+a lossy single-`Name`/split-phone remap — deferred pending live verification).
+The main work was a generic envelope unwrapper: api3 wraps each payload in a
+per-command `Header`/`Content` pair whose key names and success field
+(`SuccessCode` vs `ResponseCode`) are internally inconsistent. `get_dns`/
+`set_dns2`/`set_ns` and the envelope are confirmed against real captures; `search`
+(availability/pricing), `set_renew_option`, and `set_privacy` are implemented from
+docs and flagged inline as not-yet-verified-live. `getPricing` works per-domain
+via `search` (like GoDaddy), not the bulk `tld_price` table.
+
 ### Still open (future work)
 
-- **Wire up the remaining providers' core methods** (Dynadot, Namecheap,
-  Spaceship, …), reusing the shared payload types.
+- **Wire up the remaining providers' core methods** (Namecheap, Spaceship, …),
+  reusing the shared payload types.
 - **A shared consent/agreements abstraction** for the paid register/transfer
   flows (GoDaddy needs it; others will too), so those two core methods can be
   implemented without duplicating the legal-agreement dance per provider.
