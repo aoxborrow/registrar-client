@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { createRegistrar, type Registrar } from '../../src/index';
-import { loadSandboxCredentials, SANDBOX_TARGETS } from './helpers';
+import { loadEnvironment, loadSandboxCredentials, SANDBOX_TARGETS } from './helpers';
 
 // One suite per sandbox-capable registrar. Each suite is skipped unless its
 // credentials are present in the environment (see test/integration/helpers.ts
@@ -17,7 +17,9 @@ for (const target of SANDBOX_TARGETS) {
     let provider: Registrar;
 
     beforeAll(() => {
-      provider = createRegistrar(target.name, credentials!, { environment: 'sandbox' });
+      provider = createRegistrar(target.name, credentials!, {
+        environment: loadEnvironment(target),
+      });
     });
 
     it('connects with sandbox credentials', async () => {
