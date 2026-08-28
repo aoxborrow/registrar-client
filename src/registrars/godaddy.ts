@@ -7,12 +7,13 @@ import type {
   Domain,
   DomainAvailability,
   OperationResult,
+  RegisterDomainInput,
   RegistrarOptions,
   RequestOptions,
   TldPricing,
 } from '../types';
 import { createDomain } from '../utils';
-import { NotImplementedError, toRegistrarError } from '../errors';
+import { ConsentRequiredError, NotImplementedError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
@@ -78,6 +79,13 @@ interface GoDaddyRecord {
   port?: number;
 }
 
+// a legal agreement GoDaddy requires consent to before registering a TLD
+interface GoDaddyAgreement {
+  agreementKey: string;
+  title?: string;
+  url?: string;
+}
+
 // GoDaddy reports availability prices in micro-units (1,000,000 = 1 unit of currency)
 const PRICE_MICRO_UNITS = 1_000_000;
 
@@ -89,13 +97,18 @@ const PRICE_MICRO_UNITS = 1_000_000;
  * `production` or `ote` (test) environment to match the key you generated;
  * both the key and secret are required and sent as an `sso-key` header.
  *
- * This provider targets GoDaddy's stable v1 Domains API. Two core methods are
- * intentionally left unimplemented for now: `registerDomain` and `transferIn`
- * both require GoDaddy's legal-agreements + consent flow (fetching agreement
- * keys per TLD and submitting a `consent` block with the consenting party's IP
- * as `agreedBy`), spend real money, and can't be verified without a funded
- * account. They warrant a shared consent abstraction rather than a rushed,
- * unverifiable body, so they still throw `NotImplementedError` for now.
+ * This provider targets GoDaddy's stable v1 Domains API.
+ *
+ * `registerDomain` implements GoDaddy's legal-agreements + consent flow: it
+ * fetches the agreement keys for the TLD, then POSTs a purchase with a `consent`
+ * block whose `agreedBy` is the consenting party's IP (supplied per call via
+ * `RegisterDomainInput.consent`). Callers omitting consent get a
+ * `ConsentRequiredError`. It spends real money and has not been exercised
+ * against a funded account, so treat it as documented-but-unverified.
+ *
+ * `transferIn` is still unimplemented: it needs the same consent flow plus
+ * transfer-specific handling (auth code, per-TLD transfer eligibility), so it
+ * throws `NotImplementedError` until wired up.
  */
 export class GoDaddyRegistrar extends BaseRegistrar {
   readonly name = 'godaddy';
@@ -211,6 +224,73 @@ export class GoDaddyRegistrar extends BaseRegistrar {
       currency: result?.currency ?? 'USD',
       registration: result?.price,
     };
+  }
+
+  /**
+   * Registers a domain via GoDaddy's purchase flow. Requires per-call `consent`
+   * (with `agreedBy` = the consenting party's IP): this fetches the TLD's
+   * agreement keys, then POSTs the purchase with a `consent` block referencing
+   * them. GoDaddy requires all four contact roles, so any role the caller omits
+   * falls back to the registrant.
+   */
+  override async registerDomain(
+    domainName: string,
+    input: RegisterDomainInput,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    if (!input.consent) {
+      throw new ConsentRequiredError(
+        `${this.name}: registration requires consent — supply RegisterDomainInput.consent ` +
+          '(accepting the registration agreements)'
+      );
+    }
+    if (!input.consent.agreedBy) {
+      throw new ConsentRequiredError(
+        `${this.name}: consent.agreedBy is required and must be the consenting party's IP address`
+      );
+    }
+    const registrant = input.contacts.registrant;
+    if (!registrant) {
+      throw new Error(`${this.name}: registration requires at least a registrant contact`);
+    }
+
+    const tld = domainName.slice(domainName.indexOf('.') + 1);
+    const privacy = input.privacy ?? false;
+
+    // fetch the agreement keys GoDaddy requires consent to for this TLD
+    const agreements = await this.http.request<GoDaddyAgreement[]>({
+      path: '/domains/agreements',
+      query: { tlds: tld, privacy },
+      ...opts,
+    });
+    const agreementKeys = (agreements ?? []).map(a => a.agreementKey);
+    if (agreementKeys.length === 0) {
+      throw new ConsentRequiredError(
+        `${this.name}: no registration agreements were returned for .${tld}`
+      );
+    }
+
+    const body = {
+      domain: domainName,
+      consent: {
+        agreementKeys,
+        agreedAt: input.consent.agreedAt ?? new Date().toISOString(),
+        agreedBy: input.consent.agreedBy,
+      },
+      contactRegistrant: toGoDaddyContact(registrant),
+      contactAdmin: toGoDaddyContact(input.contacts.admin ?? registrant),
+      contactTech: toGoDaddyContact(input.contacts.tech ?? registrant),
+      contactBilling: toGoDaddyContact(input.contacts.billing ?? registrant),
+      period: input.years ?? 1,
+      privacy,
+      renewAuto: input.autoRenew ?? false,
+      ...(input.nameservers ? { nameServers: input.nameservers } : {}),
+    };
+    return this.mutate(
+      { method: 'POST', path: '/domains/purchase', body },
+      `Domain ${domainName} registered successfully`,
+      opts
+    );
   }
 
   override async renewDomain(
