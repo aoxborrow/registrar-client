@@ -35,13 +35,20 @@ export const SANDBOX_TARGETS: SandboxTarget[] = [
     required: { apiKey: 'GANDI_API_KEY' },
     environmentVar: 'GANDI_ENVIRONMENT',
   },
+  {
+    name: 'namesilo',
+    // OTE (sandbox) key; sandbox host is ote.namesilo.com
+    required: { apiKey: 'NAMESILO_API_KEY' },
+    environmentVar: 'NAMESILO_ENVIRONMENT',
+  },
 ];
 
-// Resolve the environment for a target from its env var, defaulting to sandbox
-// (the integration suite targets sandbox; set the var to "production" to override).
+// Resolve the environment for a target from its env var. Defaults to production
+// (matching the library default) when unset — .env.testing sets "sandbox"
+// explicitly. Only "sandbox" selects the sandbox; anything else is production.
 export function loadEnvironment(target: SandboxTarget): RegistrarEnvironment {
   const value = target.environmentVar ? process.env[target.environmentVar] : undefined;
-  return value === 'production' ? 'production' : 'sandbox';
+  return value === 'sandbox' ? 'sandbox' : 'production';
 }
 
 // Build credentials for a target from the environment, or return null if any
