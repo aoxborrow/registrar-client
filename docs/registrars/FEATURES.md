@@ -199,10 +199,21 @@ per-command `Header`/`Content` pair whose key names and success field
 docs and flagged inline as not-yet-verified-live. `getPricing` works per-domain
 via `search` (like GoDaddy), not the bulk `tld_price` table.
 
+**Namecheap** is done against its XML API (the first XML provider filled in, so
+it exercises the `requestText` + `parseXml` path). Implemented: `getDomain`
+(getInfo), `checkAvailability` (check, batched at 50/call), `getPricing`
+(users.getPricing — the **first real per-TLD price table**, so a bare TLD works),
+`getNameservers` (dns.getList), `getContacts`/`updateContacts` (setContacts
+requires all four roles, so omitted roles fall back to the registrant), and
+`getDnsRecords`/`setDnsRecords` (dns.getHosts/setHosts, full-replace, 1-indexed;
+the reader tolerates both `<Host>` per the docs and the live `<host>`). Deferred:
+`setAutoRenew` (no public API command — it's a dashboard setting), `setPrivacy`
+(WhoisGuard is a separate entity needing its numeric id + a forwarding email the
+signature doesn't carry), and `registerDomain`/`transferIn` (paid + consent).
+
 ### Still open (future work)
 
-- **Wire up the remaining providers' core methods** (Namecheap, Spaceship, …),
-  reusing the shared payload types.
+- **Wire up the remaining providers' core methods** (Spaceship, …),
 - **A shared consent/agreements abstraction** for the paid register/transfer
   flows (GoDaddy needs it; others will too), so those two core methods can be
   implemented without duplicating the legal-agreement dance per provider.

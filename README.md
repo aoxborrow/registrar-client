@@ -10,9 +10,10 @@ Workers, Deno, Bun, and other edge runtimes. Its one runtime dependency —
 itself edge-safe.
 
 > **Status:** early. Nine registrar providers are implemented, and the full
-> 18-method core contract is being filled in one provider at a time (GoDaddy and
-> Dynadot so far). Methods not yet wired up throw `NotImplementedError`. Nothing
-> here has been exercised against live APIs with real credentials yet.
+> 18-method core contract is being filled in one provider at a time (GoDaddy,
+> Dynadot, and Namecheap so far). Methods not yet wired up throw
+> `NotImplementedError`. Nothing here has been exercised against live APIs with
+> real credentials yet.
 
 ## Install
 
@@ -74,11 +75,14 @@ contract is `testConnection`, `listDomains`, `getDomain`, `checkAvailability`,
 `setPrivacy`, `getContacts`, `updateContacts`, `getDnsRecords`, and
 `setDnsRecords`. Coverage is filled in per provider; where a provider hasn't
 wired up a core method yet it throws `NotImplementedError` (see
-[Capabilities](#capabilities)). **GoDaddy** and **Dynadot** are the most complete
-today — everything above except `registerDomain`/`transferIn` (which spend money
-and need a consent/agreements flow). GoDaddy additionally defers enabling
-`setPrivacy` (a paid add-on); Dynadot additionally defers `getContacts`/
-`updateContacts` (its API references contacts only by numeric id).
+[Capabilities](#capabilities)). **GoDaddy**, **Dynadot**, and **Namecheap** are
+the most complete today. All three defer `registerDomain`/`transferIn` (which
+spend money and need a consent/agreements flow). Beyond that: GoDaddy defers
+enabling `setPrivacy` (a paid add-on); Dynadot defers `getContacts`/
+`updateContacts` (its API references contacts only by numeric id); Namecheap
+defers `setAutoRenew` (no public API command) and `setPrivacy` (its WhoisGuard
+flow needs a separate id + forwarding email). Namecheap is the first with real
+per-TLD `getPricing`.
 
 ## Capabilities
 
