@@ -76,9 +76,10 @@ contract is `testConnection`, `listDomains`, `getDomain`, `checkAvailability`,
 `setDnsRecords`. Coverage is filled in per provider; where a provider hasn't
 wired up a core method yet it throws `NotImplementedError` (see
 [Capabilities](#capabilities)). **GoDaddy**, **Dynadot**, **Namecheap**, and
-**Spaceship** are the most complete today. All defer `registerDomain`/
-`transferIn` (which spend money and need a consent/agreements flow). Beyond that:
-GoDaddy defers enabling `setPrivacy` (a paid add-on); Dynadot defers
+**Spaceship** are the most complete today. **GoDaddy** additionally implements
+`registerDomain` (see [Registering domains](#registering-domains) — the others
+still defer it, along with `transferIn`, pending the same consent flow). Beyond
+that: GoDaddy defers enabling `setPrivacy` (a paid add-on); Dynadot defers
 `getContacts`/`updateContacts` (its API references contacts only by numeric id);
 Namecheap defers `setAutoRenew` (no public API command) and `setPrivacy` (its
 WhoisGuard flow needs a separate id + forwarding email); Spaceship defers
@@ -112,6 +113,36 @@ gd.supports(Feature.SubscribeWebhooks); // false
 
 See [docs/registrars/FEATURES.md](docs/registrars/FEATURES.md) for the full
 feature matrix and the core vs. extended breakdown.
+
+## Registering domains
+
+Registering a domain forms a legal contract with the registry, so registrars
+gate `registerDomain` behind **consent** to their registration agreements. That
+consent is supplied **per registration** (matching how the registrar APIs
+themselves model it — there is no "consent once" server state) via
+`RegisterDomainInput.consent`:
+
+```ts
+await client.registerDomain('example.com', {
+  years: 1,
+  contacts: { registrant: { firstName: 'Ada', lastName: 'Lovelace' /* … */ } },
+  consent: { agreedBy: userIpAddress }, // the consenting party's IP
+});
+```
+
+You only affirm **who** consents (`agreedBy` — the consenting user's IP address)
+and optionally **when** (`agreedAt`, defaulting to now). The provider fetches the
+specific per-TLD agreement documents itself and attaches them. Omitting `consent`
+where the registrar requires it throws `ConsentRequiredError` (distinct from
+`NotImplementedError` — the capability exists; you just have to consent).
+
+Contacts are supplied on the same call; where a registrar requires more contact
+roles than you provide, the missing roles fall back to the registrant.
+
+> Registration spends real money and has not been exercised against funded
+> accounts, so treat it as documented-but-unverified. Currently implemented for
+> **GoDaddy**; the other providers still throw `NotImplementedError` until their
+> mapping lands.
 
 ## Sandbox environments
 

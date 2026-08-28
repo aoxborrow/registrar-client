@@ -164,6 +164,19 @@ export interface TldPricing {
   transfer?: number;
 }
 
+// Consent to a registrar's registration agreements, supplied per registration.
+// Registering a domain forms a legal contract with the registry, so providers
+// that require it reject `registerDomain` without this. The provider fetches the
+// specific per-TLD agreement documents itself; the caller only affirms who is
+// consenting (and optionally when).
+export interface RegistrationConsent {
+  // identifier of the consenting party. Registrars that record an "agreed by"
+  // value expect the consenting user's IP address here (e.g. GoDaddy).
+  agreedBy: string;
+  // ISO 8601 timestamp of when consent was given; defaults to the current time.
+  agreedAt?: string;
+}
+
 // Input for registering a new domain.
 export interface RegisterDomainInput {
   // registration length in years (defaults to 1)
@@ -176,6 +189,10 @@ export interface RegisterDomainInput {
   privacy?: boolean;
   // enable auto-renew at registration
   autoRenew?: boolean;
+  // consent to the registrar's registration agreements; required by providers
+  // that gate registration behind an explicit legal agreement (e.g. GoDaddy).
+  // Omitting it where required throws `ConsentRequiredError`.
+  consent?: RegistrationConsent;
 }
 
 // credentials for a registrar, as a flat string map keyed by `ConfigField.name`

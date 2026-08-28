@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { createRegistrar, NotImplementedError } from '../src/index';
+import { createRegistrar, ConsentRequiredError, NotImplementedError } from '../src/index';
 import type { RequestConfig } from '../src/http';
+import type { Contact } from '../src/index';
 
 // Stub the provider's HttpClient so no network calls happen. `handler` receives
 // each RequestConfig and returns the canned response body.
@@ -109,6 +110,77 @@ describe('GoDaddy provider', () => {
   it('getPricing throws for a bare TLD', async () => {
     const gd = godaddy();
     await expect(gd.getPricing('com')).rejects.toBeInstanceOf(NotImplementedError);
+  });
+
+  it('registerDomain fetches agreements then purchases with a consent block', async () => {
+    const gd = godaddy();
+    const registrant: Contact = {
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      email: 'ada@example.com',
+      phone: '+1.4805551234',
+      address1: '1 Byron Way',
+      city: 'London',
+      state: 'LDN',
+      postalCode: 'EC1',
+      country: 'GB',
+    };
+    const calls = stubHttp(gd, req => {
+      if (req.path === '/domains/agreements')
+        return [{ agreementKey: 'DNRA' }, { agreementKey: 'DPA' }];
+      return { orderId: 1 };
+    });
+
+    const res = await gd.registerDomain('example.com', {
+      years: 2,
+      contacts: { registrant },
+      consent: { agreedBy: '203.0.113.7', agreedAt: '2026-01-01T00:00:00.000Z' },
+    });
+    expect(res.success).toBe(true);
+
+    // first call fetches agreements for the TLD
+    expect(calls[0]).toMatchObject({
+      path: '/domains/agreements',
+      query: { tlds: 'com', privacy: false },
+    });
+    // second call is the purchase carrying the consent block + contacts
+    const purchase = calls[1];
+    expect(purchase).toMatchObject({ method: 'POST', path: '/domains/purchase' });
+    const body = purchase.body as {
+      consent: { agreementKeys: string[]; agreedBy: string; agreedAt: string };
+      contactRegistrant: { nameFirst: string };
+      contactAdmin: { nameFirst: string };
+      period: number;
+    };
+    expect(body.consent).toEqual({
+      agreementKeys: ['DNRA', 'DPA'],
+      agreedBy: '203.0.113.7',
+      agreedAt: '2026-01-01T00:00:00.000Z',
+    });
+    // omitted roles fall back to the registrant
+    expect(body.contactAdmin.nameFirst).toBe('Ada');
+    expect(body.period).toBe(2);
+  });
+
+  it('registerDomain rejects when consent is missing', async () => {
+    const gd = godaddy();
+    stubHttp(gd, () => []);
+    await expect(
+      gd.registerDomain('example.com', {
+        contacts: {
+          registrant: {
+            firstName: 'A',
+            lastName: 'B',
+            email: 'a@b.com',
+            phone: '+1.1',
+            address1: 'x',
+            city: 'y',
+            postalCode: 'z',
+            country: 'US',
+          },
+        },
+      })
+    ).rejects.toBeInstanceOf(ConsentRequiredError);
   });
 
   it('setPrivacy disables via DELETE but refuses to enable', async () => {
