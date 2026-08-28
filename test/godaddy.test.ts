@@ -183,6 +183,47 @@ describe('GoDaddy provider', () => {
     ).rejects.toBeInstanceOf(ConsentRequiredError);
   });
 
+  it('transferIn fetches transfer agreements then POSTs authCode + consent', async () => {
+    const gd = godaddy();
+    const calls = stubHttp(gd, req => {
+      if (req.path === '/domains/agreements') return [{ agreementKey: 'DTRA' }];
+      return { orderId: 2 };
+    });
+    const res = await gd.transferIn('example.com', {
+      authCode: 'EPP123',
+      years: 1,
+      consent: { agreedBy: '203.0.113.7', agreedAt: '2026-01-01T00:00:00.000Z' },
+    });
+    expect(res.success).toBe(true);
+    // agreements are fetched with forTransfer=true
+    expect(calls[0]).toMatchObject({
+      path: '/domains/agreements',
+      query: { tlds: 'com', privacy: false, forTransfer: true },
+    });
+    const transfer = calls[1];
+    expect(transfer).toMatchObject({ method: 'POST', path: '/domains/example.com/transfer' });
+    const body = transfer.body as {
+      authCode: string;
+      consent: { agreementKeys: string[]; agreedBy: string };
+      period: number;
+    };
+    expect(body.authCode).toBe('EPP123');
+    expect(body.consent).toEqual({
+      agreementKeys: ['DTRA'],
+      agreedBy: '203.0.113.7',
+      agreedAt: '2026-01-01T00:00:00.000Z',
+    });
+    expect(body.period).toBe(1);
+  });
+
+  it('transferIn rejects when consent is missing', async () => {
+    const gd = godaddy();
+    stubHttp(gd, () => []);
+    await expect(gd.transferIn('example.com', { authCode: 'EPP123' })).rejects.toBeInstanceOf(
+      ConsentRequiredError
+    );
+  });
+
   it('setPrivacy disables via DELETE but refuses to enable', async () => {
     const gd = godaddy();
     const calls = stubHttp(gd, () => '');

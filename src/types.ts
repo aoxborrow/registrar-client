@@ -177,6 +177,25 @@ export interface RegistrationConsent {
   agreedAt?: string;
 }
 
+// Input for transferring a domain in. `authCode` (the EPP/auth code from the
+// losing registrar) is always required; the rest mirror registration and are
+// used by the registrars that need them (GoDaddy/Spaceship want contacts +
+// consent, Namecheap/Dynadot rely on account defaults and just need the code).
+export interface TransferDomainInput {
+  // the EPP / authorization code obtained from the current registrar
+  authCode: string;
+  // registration length to add as part of the transfer, in years
+  years?: number;
+  // contacts for the transferred domain, where the registrar requires them
+  contacts?: ContactSet;
+  // consent to the registrar's transfer agreements, where required (e.g. GoDaddy)
+  consent?: RegistrationConsent;
+  // enable WHOIS privacy on transfer, where supported
+  privacy?: boolean;
+  // enable auto-renew on transfer
+  autoRenew?: boolean;
+}
+
 // Input for registering a new domain.
 export interface RegisterDomainInput {
   // registration length in years (defaults to 1)
@@ -246,8 +265,13 @@ export interface Registrar {
     opts?: RequestOptions
   ): Promise<OperationResult>;
 
-  // transfer a domain into the account using its auth/EPP code
-  transferIn(domainName: string, authCode: string, opts?: RequestOptions): Promise<OperationResult>;
+  // transfer a domain into the account using its auth/EPP code (+ any contacts /
+  // consent the registrar requires, via `TransferDomainInput`)
+  transferIn(
+    domainName: string,
+    input: TransferDomainInput,
+    opts?: RequestOptions
+  ): Promise<OperationResult>;
 
   // replace the nameservers for a domain
   updateNameservers(

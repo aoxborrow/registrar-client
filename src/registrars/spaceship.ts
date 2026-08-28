@@ -7,11 +7,13 @@ import type {
   Domain,
   DomainAvailability,
   OperationResult,
+  RegisterDomainInput,
   RegistrarOptions,
   RequestOptions,
   TldPricing,
+  TransferDomainInput,
 } from '../types';
-import { createDomain, sleep } from '../utils';
+import { createDomain, requireConsent, sleep } from '../utils';
 import { NotImplementedError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
@@ -118,9 +120,9 @@ const WRITABLE_DNS_TYPES = new Set(['A', 'AAAA', 'CNAME', 'NS', 'TXT', 'MX']);
  * and complete out of band (poll `GET /async-operations/{id}`); the rest are
  * synchronous 2xx/204.
  *
- * ## Not implemented (fall through to BaseRegistrar's NotImplementedError)
- * - `registerDomain` / `transferIn` — async, spend real money, and need a full
- *   contact set; deferred to the shared consent/agreements flow.
+ * `registerDomain`/`transferIn` are implemented (async, 202) and require
+ * per-call `consent`; they spend real money and haven't been exercised against a
+ * funded account, so treat them as documented-but-unverified.
  *
  * `getPricing` is overridden to throw a specific error: Spaceship exposes no
  * pricing endpoint at all (only per-domain premium prices via an availability
@@ -243,6 +245,72 @@ export class SpaceshipRegistrar extends BaseRegistrar {
           '(only per-domain premium prices via an availability check)'
       )
     );
+  }
+
+  /**
+   * Registers a domain. Contacts are separate resources, so this saves each
+   * supplied contact (getting an id) and references the ids on the domain;
+   * omitted roles fall back to the registrant. Registration is async (202).
+   */
+  override async registerDomain(
+    domainName: string,
+    input: RegisterDomainInput,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    requireConsent(this.name, input.consent);
+    if (!input.contacts.registrant) {
+      throw new Error(`${this.name}: registration requires at least a registrant contact`);
+    }
+    try {
+      const contacts = await this.saveContactSet(input.contacts, opts);
+      const body = {
+        autoRenew: input.autoRenew ?? false,
+        years: input.years ?? 1,
+        privacyProtection: { level: input.privacy ? 'high' : 'public', userConsent: true },
+        contacts,
+      };
+      await this.http.request({
+        method: 'POST',
+        path: `/v1/domains/${encodeURIComponent(domainName)}`,
+        body,
+        ...opts,
+      });
+      return { success: true, message: `Domain ${domainName} registration requested successfully` };
+    } catch (error) {
+      return { success: false, message: toRegistrarError(error).message };
+    }
+  }
+
+  /**
+   * Transfers a domain in with its auth code. Contacts are optional (Spaceship
+   * carries over the existing registration's where not supplied); when given,
+   * they're saved and referenced by id. Async (202).
+   */
+  override async transferIn(
+    domainName: string,
+    input: TransferDomainInput,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    requireConsent(this.name, input.consent);
+    try {
+      const body: Record<string, unknown> = {
+        authCode: input.authCode,
+        autoRenew: input.autoRenew ?? false,
+      };
+      if (input.privacy != null) {
+        body.privacyProtection = { level: input.privacy ? 'high' : 'public', userConsent: true };
+      }
+      if (input.contacts) body.contacts = await this.saveContactSet(input.contacts, opts);
+      await this.http.request({
+        method: 'POST',
+        path: `/v1/domains/${encodeURIComponent(domainName)}/transfer`,
+        body,
+        ...opts,
+      });
+      return { success: true, message: `Domain ${domainName} transfer requested successfully` };
+    } catch (error) {
+      return { success: false, message: toRegistrarError(error).message };
+    }
   }
 
   /**
@@ -371,19 +439,14 @@ export class SpaceshipRegistrar extends BaseRegistrar {
     opts?: RequestOptions
   ): Promise<OperationResult> {
     if (!contacts.registrant) {
-      throw new Error('Spaceship updateContacts requires at least a registrant contact');
+      throw new Error(`${this.name}: updateContacts requires at least a registrant contact`);
     }
     try {
-      const registrant = await this.saveContact(contacts.registrant, opts);
-      const admin = contacts.admin ? await this.saveContact(contacts.admin, opts) : registrant;
-      const tech = contacts.tech ? await this.saveContact(contacts.tech, opts) : registrant;
-      const billing = contacts.billing
-        ? await this.saveContact(contacts.billing, opts)
-        : registrant;
+      const contactIds = await this.saveContactSet(contacts, opts);
       await this.http.request({
         method: 'PUT',
         path: `/v1/domains/${encodeURIComponent(domainName)}/contacts`,
-        body: { registrant, admin, tech, billing },
+        body: contactIds,
         ...opts,
       });
       return { success: true, message: 'Contacts updated successfully' };
@@ -463,6 +526,24 @@ export class SpaceshipRegistrar extends BaseRegistrar {
       ...opts,
     });
     return fromSpaceshipContact(c);
+  }
+
+  // save all four contact roles and return their ids (Spaceship requires a
+  // registrant; omitted roles fall back to it)
+  private async saveContactSet(
+    contacts: ContactSet,
+    opts?: RequestOptions
+  ): Promise<SpaceshipDomainContacts> {
+    if (!contacts.registrant) {
+      throw new Error(`${this.name}: a registrant contact is required`);
+    }
+    const registrant = await this.saveContact(contacts.registrant, opts);
+    return {
+      registrant,
+      admin: contacts.admin ? await this.saveContact(contacts.admin, opts) : registrant,
+      tech: contacts.tech ? await this.saveContact(contacts.tech, opts) : registrant,
+      billing: contacts.billing ? await this.saveContact(contacts.billing, opts) : registrant,
+    };
   }
 
   // save a contact and return its Spaceship contact id

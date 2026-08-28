@@ -17,6 +17,7 @@ import type {
   RegistrarOptions,
   RequestOptions,
   TldPricing,
+  TransferDomainInput,
 } from './types';
 
 // pick the base URL for the requested environment. Throws if `sandbox` is
@@ -148,7 +149,7 @@ export abstract class BaseRegistrar implements Registrar {
 
   transferIn(
     _domainName: string,
-    _authCode: string,
+    _input: TransferDomainInput,
     _opts?: RequestOptions
   ): Promise<OperationResult> {
     return this.notImplemented('transferIn');

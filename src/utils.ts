@@ -1,8 +1,25 @@
-import type { Domain, DomainInput } from './types';
+import type { Domain, DomainInput, RegistrationConsent } from './types';
+import { ConsentRequiredError } from './errors';
 
 // sleep helper for retry backoff
 export function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// guard for register/transfer: registration forms a legal contract with the
+// registry, so a provider must be given explicit consent. Throws
+// ConsentRequiredError (distinct from NotImplementedError) when it's absent.
+export function requireConsent(
+  provider: string,
+  consent: RegistrationConsent | undefined
+): RegistrationConsent {
+  if (!consent) {
+    throw new ConsentRequiredError(
+      `${provider}: this operation requires consent — supply \`consent\` ` +
+        '(accepting the registrar’s registration agreements)'
+    );
+  }
+  return consent;
 }
 
 // normalize a domain name: trim, lowercase, strip a single trailing dot

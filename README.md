@@ -76,15 +76,14 @@ contract is `testConnection`, `listDomains`, `getDomain`, `checkAvailability`,
 `setDnsRecords`. Coverage is filled in per provider; where a provider hasn't
 wired up a core method yet it throws `NotImplementedError` (see
 [Capabilities](#capabilities)). **GoDaddy**, **Dynadot**, **Namecheap**, and
-**Spaceship** are the most complete today. **GoDaddy** additionally implements
-`registerDomain` (see [Registering domains](#registering-domains) — the others
-still defer it, along with `transferIn`, pending the same consent flow). Beyond
-that: GoDaddy defers enabling `setPrivacy` (a paid add-on); Dynadot defers
-`getContacts`/`updateContacts` (its API references contacts only by numeric id);
-Namecheap defers `setAutoRenew` (no public API command) and `setPrivacy` (its
-WhoisGuard flow needs a separate id + forwarding email); Spaceship defers
-`getPricing` (it has no pricing endpoint at all). Namecheap is the only one with
-real per-TLD `getPricing`.
+**Spaceship** are the most complete today — including `registerDomain` and
+`transferIn` (see [Registering & transferring](#registering--transferring-domains)).
+Remaining per-provider gaps: GoDaddy defers enabling `setPrivacy` (a paid
+add-on); Dynadot defers `getContacts`/`updateContacts` (its API references
+contacts only by numeric id); Namecheap defers `setAutoRenew` (no public API
+command) and `setPrivacy` (its WhoisGuard flow needs a separate id + forwarding
+email); Spaceship defers `getPricing` (it has no pricing endpoint at all).
+Namecheap is the only one with real per-TLD `getPricing`.
 
 ## Capabilities
 
@@ -114,13 +113,12 @@ gd.supports(Feature.SubscribeWebhooks); // false
 See [docs/registrars/FEATURES.md](docs/registrars/FEATURES.md) for the full
 feature matrix and the core vs. extended breakdown.
 
-## Registering domains
+## Registering & transferring domains
 
-Registering a domain forms a legal contract with the registry, so registrars
-gate `registerDomain` behind **consent** to their registration agreements. That
-consent is supplied **per registration** (matching how the registrar APIs
-themselves model it — there is no "consent once" server state) via
-`RegisterDomainInput.consent`:
+Registering or transferring a domain forms a legal contract with the registry, so
+registrars gate `registerDomain`/`transferIn` behind **consent** to their
+agreements. Consent is supplied **per operation** (matching how the registrar
+APIs model it — there is no "consent once" server state):
 
 ```ts
 await client.registerDomain('example.com', {
@@ -128,21 +126,30 @@ await client.registerDomain('example.com', {
   contacts: { registrant: { firstName: 'Ada', lastName: 'Lovelace' /* … */ } },
   consent: { agreedBy: userIpAddress }, // the consenting party's IP
 });
+
+await client.transferIn('example.com', {
+  authCode: 'EPP-CODE-FROM-LOSING-REGISTRAR',
+  consent: { agreedBy: userIpAddress },
+});
 ```
 
 You only affirm **who** consents (`agreedBy` — the consenting user's IP address)
 and optionally **when** (`agreedAt`, defaulting to now). The provider fetches the
 specific per-TLD agreement documents itself and attaches them. Omitting `consent`
-where the registrar requires it throws `ConsentRequiredError` (distinct from
-`NotImplementedError` — the capability exists; you just have to consent).
+throws `ConsentRequiredError` (distinct from `NotImplementedError` — the
+capability exists; you just have to consent).
 
-Contacts are supplied on the same call; where a registrar requires more contact
-roles than you provide, the missing roles fall back to the registrant.
+Contacts are supplied on the same call, where the registrar needs them: GoDaddy
+and Spaceship take a full contact set on registration (omitted roles fall back to
+the registrant); Namecheap requires all four roles; Dynadot uses the account's
+default WHOIS contact and takes none. Transfers carry over the existing contacts,
+so most providers need only the auth code (`TransferDomainInput`).
 
-> Registration spends real money and has not been exercised against funded
-> accounts, so treat it as documented-but-unverified. Currently implemented for
-> **GoDaddy**; the other providers still throw `NotImplementedError` until their
-> mapping lands.
+> Registration and transfer spend real money and have **not** been exercised
+> against funded accounts, so treat them as documented-but-unverified. Both are
+> implemented for **GoDaddy, Dynadot, Namecheap, and Spaceship**. (Namecheap
+> registration doesn't yet send per-TLD extended attributes, so TLDs that require
+> them — `.us`, `.eu`, … — aren't registrable there yet.)
 
 ## Sandbox environments
 

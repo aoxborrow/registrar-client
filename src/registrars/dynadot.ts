@@ -5,11 +5,13 @@ import type {
   Domain,
   DomainAvailability,
   OperationResult,
+  RegisterDomainInput,
   RegistrarOptions,
   RequestOptions,
   TldPricing,
+  TransferDomainInput,
 } from '../types';
-import { createDomain } from '../utils';
+import { createDomain, requireConsent } from '../utils';
 import { NotFoundError, NotImplementedError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
@@ -70,10 +72,11 @@ const SUPPORTED_DNS_TYPES = new Set(['A', 'AAAA', 'CNAME', 'MX', 'TXT']);
  * discovers the header/content generically rather than hard-coding names.
  * `ResponseCode`/`SuccessCode` `0` means success.
  *
+ * `registerDomain`/`transferIn` are implemented and require per-call `consent`;
+ * they use the account's default WHOIS contact (api3 doesn't take inline contact
+ * data) and spend real money, so treat them as documented-but-unverified.
+ *
  * ## Not implemented (fall through to BaseRegistrar's NotImplementedError)
- * - `registerDomain` / `transferIn` — both spend real money and (for many TLDs)
- *   need a registrant contact + consent flow; they warrant a shared consent
- *   abstraction rather than an unverifiable body, like GoDaddy's.
  * - `getContacts` / `updateContacts` — api3 references contacts on a domain only
  *   by numeric `ContactId` (via `domain_info`'s `Whois` block), requiring a
  *   second `get_contact` call per role, and its contact shape is lossy against
@@ -239,6 +242,53 @@ export class DynadotRegistrar extends BaseRegistrar {
       currency: result?.currency ?? 'USD',
       registration: result?.price,
     };
+  }
+
+  /**
+   * Registers a domain (`duration` is years). api3 register uses the account's
+   * default WHOIS contact — it doesn't accept inline contact data (contacts are
+   * separate, id-referenced records), so `input.contacts` is not sent. Privacy
+   * has no register param, so a requested `privacy` is applied via a follow-up
+   * `set_privacy`.
+   */
+  override async registerDomain(
+    domainName: string,
+    input: RegisterDomainInput,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    requireConsent(this.name, input.consent);
+    const res = await this.mutate(
+      { command: 'register', domain: domainName, duration: input.years ?? 1 },
+      `Domain ${domainName} registered successfully`,
+      opts
+    );
+    if (res.success && input.privacy) {
+      const privacyResult = await this.setPrivacy(domainName, true, opts);
+      if (!privacyResult.success) {
+        return {
+          success: true,
+          message: `Domain registered, but enabling privacy failed: ${privacyResult.message}`,
+        };
+      }
+    }
+    return res;
+  }
+
+  /**
+   * Transfers a domain in with its auth/EPP code (the api3 param is `auth`).
+   * Contacts come from the account default, as with registration.
+   */
+  override async transferIn(
+    domainName: string,
+    input: TransferDomainInput,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    requireConsent(this.name, input.consent);
+    return this.mutate(
+      { command: 'transfer', domain: domainName, auth: input.authCode },
+      `Domain ${domainName} transfer requested successfully`,
+      opts
+    );
   }
 
   override async renewDomain(
