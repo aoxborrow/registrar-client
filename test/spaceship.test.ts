@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createRegistrar, NotImplementedError } from '../src/index';
+import { createRegistrar, ConsentRequiredError, NotImplementedError } from '../src/index';
 import type { RequestConfig } from '../src/http';
 
 // Stub the provider's HttpClient. `handler` receives each RequestConfig and
@@ -251,11 +251,56 @@ describe('Spaceship provider', () => {
     ).rejects.toThrow(/not supported/);
   });
 
-  it('leaves register/transfer throwing NotImplementedError', async () => {
+  it('registerDomain saves contacts then POSTs with ids + privacy level, requires consent', async () => {
     const sp = spaceship();
-    await expect(sp.registerDomain('example.com', { contacts: {} })).rejects.toBeInstanceOf(
-      NotImplementedError
-    );
-    await expect(sp.transferIn('example.com', 'auth')).rejects.toBeInstanceOf(NotImplementedError);
+    let n = 0;
+    const calls = stubHttp(sp, req => {
+      if (req.path === '/v1/contacts') return { contactId: `c-${++n}` };
+      return '';
+    });
+    const registrant = {
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      email: 'ada@example.com',
+      phone: '+1.5551234',
+      address1: '1 Byron Way',
+      city: 'London',
+      postalCode: 'EC1',
+      country: 'GB',
+    };
+    const res = await sp.registerDomain('example.com', {
+      years: 2,
+      contacts: { registrant },
+      privacy: true,
+      autoRenew: true,
+      consent: { agreedBy: 'user' },
+    });
+    expect(res.success).toBe(true);
+    const post = calls.find(c => c.method === 'POST' && c.path === '/v1/domains/example.com');
+    expect(post?.body).toEqual({
+      autoRenew: true,
+      years: 2,
+      privacyProtection: { level: 'high', userConsent: true },
+      contacts: { registrant: 'c-1', admin: 'c-1', tech: 'c-1', billing: 'c-1' },
+    });
+
+    await expect(
+      sp.registerDomain('example.com', { contacts: { registrant } })
+    ).rejects.toBeInstanceOf(ConsentRequiredError);
+  });
+
+  it('transferIn POSTs the auth code to /transfer', async () => {
+    const sp = spaceship();
+    const calls = stubHttp(sp, () => '');
+    const res = await sp.transferIn('example.com', {
+      authCode: 'EPP123',
+      consent: { agreedBy: 'user' },
+    });
+    expect(res.success).toBe(true);
+    expect(calls[0]).toMatchObject({
+      method: 'POST',
+      path: '/v1/domains/example.com/transfer',
+      body: { authCode: 'EPP123', autoRenew: false },
+    });
   });
 });

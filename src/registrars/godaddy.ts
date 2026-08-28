@@ -8,9 +8,11 @@ import type {
   DomainAvailability,
   OperationResult,
   RegisterDomainInput,
+  RegistrationConsent,
   RegistrarOptions,
   RequestOptions,
   TldPricing,
+  TransferDomainInput,
 } from '../types';
 import { createDomain } from '../utils';
 import { ConsentRequiredError, NotImplementedError, toRegistrarError } from '../errors';
@@ -106,9 +108,9 @@ const PRICE_MICRO_UNITS = 1_000_000;
  * `ConsentRequiredError`. It spends real money and has not been exercised
  * against a funded account, so treat it as documented-but-unverified.
  *
- * `transferIn` is still unimplemented: it needs the same consent flow plus
- * transfer-specific handling (auth code, per-TLD transfer eligibility), so it
- * throws `NotImplementedError` until wired up.
+ * `transferIn` uses the same consent flow (agreements fetched with
+ * `forTransfer=true`) plus the domain's auth code; like registration it spends
+ * real money and is documented-but-unverified.
  */
 export class GoDaddyRegistrar extends BaseRegistrar {
   readonly name = 'godaddy';
@@ -238,45 +240,17 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     input: RegisterDomainInput,
     opts?: RequestOptions
   ): Promise<OperationResult> {
-    if (!input.consent) {
-      throw new ConsentRequiredError(
-        `${this.name}: registration requires consent — supply RegisterDomainInput.consent ` +
-          '(accepting the registration agreements)'
-      );
-    }
-    if (!input.consent.agreedBy) {
-      throw new ConsentRequiredError(
-        `${this.name}: consent.agreedBy is required and must be the consenting party's IP address`
-      );
-    }
     const registrant = input.contacts.registrant;
     if (!registrant) {
       throw new Error(`${this.name}: registration requires at least a registrant contact`);
     }
-
     const tld = domainName.slice(domainName.indexOf('.') + 1);
     const privacy = input.privacy ?? false;
-
-    // fetch the agreement keys GoDaddy requires consent to for this TLD
-    const agreements = await this.http.request<GoDaddyAgreement[]>({
-      path: '/domains/agreements',
-      query: { tlds: tld, privacy },
-      ...opts,
-    });
-    const agreementKeys = (agreements ?? []).map(a => a.agreementKey);
-    if (agreementKeys.length === 0) {
-      throw new ConsentRequiredError(
-        `${this.name}: no registration agreements were returned for .${tld}`
-      );
-    }
+    const consent = await this.buildConsent(input.consent, tld, privacy, false, opts);
 
     const body = {
       domain: domainName,
-      consent: {
-        agreementKeys,
-        agreedAt: input.consent.agreedAt ?? new Date().toISOString(),
-        agreedBy: input.consent.agreedBy,
-      },
+      consent,
       contactRegistrant: toGoDaddyContact(registrant),
       contactAdmin: toGoDaddyContact(input.contacts.admin ?? registrant),
       contactTech: toGoDaddyContact(input.contacts.tech ?? registrant),
@@ -291,6 +265,78 @@ export class GoDaddyRegistrar extends BaseRegistrar {
       `Domain ${domainName} registered successfully`,
       opts
     );
+  }
+
+  /**
+   * Transfers a domain in with its auth code. GoDaddy's transfer body is much
+   * smaller than a purchase — just the auth code + a `consent` block (fetched
+   * with `forTransfer=true`, since transfer agreements can differ) + optional
+   * period/renewAuto/privacy. No contacts: the existing registration's carry
+   * over.
+   */
+  override async transferIn(
+    domainName: string,
+    input: TransferDomainInput,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const tld = domainName.slice(domainName.indexOf('.') + 1);
+    const privacy = input.privacy ?? false;
+    const consent = await this.buildConsent(input.consent, tld, privacy, true, opts);
+
+    const body: Record<string, unknown> = {
+      authCode: input.authCode,
+      consent,
+      privacy,
+      renewAuto: input.autoRenew ?? false,
+    };
+    if (input.years != null) body.period = input.years;
+    return this.mutate(
+      { method: 'POST', path: `/domains/${encodeURIComponent(domainName)}/transfer`, body },
+      `Domain ${domainName} transfer requested successfully`,
+      opts
+    );
+  }
+
+  /**
+   * Builds the GoDaddy `consent` block shared by register and transfer: validates
+   * consent is present (with `agreedBy`), fetches the agreement keys for the TLD
+   * (register vs. transfer agreements differ, hence `forTransfer`), and stamps
+   * `agreedAt`.
+   */
+  private async buildConsent(
+    consent: RegistrationConsent | undefined,
+    tld: string,
+    privacy: boolean,
+    forTransfer: boolean,
+    opts?: RequestOptions
+  ): Promise<{ agreementKeys: string[]; agreedAt: string; agreedBy: string }> {
+    if (!consent) {
+      throw new ConsentRequiredError(
+        `${this.name}: this operation requires consent — supply \`consent\` ` +
+          '(accepting the registration agreements)'
+      );
+    }
+    if (!consent.agreedBy) {
+      throw new ConsentRequiredError(
+        `${this.name}: consent.agreedBy is required and must be the consenting party's IP address`
+      );
+    }
+    const query: Record<string, string | number | boolean> = { tlds: tld, privacy };
+    if (forTransfer) query.forTransfer = true;
+    const agreements = await this.http.request<GoDaddyAgreement[]>({
+      path: '/domains/agreements',
+      query,
+      ...opts,
+    });
+    const agreementKeys = (agreements ?? []).map(a => a.agreementKey);
+    if (agreementKeys.length === 0) {
+      throw new ConsentRequiredError(`${this.name}: no agreements were returned for .${tld}`);
+    }
+    return {
+      agreementKeys,
+      agreedAt: consent.agreedAt ?? new Date().toISOString(),
+      agreedBy: consent.agreedBy,
+    };
   }
 
   override async renewDomain(

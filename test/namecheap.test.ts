@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createRegistrar, NotImplementedError } from '../src/index';
+import { createRegistrar, ConsentRequiredError, NotImplementedError } from '../src/index';
 import type { RequestConfig } from '../src/http';
 
 // Namecheap speaks XML, so its HttpClient uses requestText (not request). Stub
@@ -236,13 +236,69 @@ describe('Namecheap provider', () => {
     expect(res).toEqual({ success: false, message: 'Parameter missing' });
   });
 
-  it('leaves autoRenew/privacy/register/transfer throwing NotImplementedError', async () => {
+  it('registerDomain sends create with all four contacts + WhoisGuard, requires consent', async () => {
+    const nc = namecheap();
+    const registrant = {
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      email: 'ada@example.com',
+      phone: '+44.2071234567',
+      address1: '1 Byron Way',
+      city: 'London',
+      state: 'LDN',
+      postalCode: 'EC1',
+      country: 'GB',
+    };
+    const calls = stubXml(nc, () =>
+      ok(`<DomainCreateResult Domain="example.com" Registered="true"/>`)
+    );
+    const res = await nc.registerDomain('example.com', {
+      years: 2,
+      contacts: { registrant },
+      privacy: true,
+      consent: { agreedBy: 'user' },
+    });
+    expect(res.success).toBe(true);
+    const q = calls[0].query as Record<string, string>;
+    expect(q).toMatchObject({
+      Command: 'namecheap.domains.create',
+      DomainName: 'example.com',
+      Years: '2',
+      AddFreeWhoisguard: 'yes',
+      WGEnabled: 'yes',
+    });
+    // all four roles are sent, omitted ones falling back to the registrant
+    expect(q.RegistrantFirstName).toBe('Ada');
+    expect(q.AdminFirstName).toBe('Ada');
+    expect(q.AuxBillingEmailAddress).toBe('ada@example.com');
+
+    await expect(
+      nc.registerDomain('example.com', { contacts: { registrant } })
+    ).rejects.toBeInstanceOf(ConsentRequiredError);
+  });
+
+  it('transferIn sends transfer.create with EPPCode (WGenable lowercase)', async () => {
+    const nc = namecheap();
+    const calls = stubXml(nc, () =>
+      ok(`<DomainTransferCreateResult Domainname="example.com" Transfer="true"/>`)
+    );
+    const res = await nc.transferIn('example.com', {
+      authCode: 'EPP123',
+      privacy: true,
+      consent: { agreedBy: 'user' },
+    });
+    expect(res.success).toBe(true);
+    expect(calls[0].query).toMatchObject({
+      Command: 'namecheap.domains.transfer.create',
+      DomainName: 'example.com',
+      EPPCode: 'EPP123',
+      WGenable: 'yes',
+    });
+  });
+
+  it('leaves autoRenew/privacy throwing NotImplementedError', async () => {
     const nc = namecheap();
     await expect(nc.setAutoRenew('example.com', true)).rejects.toBeInstanceOf(NotImplementedError);
     await expect(nc.setPrivacy('example.com', true)).rejects.toBeInstanceOf(NotImplementedError);
-    await expect(nc.registerDomain('example.com', { contacts: {} })).rejects.toBeInstanceOf(
-      NotImplementedError
-    );
-    await expect(nc.transferIn('example.com', 'auth')).rejects.toBeInstanceOf(NotImplementedError);
   });
 });
