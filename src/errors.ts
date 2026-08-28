@@ -155,6 +155,18 @@ export class ConfigurationError extends RegistrarError {
   }
 }
 
+// a registration/transfer was attempted without the consent the registrar
+// requires (accepting its registration agreements). Distinct from
+// NotImplementedError: the capability exists, but the caller must supply consent.
+export class ConsentRequiredError extends RegistrarError {
+  public status = 400; // Bad Request
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'ConsentRequiredError';
+  }
+}
+
 // the requested capability is not implemented by this provider
 export class NotImplementedError extends RegistrarError {
   public status = 501; // Not Implemented

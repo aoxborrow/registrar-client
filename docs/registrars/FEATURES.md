@@ -226,15 +226,28 @@ etc. throw, since our generic record lacks their sub-fields — reads handle all
 types). Deferred: `getPricing` (**no pricing endpoint exists** — only per-domain
 premium prices via availability) and `registerDomain`/`transferIn` (async, paid).
 
+**Registration consent** (`registerDomain`) is now modeled as a shared,
+per-registration input: `RegisterDomainInput.consent` (`{ agreedBy, agreedAt? }`)
+plus a distinct `ConsentRequiredError` when it's missing. Consent is per-call, not
+stored — matching how the registrar APIs actually work (the consent block rides in
+each register call's body; there's no server-side "consented once" state). The
+caller only affirms who consents (`agreedBy`, an IP for GoDaddy) and optionally
+when; the provider fetches the specific per-TLD agreement documents itself.
+**GoDaddy** is the reference implementation (fetches agreement keys, then POSTs the
+purchase with a `consent` block); the other three still throw for `registerDomain`
+until their mappings land. `transferIn` is unimplemented everywhere — it needs the
+same consent plus transfer-specific handling (auth code, eligibility). Registration
+spends real money and is documented-but-unverified against funded accounts.
+
 ### Still open (future work)
 
 - **Wire up the remaining providers' core methods** — Gandi and the newer
   additions (namesilo, porkbun, namebright), plus Cloudflare (see its caveat
   above). Four of the original six are done (GoDaddy, Dynadot, Namecheap,
   Spaceship); reuse the shared payload types.
-- **A shared consent/agreements abstraction** for the paid register/transfer
-  flows (GoDaddy needs it; others will too), so those two core methods can be
-  implemented without duplicating the legal-agreement dance per provider.
+- **Fan out `registerDomain`** to Dynadot, Namecheap, and Spaceship using the
+  shared consent input (the abstraction and GoDaddy reference now exist), and
+  **implement `transferIn`** on top of it (adds auth code + transfer eligibility).
 - **Cloudflare DNS via the Zones API**, so its core `getDnsRecords`/
   `setDnsRecords` (and DNSSEC) stop throwing `NotImplementedError`.
 - **Async operation model**: GoDaddy v3 and Spaceship return `202 + poll`; a
