@@ -226,18 +226,23 @@ etc. throw, since our generic record lacks their sub-fields — reads handle all
 types). Deferred: `getPricing` (**no pricing endpoint exists** — only per-domain
 premium prices via availability) and `registerDomain`/`transferIn` (async, paid).
 
-**Registration consent** (`registerDomain`) is now modeled as a shared,
-per-registration input: `RegisterDomainInput.consent` (`{ agreedBy, agreedAt? }`)
-plus a distinct `ConsentRequiredError` when it's missing. Consent is per-call, not
-stored — matching how the registrar APIs actually work (the consent block rides in
-each register call's body; there's no server-side "consented once" state). The
+**Registration & transfer consent** is modeled as a shared, per-operation input:
+`RegisterDomainInput.consent` / `TransferDomainInput.consent` (`{ agreedBy,
+agreedAt? }`) plus a distinct `ConsentRequiredError` when it's missing. Consent is
+per-call, not stored — matching how the registrar APIs work (the consent block
+rides in each call's body; there's no server-side "consented once" state). The
 caller only affirms who consents (`agreedBy`, an IP for GoDaddy) and optionally
 when; the provider fetches the specific per-TLD agreement documents itself.
-**GoDaddy** is the reference implementation (fetches agreement keys, then POSTs the
-purchase with a `consent` block); the other three still throw for `registerDomain`
-until their mappings land. `transferIn` is unimplemented everywhere — it needs the
-same consent plus transfer-specific handling (auth code, eligibility). Registration
-spends real money and is documented-but-unverified against funded accounts.
+`registerDomain` **and** `transferIn` are now implemented for all four filled-in
+providers, each mapping consent to its own flow: GoDaddy fetches agreement keys
+(`forTransfer=true` for transfers) and POSTs a `consent` block; Namecheap sends
+the full four-role contact set on `domains.create` (transfer needs only `EPPCode`);
+Dynadot relies on the account's default WHOIS contact (api3 takes no inline
+contacts); Spaceship saves contacts to ids then references them. `transferIn` takes
+a `TransferDomainInput` (`authCode` + optional years/contacts/consent/privacy).
+Both spend real money and are documented-but-unverified against funded accounts.
+Known gap: Namecheap registration doesn't yet send per-TLD extended attributes
+(`.us`, `.eu`, …), so those TLDs aren't registrable there.
 
 ### Still open (future work)
 
@@ -245,9 +250,8 @@ spends real money and is documented-but-unverified against funded accounts.
   additions (namesilo, porkbun, namebright), plus Cloudflare (see its caveat
   above). Four of the original six are done (GoDaddy, Dynadot, Namecheap,
   Spaceship); reuse the shared payload types.
-- **Fan out `registerDomain`** to Dynadot, Namecheap, and Spaceship using the
-  shared consent input (the abstraction and GoDaddy reference now exist), and
-  **implement `transferIn`** on top of it (adds auth code + transfer eligibility).
+- **Namecheap per-TLD extended attributes** for registration (`.us` nexus, `.eu`,
+  `.ca`, `.uk`, `.fr`, …), so those TLDs become registrable.
 - **Cloudflare DNS via the Zones API**, so its core `getDnsRecords`/
   `setDnsRecords` (and DNSSEC) stop throwing `NotImplementedError`.
 - **Async operation model**: GoDaddy v3 and Spaceship return `202 + poll`; a

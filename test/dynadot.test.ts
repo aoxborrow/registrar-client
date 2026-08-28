@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createRegistrar, NotImplementedError } from '../src/index';
+import { createRegistrar, ConsentRequiredError, NotImplementedError } from '../src/index';
 import type { RequestConfig } from '../src/http';
 
 // Stub the provider's HttpClient so no network calls happen. `handler` receives
@@ -230,12 +230,47 @@ describe('Dynadot provider', () => {
     await expect(dy.getPricing('com')).rejects.toBeInstanceOf(NotImplementedError);
   });
 
-  it('leaves register/transfer/contacts throwing NotImplementedError', async () => {
+  it('registerDomain sends register with duration and requires consent', async () => {
     const dy = dynadot();
+    const calls = stubHttp(dy, () => ({
+      RegisterResponse: { RegisterHeader: { ResponseCode: '0' } },
+    }));
+    const res = await dy.registerDomain('example.com', {
+      years: 2,
+      contacts: {},
+      consent: { agreedBy: 'user' },
+    });
+    expect(res.success).toBe(true);
+    expect(calls[0].query).toMatchObject({
+      command: 'register',
+      domain: 'example.com',
+      duration: 2,
+    });
+
     await expect(dy.registerDomain('example.com', { contacts: {} })).rejects.toBeInstanceOf(
-      NotImplementedError
+      ConsentRequiredError
     );
-    await expect(dy.transferIn('example.com', 'auth')).rejects.toBeInstanceOf(NotImplementedError);
+  });
+
+  it('transferIn sends transfer with the auth code param', async () => {
+    const dy = dynadot();
+    const calls = stubHttp(dy, () => ({
+      TransferResponse: { TransferHeader: { ResponseCode: '0' } },
+    }));
+    const res = await dy.transferIn('example.com', {
+      authCode: 'EPP123',
+      consent: { agreedBy: 'user' },
+    });
+    expect(res.success).toBe(true);
+    expect(calls[0].query).toMatchObject({
+      command: 'transfer',
+      domain: 'example.com',
+      auth: 'EPP123',
+    });
+  });
+
+  it('leaves contacts throwing NotImplementedError', async () => {
+    const dy = dynadot();
     await expect(dy.getContacts('example.com')).rejects.toBeInstanceOf(NotImplementedError);
     await expect(dy.updateContacts('example.com', {})).rejects.toBeInstanceOf(NotImplementedError);
   });

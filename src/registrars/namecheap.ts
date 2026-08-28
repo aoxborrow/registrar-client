@@ -7,11 +7,13 @@ import type {
   Domain,
   DomainAvailability,
   OperationResult,
+  RegisterDomainInput,
   RegistrarOptions,
   RequestOptions,
   TldPricing,
+  TransferDomainInput,
 } from '../types';
-import { createDomain } from '../utils';
+import { createDomain, requireConsent } from '../utils';
 import { toRegistrarError } from '../errors';
 import { ensureArray, parseXml } from '../xml';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
@@ -153,8 +155,11 @@ const NC_CONTACT_ROLES = [
  * - `setPrivacy` — WhoisGuard is a separate entity: enabling needs its numeric
  *   `WhoisguardID` (from `whoisguard.getList`) plus a `ForwardedToEmail` this
  *   method's signature doesn't carry. Deferred pending a privacy-input redesign.
- * - `registerDomain` / `transferIn` — spend real money and need a full contact
- *   set (+ per-TLD extended attributes); deferred to the shared consent flow.
+ *
+ * `registerDomain`/`transferIn` are implemented and require per-call `consent`;
+ * they spend real money and are documented-but-unverified. Registration sends the
+ * full four-role contact set but not yet per-TLD extended attributes (.us, .eu,
+ * …), so those TLDs aren't supported for registration.
  */
 export class NamecheapRegistrar extends BaseRegistrar {
   readonly name = 'namecheap';
@@ -372,6 +377,63 @@ export class NamecheapRegistrar extends BaseRegistrar {
       renewal: toPrice(renew),
       transfer: toPrice(transfer),
     };
+  }
+
+  /**
+   * Registers a domain via domains.create, which requires all four contact roles
+   * (omitted roles fall back to the registrant) and toggles free WhoisGuard when
+   * privacy is requested. Note: TLDs that need per-TLD extended attributes (.us,
+   * .eu, .ca, …) are not yet supported — those params aren't sent.
+   */
+  override async registerDomain(
+    domainName: string,
+    input: RegisterDomainInput,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    requireConsent(this.name, input.consent);
+    const registrant = input.contacts.registrant;
+    if (!registrant) {
+      throw new Error(`${this.name}: registration requires at least a registrant contact`);
+    }
+    const params: Record<string, string> = {
+      DomainName: domainName,
+      Years: String(input.years ?? 1),
+    };
+    for (const { prefix, key } of NC_CONTACT_ROLES) {
+      Object.assign(params, toNcContactParams(prefix, input.contacts[key] ?? registrant));
+    }
+    if (input.nameservers?.length) params.Nameservers = input.nameservers.join(',');
+    if (input.privacy) {
+      params.AddFreeWhoisguard = 'yes';
+      params.WGEnabled = 'yes';
+    }
+    const res = await this.call('namecheap.domains.create', params, opts);
+    return statusResult(res);
+  }
+
+  /**
+   * Transfers a domain in via domains.transfer.create. Namecheap takes no
+   * contacts on transfer (the existing registrant's carry over); it needs the
+   * auth code as `EPPCode` and a `Years` of 1. Note: the privacy-enable param is
+   * `WGenable` here (lowercase), unlike `WGEnabled` on create.
+   */
+  override async transferIn(
+    domainName: string,
+    input: TransferDomainInput,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    requireConsent(this.name, input.consent);
+    const params: Record<string, string> = {
+      DomainName: domainName,
+      Years: String(input.years ?? 1),
+      EPPCode: input.authCode,
+    };
+    if (input.privacy != null) {
+      params.AddFreeWhoisguard = input.privacy ? 'yes' : 'no';
+      params.WGenable = input.privacy ? 'yes' : 'no';
+    }
+    const res = await this.call('namecheap.domains.transfer.create', params, opts);
+    return statusResult(res);
   }
 
   override async renewDomain(

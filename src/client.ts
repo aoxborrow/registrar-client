@@ -10,6 +10,7 @@ import type {
   RegisterDomainInput,
   RequestOptions,
   TldPricing,
+  TransferDomainInput,
 } from './types';
 
 // A thin, provider-agnostic facade over a single `Registrar`. Normalizes
@@ -62,10 +63,10 @@ export class RegistrarClient {
 
   transferIn(
     domainName: string,
-    authCode: string,
+    input: TransferDomainInput,
     opts?: RequestOptions
   ): Promise<OperationResult> {
-    return this.provider.transferIn(normalizeDomain(domainName), authCode, opts);
+    return this.provider.transferIn(normalizeDomain(domainName), input, opts);
   }
 
   updateNameservers(
