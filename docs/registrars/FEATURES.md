@@ -211,9 +211,27 @@ the reader tolerates both `<Host>` per the docs and the live `<host>`). Deferred
 (WhoisGuard is a separate entity needing its numeric id + a forwarding email the
 signature doesn't carry), and `registerDomain`/`transferIn` (paid + consent).
 
+**Spaceship** is done against its modern REST/JSON API, mapped from the official
+OpenAPI spec (which also corrected several wrong paths/fields in the pre-existing
+skeleton — `renew` not `renewal`, `transfer/lock` not `transfer-lock`, the
+`{provider, hosts}` nameserver wrapper, and `lifecycleStatus`/`eppStatuses`/
+`privacyProtection.level`/`nameservers.hosts` in the domain mapping). Implemented:
+`getDomain`, `getNameservers`, `checkAvailability` (bulk; premium price only),
+`setAutoRenew`, `renewDomain` (async; fetches the current expiry as the required
+guard), `setPrivacy` (consent-based), `getContacts`/`updateContacts` (resolve/
+save contacts by id), and `getDnsRecords`/`setDnsRecords`. DNS is the notable
+one: Spaceship's `PUT` is upsert, not atomic replace, so `setDnsRecords` upserts
+then deletes stale `(type, name)` pairs (writes cover the common types; SRV/CAA
+etc. throw, since our generic record lacks their sub-fields — reads handle all
+types). Deferred: `getPricing` (**no pricing endpoint exists** — only per-domain
+premium prices via availability) and `registerDomain`/`transferIn` (async, paid).
+
 ### Still open (future work)
 
-- **Wire up the remaining providers' core methods** (Spaceship, …),
+- **Wire up the remaining providers' core methods** — Gandi and the newer
+  additions (namesilo, porkbun, namebright), plus Cloudflare (see its caveat
+  above). Four of the original six are done (GoDaddy, Dynadot, Namecheap,
+  Spaceship); reuse the shared payload types.
 - **A shared consent/agreements abstraction** for the paid register/transfer
   flows (GoDaddy needs it; others will too), so those two core methods can be
   implemented without duplicating the legal-agreement dance per provider.
