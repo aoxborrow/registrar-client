@@ -320,4 +320,107 @@ describe('Namecheap provider', () => {
     await expect(nc.setAutoRenew('example.com', true)).rejects.toBeInstanceOf(NotImplementedError);
     await expect(nc.setPrivacy('example.com', true)).rejects.toBeInstanceOf(NotImplementedError);
   });
+
+  it('getEmailForwarding maps <Forward mailbox> elements and drops blanks', async () => {
+    const nc = namecheap();
+    const calls = stubXml(nc, () =>
+      ok(
+        `<DomainDNSGetEmailForwardingResult Domain="example.com">
+           <Forward mailbox="hello">hello@gmail.com</Forward>
+           <Forward mailbox="sales">sales@gmail.com</Forward>
+           <Forward mailbox=""></Forward>
+         </DomainDNSGetEmailForwardingResult>`
+      )
+    );
+    const forwards = await nc.getEmailForwarding('example.com');
+    expect(calls[0].query).toMatchObject({
+      Command: 'namecheap.domains.dns.getEmailForwarding',
+      DomainName: 'example.com',
+    });
+    expect(forwards).toEqual([
+      { alias: 'hello', forwardTo: 'hello@gmail.com' },
+      { alias: 'sales', forwardTo: 'sales@gmail.com' },
+    ]);
+  });
+
+  it('setEmailForwarding 1-indexes MailBox/ForwardTo params (empty clears)', async () => {
+    const nc = namecheap();
+    const calls = stubXml(nc, () =>
+      ok(`<DomainDNSSetEmailForwardingResult Domain="example.com" IsSuccess="true"/>`)
+    );
+    const res = await nc.setEmailForwarding('example.com', [
+      { alias: 'hello', forwardTo: 'a@gmail.com' },
+      { alias: 'sales', forwardTo: 'b@gmail.com' },
+    ]);
+    expect(res.success).toBe(true);
+    expect(calls[0].query).toMatchObject({
+      Command: 'namecheap.domains.dns.setEmailForwarding',
+      DomainName: 'example.com',
+      MailBox1: 'hello',
+      ForwardTo1: 'a@gmail.com',
+      MailBox2: 'sales',
+      ForwardTo2: 'b@gmail.com',
+    });
+
+    // empty array clears: only DomainName goes out, no MailBox params
+    const clearCalls = stubXml(nc, () =>
+      ok(`<DomainDNSSetEmailForwardingResult Domain="example.com" IsSuccess="true"/>`)
+    );
+    await nc.setEmailForwarding('example.com', []);
+    expect(clearCalls[0].query).not.toHaveProperty('MailBox1');
+  });
+
+  it('getDomainForwarding returns only URL-family host records, mapped by type', async () => {
+    const nc = namecheap();
+    stubXml(nc, () =>
+      ok(
+        `<DomainDNSGetHostsResult Domain="example.com" IsUsingOurDNS="true">
+           <host Name="@" Type="A" Address="1.2.3.4" TTL="1800"/>
+           <host Name="@" Type="URL301" Address="https://example.org" TTL="1800"/>
+           <host Name="shop" Type="FRAME" Address="https://store.example.org" TTL="1800"/>
+           <host Name="old" Type="URL" Address="https://new.example.org" TTL="1800"/>
+         </DomainDNSGetHostsResult>`
+      )
+    );
+    const forwards = await nc.getDomainForwarding('example.com');
+    expect(forwards).toEqual([
+      { host: '@', url: 'https://example.org', type: 'permanent' },
+      { host: 'shop', url: 'https://store.example.org', type: 'frame' },
+      { host: 'old', url: 'https://new.example.org', type: 'redirect' },
+    ]);
+  });
+
+  it('setDomainForwarding preserves non-URL records and rewrites the URL set', async () => {
+    const nc = namecheap();
+    const calls = stubXml(nc, req => {
+      if (req.query?.Command === 'namecheap.domains.dns.getHosts') {
+        return ok(
+          `<DomainDNSGetHostsResult Domain="example.com" IsUsingOurDNS="true">
+             <host Name="@" Type="A" Address="1.2.3.4" TTL="1800"/>
+             <host Name="old" Type="URL" Address="https://legacy.example.org" TTL="1800"/>
+           </DomainDNSGetHostsResult>`
+        );
+      }
+      return ok(`<DomainDNSSetHostsResult Domain="example.com" IsSuccess="true"/>`);
+    });
+    const res = await nc.setDomainForwarding('example.com', [
+      { host: '@', url: 'https://example.org', type: 'permanent' },
+    ]);
+    expect(res.success).toBe(true);
+    // read-then-write: getHosts first, then setHosts with the merged set
+    expect(calls.map(c => c.query?.Command)).toEqual([
+      'namecheap.domains.dns.getHosts',
+      'namecheap.domains.dns.setHosts',
+    ]);
+    const setQ = calls[1].query as Record<string, string>;
+    // the pre-existing A record is preserved
+    expect(setQ).toMatchObject({ HostName1: '@', RecordType1: 'A', Address1: '1.2.3.4' });
+    // the old URL record is dropped and the new permanent (URL301) forward added
+    expect(setQ).toMatchObject({
+      HostName2: '@',
+      RecordType2: 'URL301',
+      Address2: 'https://example.org',
+    });
+    expect(setQ).not.toHaveProperty('Address3');
+  });
 });

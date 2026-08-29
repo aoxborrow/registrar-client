@@ -8,6 +8,8 @@ import type {
   DnsRecord,
   Domain,
   DomainAvailability,
+  DomainForward,
+  EmailForward,
   ListDomainsOptions,
   OperationResult,
   Registrar,
@@ -190,6 +192,32 @@ export abstract class BaseRegistrar implements Registrar {
     _opts?: RequestOptions
   ): Promise<OperationResult> {
     return this.notImplemented('setDnsRecords');
+  }
+
+  // --- extended capabilities (opt-in; default to NotImplementedError) ---
+
+  getEmailForwarding(_domainName: string, _opts?: RequestOptions): Promise<EmailForward[]> {
+    return this.notImplemented('getEmailForwarding');
+  }
+
+  setEmailForwarding(
+    _domainName: string,
+    _forwards: EmailForward[],
+    _opts?: RequestOptions
+  ): Promise<OperationResult> {
+    return this.notImplemented('setEmailForwarding');
+  }
+
+  getDomainForwarding(_domainName: string, _opts?: RequestOptions): Promise<DomainForward[]> {
+    return this.notImplemented('getDomainForwarding');
+  }
+
+  setDomainForwarding(
+    _domainName: string,
+    _forwards: DomainForward[],
+    _opts?: RequestOptions
+  ): Promise<OperationResult> {
+    return this.notImplemented('setDomainForwarding');
   }
 
   // shared rejection for a capability a provider hasn't wired up yet
