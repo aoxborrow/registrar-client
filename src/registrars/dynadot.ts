@@ -20,127 +20,152 @@ import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
 
-// a domain as Dynadot's api3 models it (list_domain / domain_info)
-interface DynadotDomainInfo {
-  Name?: string;
-  Status?: string;
-  Registration?: string | number;
-  Expiration?: string | number;
-  RenewOption?: string;
-  Locked?: string;
-  Privacy?: string;
-  NameServerSettings?: unknown;
-  // per-role contact ids (domain_info only); each role is `{ ContactId }`
-  Whois?: DynadotWhois;
+// --- RESTful v2 response shapes (snake_case; captured from the live API) ---
+
+// the standard envelope: HTTP 200 with a `code` of 200 on success, otherwise an
+// `error.description`. Signature/auth failures come back as real HTTP 4xx.
+interface V2Envelope<T> {
+  code?: number;
+  message?: string;
+  data?: T;
+  error?: { code?: string; description?: string };
 }
 
-// the Whois block on domain_info: one `{ ContactId }` object per role
-interface DynadotWhoisRole {
-  ContactId?: string | number;
+interface V2Nameserver {
+  server_name?: string;
+  ip_list?: string[];
 }
 
-interface DynadotWhois {
-  Registrant?: DynadotWhoisRole;
-  Admin?: DynadotWhoisRole;
-  Technical?: DynadotWhoisRole;
-  Billing?: DynadotWhoisRole;
+// a DNS record under glue_info (record_value2 carries the MX priority)
+interface V2DnsRecord {
+  sub_host?: string;
+  record_type?: string;
+  record_value1?: string;
+  record_value2?: string;
 }
 
-// a full contact record as `get_contact` returns it. Name is a single combined
-// field (not first/last); phone/fax split into a country code + number.
-interface DynadotContact {
-  ContactId?: string | number;
-  Name?: string;
-  Organization?: string;
-  Email?: string;
-  PhoneCc?: string | number;
-  PhoneNum?: string | number;
-  FaxCc?: string | number;
-  FaxNum?: string | number;
-  Address1?: string;
-  Address2?: string;
-  City?: string;
-  State?: string;
-  ZipCode?: string;
-  Country?: string;
+// the glue/DNS block: `glue_type` is NAME_SERVERS (external NS), DNS (Dynadot-
+// hosted records), or REGISTRAR_FORWARDING
+interface V2GlueInfo {
+  glue_type?: string;
+  nameserver_list?: V2Nameserver[];
+  dns_main_list?: V2DnsRecord[];
+  dns_sub_list?: V2DnsRecord[];
+  ttl?: string | number;
 }
 
-// one result from the `search` command
-interface DynadotSearchResult {
-  DomainName?: string;
-  Available?: string;
-  // a human string like "77.00 in USD", not a number (api3 quirk)
-  Price?: string;
-  Premium?: string;
+interface V2DomainInfo {
+  domain_name?: string;
+  expiration_date?: number;
+  registration_date?: number;
+  glue_info?: V2GlueInfo;
+  registrant_contact_id?: number;
+  admin_contact_id?: number;
+  technical_contact_id?: number;
+  billing_contact_id?: number;
+  locked?: string;
+  privacy?: string;
+  renew_option?: string;
+  status?: string;
 }
 
-// a DNS record as get_dns returns it (Value2 carries a second value, e.g. MX distance)
-interface DynadotDnsRecord {
-  RecordType?: string;
-  Subhost?: string;
-  Value?: string;
-  Value2?: string;
+// a full contact record. Name is one combined field; phone/fax split into a
+// country code + number.
+interface V2Contact {
+  contact_id?: number;
+  organization?: string;
+  name?: string;
+  email?: string;
+  phone_number?: string;
+  phone_cc?: string | number;
+  fax_number?: string;
+  fax_cc?: string | number;
+  address1?: string;
+  address2?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+  country?: string;
 }
 
-// Dynadot DNS record types set_dns2 understands that map cleanly to our generic
-// DnsRecord types. (Dynadot also has `forward`/`stealth`/`email` record types,
-// which are forwarding features, not generic DNS, so they're excluded here.)
-const SUPPORTED_DNS_TYPES = new Set(['A', 'AAAA', 'CNAME', 'MX', 'TXT']);
+interface V2Price {
+  currency?: string;
+  unit?: string; // e.g. "(price/1 year)"
+  registration_price?: string;
+  renewal_price?: string;
+  transfer_price?: string;
+  restore_price?: string;
+}
+
+interface V2SearchResult {
+  domain_name?: string;
+  available?: string; // "Yes" | "No"
+  premium?: string; // "yes" | "no"
+  price_list?: V2Price[];
+}
+
+// bulk_search is capped conservatively; the endpoint takes a comma-joined list
+const SEARCH_BATCH_SIZE = 100;
+
+// Dynadot DNS record types that map cleanly to our generic DnsRecord types.
+// (Dynadot also has forward/stealth/email pseudo-records — those are forwarding
+// features, not generic DNS, so they're excluded here.)
+const SUPPORTED_DNS_TYPES = new Set(['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SRV', 'CAA']);
 
 /**
  * Dynadot Registrar
  * API docs: https://www.dynadot.com/domain/api-document
  *
- * Targets Dynadot's legacy **API3 JSON** endpoint (`api3.json`), which
- * authenticates with a `key` query-string parameter (not a header), so the key
- * appears in the request URL — this is required by their API design. (The newer
- * RESTful v1 API needs HMAC request signing, which this client doesn't do.)
+ * Targets Dynadot's **RESTful v2 API** (`https://api.dynadot.com/restful/v2/…`).
  *
- * Credentials: enable API access and generate an API key under Tools > API
- * (the account must be unlocked first to reveal the key).
+ * ## Authentication
+ * Two credentials: an **API key** (the public identifier, sent as
+ * `Authorization: Bearer <key>`) and an **API secret** (used only to sign
+ * requests). Every request carries an `X-Signature` header — the Base64 HMAC-
+ * SHA256, keyed by the secret, of:
  *
- * ## api3 envelope
- * Responses wrap the payload in a per-command envelope with a nested header and
- * content object, e.g. `{ GetDnsResponse: { GetDnsHeader: { ResponseCode },
- * GetDnsContent: {...} } }`. The naming is internally inconsistent — the success
- * field is `SuccessCode` on some commands and `ResponseCode` on others, and the
- * header key is `<Cmd>Header` or `<Cmd>ResponseHeader` — so `unwrap()` below
- * discovers the header/content generically rather than hard-coding names.
- * `ResponseCode`/`SuccessCode` `0` means success.
+ *   `apiKey + "\n" + pathAndQuery + "\n" + "" + "\n" + body`
  *
- * `registerDomain`/`transferIn` are implemented and require per-call `consent`;
- * they use the account's default WHOIS contact (api3 doesn't take inline contact
- * data) and spend real money, so treat them as documented-but-unverified.
+ * The third component is the (optional) `X-Request-Id`; this client signs it as
+ * an empty string and does not send the header. Signing uses Web Crypto
+ * (`crypto.subtle`), so it stays browser/edge-safe.
  *
- * `getContacts` reads the per-role `ContactId`s from `domain_info`'s `Whois`
- * block, then resolves each distinct id via `get_contact`. Dynadot's contact
- * shape is lossy against ours — a single `Name` field (split into first/last on
- * the first space) and separate `PhoneCc`/`PhoneNum` (rejoined as `+cc.num`).
+ * Enable both keys under Tools > API in a Dynadot account (the account must be
+ * unlocked with API access enabled).
  *
- * ## Not implemented (fall through to BaseRegistrar's NotImplementedError)
- * - `updateContacts` — api3 sets a domain's whois from an existing numeric
- *   `ContactId` (via `set_contact`/`set_whois`), not from inline contact data,
- *   so mapping our `Contact` onto it needs a create-or-match step; unverified.
+ * ## Envelope
+ * Responses are `{ code, message, data }`, with `code: 200` on success and an
+ * `error.description` otherwise. Note Dynadot returns HTTP 200 even for logical
+ * errors (a bad command, a missing domain) — only auth/signature failures are
+ * real HTTP 4xx — so success is read from the envelope `code`, not the status.
  *
- * Confirmed against real captures / the `7c/dynadot` wrapper: the envelope,
- * `list_domain`, `domain_info`, `get_dns`, `set_dns2`, `set_ns`. Implemented
- * from docs but not yet verified live: `search` (availability/pricing),
- * `set_renew_option`, `set_privacy` — flagged inline.
+ * ## Verified live vs. inferred
+ * Read methods are verified against a live account: `testConnection`,
+ * `listDomains`, `getDomain`, `getNameservers`, `getContacts`, `getDnsRecords`,
+ * `checkAvailability`, `getPricing`. The write methods (`registerDomain`,
+ * `transferIn`, `renewDomain`, `setAutoRenew`, `updateNameservers`,
+ * `lockDomain`/`unlockDomain`, `setPrivacy`, `setDnsRecords`) use request bodies
+ * inferred from the read shapes and the docs; they are NOT yet verified against a
+ * live account (each is flagged inline). A wrong body fails with an envelope
+ * error rather than mutating anything unexpected.
  */
 export class DynadotRegistrar extends BaseRegistrar {
   readonly name = 'dynadot';
 
   static readonly displayName = 'Dynadot';
   static readonly helpText =
-    'Find your API Key in your Dynadot account under Tools > API. ' +
-    'You must unlock the account and enable API access to reveal the key.';
+    'Under Tools > API in your Dynadot account, generate an API Key and API Secret. ' +
+    'The account must be unlocked with API access enabled. The key identifies you; ' +
+    'the secret signs requests (X-Signature) and is never sent directly.';
   static readonly configFields: ConfigField[] = [
     { name: 'apiKey', label: 'API Key', type: 'password', required: true },
+    { name: 'apiSecret', label: 'API Secret', type: 'password', required: true },
   ];
   static readonly supportsSandbox = false; // Dynadot has no public sandbox environment
   // Broadest coverage of the set: on top of core, it adds DNSSEC, glue records,
   // email + domain forwarding, webhooks, aftermarket/marketplace, push,
-  // appraisal, and bulk (Smart Folder) settings. Email is forwarding-only.
+  // appraisal, and bulk (folder) settings. Email is forwarding-only. These are
+  // declared but not yet implemented on the v2 transport (extended layer).
   static readonly extendedFeatures: readonly RegistrarFeature[] = [
     Feature.GetAuthCode,
     Feature.SetDnssec,
@@ -156,46 +181,68 @@ export class DynadotRegistrar extends BaseRegistrar {
   ];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
-    // baseUrl is the full endpoint; all commands are query-string based
     super(
       credentials,
       {
+        // baseUrl is the host; each request builds the full /restful/v2/… path
         baseUrl: selectBaseUrl('Dynadot', options?.environment, {
-          production: 'https://api.dynadot.com/api3.json',
+          production: 'https://api.dynadot.com',
         }),
+        headers: { Authorization: `Bearer ${credentials.apiKey}` },
       },
       options
     );
   }
 
-  // issue a command against the api3.json endpoint (key + command in the query)
-  private command(query: Record<string, string | number>, opts?: RequestOptions): Promise<unknown> {
-    return this.http.request<unknown>({
-      path: '',
-      query: { key: this.credentials.apiKey, ...query },
+  // sign and issue a request. `pathAndQuery` is the exact request target
+  // (path + any query), used verbatim both to sign and to send so the two match.
+  private async signedRequest<T>(
+    method: string,
+    pathAndQuery: string,
+    body?: unknown,
+    opts?: RequestOptions
+  ): Promise<V2Envelope<T>> {
+    const bodyStr = body !== undefined ? JSON.stringify(body) : '';
+    const stringToSign = `${this.credentials.apiKey}\n${pathAndQuery}\n\n${bodyStr}`;
+    const signature = await hmacSha256Base64(this.credentials.apiSecret, stringToSign);
+    return this.http.request<V2Envelope<T>>({
+      method,
+      path: pathAndQuery,
+      body,
+      headers: { 'X-Signature': signature },
       ...opts,
     });
   }
 
-  // run a command and return its content payload, throwing on a non-success code
-  private async read(
-    query: Record<string, string | number>,
+  // issue a request and return its `data`, throwing on a non-200 envelope code
+  private async read<T>(
+    method: string,
+    pathAndQuery: string,
+    body?: unknown,
     opts?: RequestOptions
-  ): Promise<Record<string, unknown>> {
-    const env = unwrap(await this.command(query, opts));
-    if (!env.ok) throw new Error(env.message);
-    return env.content;
+  ): Promise<T> {
+    const env = await this.signedRequest<T>(method, pathAndQuery, body, opts);
+    if (env.code !== 200) {
+      throw new Error(env.error?.description ?? env.message ?? 'Dynadot request failed');
+    }
+    return env.data as T;
   }
 
-  // run a mutating command and map its envelope to an OperationResult
+  // issue a mutating request and map its envelope to an OperationResult
   private async mutate(
-    query: Record<string, string | number>,
+    method: string,
+    pathAndQuery: string,
+    body: unknown,
     successMessage: string,
     opts?: RequestOptions
   ): Promise<OperationResult> {
     try {
-      const env = unwrap(await this.command(query, opts));
-      return { success: env.ok, message: env.ok ? successMessage : env.message };
+      const env = await this.signedRequest<unknown>(method, pathAndQuery, body, opts);
+      const ok = env.code === 200;
+      return {
+        success: ok,
+        message: ok ? successMessage : (env.error?.description ?? env.message ?? 'Request failed'),
+      };
     } catch (error) {
       return { success: false, message: toRegistrarError(error).message };
     }
@@ -203,65 +250,81 @@ export class DynadotRegistrar extends BaseRegistrar {
 
   override async testConnection(opts?: RequestOptions): Promise<ConnectionResult> {
     try {
-      const env = unwrap(await this.command({ command: 'list_domain' }, opts));
-      return env.ok
-        ? { success: true, message: 'Connection successful' }
-        : { success: false, message: env.message };
+      await this.read<{ account_info?: unknown }>(
+        'GET',
+        '/restful/v2/accounts/info',
+        undefined,
+        opts
+      );
+      return { success: true, message: 'Connection successful' };
     } catch (error) {
       return { success: false, message: toRegistrarError(error).message };
     }
   }
 
   override async listDomains(opts?: ListDomainsOptions): Promise<Domain[]> {
-    // list_domain returns the whole account in one response and already includes
-    // nameservers inline (NameServerSettings).
+    // GET /domains returns the whole account in one response, nameservers inline.
     const { search, ...reqOpts } = opts ?? {};
-    const content = await this.read({ command: 'list_domain' }, reqOpts);
-    // ListDomainInfoContent > DomainInfoList > DomainInfo (array)
-    const list = asRecord(content.DomainInfoList);
-    const infos = asArray<DynadotDomainInfo>(list.DomainInfo);
-    const domains = infos.map(info => this.toDomain(info));
+    const data = await this.read<{ domain_info_list?: V2DomainInfo[] }>(
+      'GET',
+      '/restful/v2/domains',
+      undefined,
+      reqOpts
+    );
+    const domains = (data.domain_info_list ?? []).map(info => this.toDomain(info));
     return filterDomains(domains, search);
   }
 
   override async getDomain(domainName: string, opts?: RequestOptions): Promise<Domain> {
-    const content = await this.read({ command: 'domain_info', domain: domainName }, opts);
-    const info = content.DomainInfo as DynadotDomainInfo | undefined;
-    if (!info) throw new NotFoundError(`Dynadot: domain '${domainName}' not found`);
-    return this.toDomain(info);
+    const data = await this.read<{ domain_info?: V2DomainInfo }>(
+      'GET',
+      `/restful/v2/domains/${encodeURIComponent(domainName)}`,
+      undefined,
+      opts
+    );
+    if (!data.domain_info) throw new NotFoundError(`Dynadot: domain '${domainName}' not found`);
+    return this.toDomain(data.domain_info);
   }
 
   override async getNameservers(domainName: string, opts?: RequestOptions): Promise<string[]> {
+    // domain_info carries the nameservers inline (empty for Dynadot-DNS-hosted
+    // domains, which have no external NS)
     const domain = await this.getDomain(domainName, opts);
     return domain.nameservers;
   }
 
   /**
-   * Reads the registrant/admin/tech/billing contacts. `domain_info` only carries
-   * a numeric `ContactId` per role in its `Whois` block, so this resolves each
-   * distinct id with a `get_contact` call (roles typically share one contact, so
-   * ids are de-duplicated). A `0`/empty id means the role has no dedicated
-   * contact (the account default whois), and is left unset.
+   * Reads registrant/admin/tech/billing contacts. domain_info carries a numeric
+   * contact id per role; this resolves each distinct id via GET /contacts/{id}
+   * (roles usually share one contact, so ids are de-duplicated).
    */
   override async getContacts(domainName: string, opts?: RequestOptions): Promise<ContactSet> {
-    const content = await this.read({ command: 'domain_info', domain: domainName }, opts);
-    const info = content.DomainInfo as DynadotDomainInfo | undefined;
+    const data = await this.read<{ domain_info?: V2DomainInfo }>(
+      'GET',
+      `/restful/v2/domains/${encodeURIComponent(domainName)}`,
+      undefined,
+      opts
+    );
+    const info = data.domain_info;
     if (!info) throw new NotFoundError(`Dynadot: domain '${domainName}' not found`);
 
-    const whois = info.Whois ?? {};
     const roleIds: [keyof ContactSet, string][] = [
-      ['registrant', contactId(whois.Registrant)],
-      ['admin', contactId(whois.Admin)],
-      ['tech', contactId(whois.Technical)],
-      ['billing', contactId(whois.Billing)],
+      ['registrant', str(info.registrant_contact_id)],
+      ['admin', str(info.admin_contact_id)],
+      ['tech', str(info.technical_contact_id)],
+      ['billing', str(info.billing_contact_id)],
     ];
 
-    // fetch each distinct, non-default id once
     const byId = new Map<string, Contact>();
     for (const [, id] of roleIds) {
       if (!id || id === '0' || byId.has(id)) continue;
-      const res = await this.read({ command: 'get_contact', contact_id: id }, opts);
-      byId.set(id, toContact(asRecord(res.Contact ?? res)));
+      const cdata = await this.read<{ contact?: V2Contact }>(
+        'GET',
+        `/restful/v2/contacts/${encodeURIComponent(id)}`,
+        undefined,
+        opts
+      );
+      if (cdata.contact) byId.set(id, toContact(cdata.contact));
     }
 
     const contacts: ContactSet = {};
@@ -272,63 +335,93 @@ export class DynadotRegistrar extends BaseRegistrar {
     return contacts;
   }
 
+  override async getDnsRecords(domainName: string, opts?: RequestOptions): Promise<DnsRecord[]> {
+    const data = await this.read<{ glue_info?: V2GlueInfo }>(
+      'GET',
+      `/restful/v2/domains/${encodeURIComponent(domainName)}/records`,
+      undefined,
+      opts
+    );
+    const glue = data.glue_info ?? {};
+    // only Dynadot-hosted DNS has records; NAME_SERVERS / forwarding domains have none
+    if (glue.glue_type !== 'DNS') return [];
+    const ttl = glue.ttl != null ? Number(glue.ttl) : undefined;
+    return [
+      ...(glue.dns_main_list ?? []).map(r => toDnsRecord(r, '@', ttl)),
+      ...(glue.dns_sub_list ?? []).map(r => toDnsRecord(r, r.sub_host ?? '', ttl)),
+    ];
+  }
+
   /**
-   * Availability via the `search` command (`show_price=1` returns the price).
-   * Note: api3's `search` reports price as a human string like "77.00 in USD",
-   * parsed here into `price` + `currency`. Response shape is doc-sourced and not
-   * yet verified against a live account.
+   * Availability via `bulk_search` (comma-joined `domain_name_list`), batched.
+   * `show_price=true` returns a `price_list` per name; the first (1-year) entry's
+   * registration price is surfaced.
    */
   override async checkAvailability(
     domainNames: string[],
     opts?: RequestOptions
   ): Promise<DomainAvailability[]> {
-    const query: Record<string, string | number> = { command: 'search', show_price: 1 };
-    domainNames.forEach((d, i) => {
-      query[`domain${i}`] = d;
-    });
-    const content = await this.read(query, opts);
-    const results = asArray<DynadotSearchResult>(content.SearchResults ?? content.Results);
-    return results.map(r => {
-      const { price, currency } = parsePrice(r.Price);
-      return {
-        domainName: r.DomainName ?? '',
-        available: r.Available === 'yes',
-        premium: r.Premium != null ? r.Premium === 'yes' : undefined,
-        price,
-        currency,
-        period: price != null ? 1 : undefined,
-      };
-    });
+    const results: DomainAvailability[] = [];
+    for (let i = 0; i < domainNames.length; i += SEARCH_BATCH_SIZE) {
+      const batch = domainNames.slice(i, i + SEARCH_BATCH_SIZE);
+      const list = encodeURIComponent(batch.join(','));
+      const data = await this.read<{ domain_result_list?: V2SearchResult[] }>(
+        'GET',
+        `/restful/v2/domains/bulk_search?domain_name_list=${list}&show_price=true`,
+        undefined,
+        opts
+      );
+      for (const r of data.domain_result_list ?? []) {
+        const price = oneYearPrice(r.price_list);
+        results.push({
+          domainName: r.domain_name ?? '',
+          available: r.available === 'Yes',
+          premium: r.premium != null ? r.premium.toLowerCase() === 'yes' : undefined,
+          price: price?.registration,
+          currency: price?.currency,
+          period: price ? 1 : undefined,
+        });
+      }
+    }
+    return results;
   }
 
   /**
-   * Dynadot's per-TLD `tld_price` command returns the entire TLD table with an
-   * under-documented inner shape. Mirroring GoDaddy, `getPricing` instead derives
-   * a specific domain's registration price from an availability check, so it
-   * needs a full domain (e.g. "example.com"); a bare TLD throws.
+   * Pricing for a specific domain (may be premium), derived from a `bulk_search`
+   * with pricing. Needs a full domain (e.g. "example.com"); a bare TLD throws,
+   * since v2 has no standalone TLD-price endpoint.
    */
   override async getPricing(tldOrDomain: string, opts?: RequestOptions): Promise<TldPricing> {
     if (!tldOrDomain.includes('.')) {
       throw new NotImplementedError(
         `${this.name}: getPricing needs a full domain (e.g. "example.com"); ` +
-          'per-TLD pricing via tld_price is not wired up'
+          'Dynadot v2 has no standalone per-TLD price endpoint'
       );
     }
-    const [result] = await this.checkAvailability([tldOrDomain], opts);
+    const list = encodeURIComponent(tldOrDomain);
+    const data = await this.read<{ domain_result_list?: V2SearchResult[] }>(
+      'GET',
+      `/restful/v2/domains/bulk_search?domain_name_list=${list}&show_price=true`,
+      undefined,
+      opts
+    );
+    const result = (data.domain_result_list ?? [])[0];
+    const price = oneYearPrice(result?.price_list);
     const tld = tldOrDomain.slice(tldOrDomain.indexOf('.') + 1);
     return {
       tld,
-      currency: result?.currency ?? 'USD',
-      registration: result?.price,
+      currency: price?.currency ?? 'USD',
+      registration: price?.registration,
+      renewal: price?.renewal,
+      transfer: price?.transfer,
     };
   }
 
+  // --- writes (bodies inferred from read shapes/docs; not yet verified live) ---
+
   /**
-   * Registers a domain (`duration` is years). api3 register uses the account's
-   * default WHOIS contact — it doesn't accept inline contact data (contacts are
-   * separate, id-referenced records), so `input.contacts` is not sent. Privacy
-   * has no register param, so a requested `privacy` is applied via a follow-up
-   * `set_privacy`.
+   * Registers a domain via POST /domains/register. v2 uses the account's default
+   * WHOIS contacts, so `input.contacts` is not sent. INFERRED body — unverified.
    */
   override async registerDomain(
     domainName: string,
@@ -336,26 +429,19 @@ export class DynadotRegistrar extends BaseRegistrar {
     opts?: RequestOptions
   ): Promise<OperationResult> {
     requireConsent(this.name, input.consent);
-    const res = await this.mutate(
-      { command: 'register', domain: domainName, duration: input.years ?? 1 },
+    const body: Record<string, unknown> = { domain_name: domainName, duration: input.years ?? 1 };
+    if (input.nameservers?.length) body.name_server_list = input.nameservers;
+    return this.mutate(
+      'POST',
+      '/restful/v2/domains/register',
+      body,
       `Domain ${domainName} registered successfully`,
       opts
     );
-    if (res.success && input.privacy) {
-      const privacyResult = await this.setPrivacy(domainName, true, opts);
-      if (!privacyResult.success) {
-        return {
-          success: true,
-          message: `Domain registered, but enabling privacy failed: ${privacyResult.message}`,
-        };
-      }
-    }
-    return res;
   }
 
   /**
-   * Transfers a domain in with its auth/EPP code (the api3 param is `auth`).
-   * Contacts come from the account default, as with registration.
+   * Transfers a domain in with its auth/EPP code. INFERRED body — unverified.
    */
   override async transferIn(
     domainName: string,
@@ -364,41 +450,47 @@ export class DynadotRegistrar extends BaseRegistrar {
   ): Promise<OperationResult> {
     requireConsent(this.name, input.consent);
     return this.mutate(
-      { command: 'transfer', domain: domainName, auth: input.authCode },
+      'POST',
+      '/restful/v2/domains/transfer_in',
+      { domain_name: domainName, auth_code: input.authCode },
       `Domain ${domainName} transfer requested successfully`,
       opts
     );
   }
 
+  // Renew a domain. INFERRED body — unverified.
   override async renewDomain(
     domainName: string,
     years = 1,
     opts?: RequestOptions
   ): Promise<OperationResult> {
     return this.mutate(
-      { command: 'renew', domain: domainName, duration: years },
+      'POST',
+      `/restful/v2/domains/${encodeURIComponent(domainName)}/renew`,
+      { duration: years },
       'Domain renewed successfully',
       opts
     );
   }
 
-  /**
-   * Auto-renew via `set_renew_option`. The accepted value strings (`auto` /
-   * `donot`) are doc-sourced and not yet verified live — Dynadot's newer v1 API
-   * uses `auto`/`manual`/`off`, so confirm against a live account.
-   */
+  // Auto-renew via set_renew_option. `renew_option` mirrors the read value
+  // ("auto-renew"); the disable value is inferred. INFERRED — unverified.
   override async setAutoRenew(
     domainName: string,
     enabled: boolean,
     opts?: RequestOptions
   ): Promise<OperationResult> {
     return this.mutate(
-      { command: 'set_renew_option', domain: domainName, renew_option: enabled ? 'auto' : 'donot' },
+      'PUT',
+      `/restful/v2/domains/${encodeURIComponent(domainName)}/renew_option`,
+      { renew_option: enabled ? 'auto-renew' : 'no-renew' },
       `Auto-renew ${enabled ? 'enabled' : 'disabled'} successfully`,
       opts
     );
   }
 
+  // Replace nameservers. INFERRED body (mirrors the read nameserver_list) —
+  // unverified.
   override async updateNameservers(
     domainName: string,
     nameservers: string[],
@@ -407,209 +499,198 @@ export class DynadotRegistrar extends BaseRegistrar {
     if (nameservers.length < 2 || nameservers.length > 13) {
       throw new Error('Dynadot requires 2-13 nameservers');
     }
-    const query: Record<string, string | number> = { command: 'set_ns', domain: domainName };
-    nameservers.forEach((ns, i) => {
-      query[`ns${i}`] = ns;
-    });
-    return this.mutate(query, 'Nameservers updated successfully', opts);
-  }
-
-  override async lockDomain(domainName: string, opts?: RequestOptions): Promise<OperationResult> {
     return this.mutate(
-      { command: 'set_lock', domain: domainName, lock: 'yes' },
-      'Domain locked successfully',
+      'PUT',
+      `/restful/v2/domains/${encodeURIComponent(domainName)}/nameservers`,
+      { name_server_list: nameservers },
+      'Nameservers updated successfully',
       opts
     );
+  }
+
+  // Transfer lock. INFERRED body — unverified.
+  override async lockDomain(domainName: string, opts?: RequestOptions): Promise<OperationResult> {
+    return this.setLock(domainName, true, opts);
   }
 
   override async unlockDomain(domainName: string, opts?: RequestOptions): Promise<OperationResult> {
+    return this.setLock(domainName, false, opts);
+  }
+
+  private setLock(
+    domainName: string,
+    locked: boolean,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
     return this.mutate(
-      { command: 'set_lock', domain: domainName, lock: 'no' },
-      'Domain unlocked successfully',
+      'PUT',
+      `/restful/v2/domains/${encodeURIComponent(domainName)}/domain_lock_status`,
+      { locked: locked ? 'Yes' : 'No' },
+      `Domain ${locked ? 'locked' : 'unlocked'} successfully`,
       opts
     );
   }
 
-  /**
-   * WHOIS privacy via `set_privacy` (`option=full` to enable, `off` to disable).
-   * The option strings are doc-sourced and not yet verified live.
-   */
+  // WHOIS privacy. INFERRED body (mirrors the read "Full Privacy"/"No Privacy") —
+  // unverified.
   override async setPrivacy(
     domainName: string,
     enabled: boolean,
     opts?: RequestOptions
   ): Promise<OperationResult> {
     return this.mutate(
-      { command: 'set_privacy', domain: domainName, option: enabled ? 'full' : 'off' },
+      'PUT',
+      `/restful/v2/domains/${encodeURIComponent(domainName)}/privacy`,
+      { privacy: enabled ? 'Full Privacy' : 'No Privacy' },
       `Privacy ${enabled ? 'enabled' : 'disabled'} successfully`,
       opts
     );
   }
 
-  override async getDnsRecords(domainName: string, opts?: RequestOptions): Promise<DnsRecord[]> {
-    const content = await this.read({ command: 'get_dns', domain: domainName }, opts);
-    // GetDnsContent > NameServerSettings > { MainDomains.MainDomainRecord[],
-    // SubDomains.SubDomainRecord[], TTL }
-    const settings = asRecord(content.NameServerSettings);
-    const ttl = settings.TTL != null ? Number(settings.TTL) : undefined;
-
-    const main = asArray<DynadotDnsRecord>(asRecord(settings.MainDomains).MainDomainRecord);
-    const sub = asArray<DynadotDnsRecord>(asRecord(settings.SubDomains).SubDomainRecord);
-
-    return [
-      ...main.map(r => toDnsRecord(r, '@', ttl)),
-      ...sub.map(r => toDnsRecord(r, r.Subhost ?? '', ttl)),
-    ];
-  }
-
   /**
-   * Replaces the entire record set via `set_dns2` (default overwrite semantics:
-   * records not present are removed). Records are split into apex ("main") and
-   * subdomain params. Only generic DNS types are supported — Dynadot's
-   * forwarding/email pseudo-records aren't expressible here, so an unsupported
-   * type throws rather than being silently dropped.
+   * Replaces the DNS record set via POST /domains/{name}/records. Records split
+   * into apex ("main") and subdomain lists, mirroring the read shape; MX priority
+   * rides in record_value2. Only generic DNS types are supported. INFERRED body —
+   * unverified.
    */
   override async setDnsRecords(
     domainName: string,
     records: DnsRecord[],
     opts?: RequestOptions
   ): Promise<OperationResult> {
-    const query: Record<string, string | number> = { command: 'set_dns2', domain: domainName };
-    let mainIdx = 0;
-    let subIdx = 0;
+    const mainList: V2DnsRecord[] = [];
+    const subList: V2DnsRecord[] = [];
     let ttl: number | undefined;
 
     for (const r of records) {
       const type = r.type.toUpperCase();
       if (!SUPPORTED_DNS_TYPES.has(type)) {
-        throw new Error(`Dynadot: DNS record type '${type}' is not supported via set_dns2`);
+        throw new Error(`Dynadot: DNS record type '${type}' is not supported`);
       }
       if (ttl == null && r.ttl != null) ttl = r.ttl;
+      const entry: V2DnsRecord = { record_type: type.toLowerCase(), record_value1: r.value };
+      if (type === 'MX' && r.priority != null) entry.record_value2 = String(r.priority);
 
       const isApex = r.name === '@' || r.name === '' || r.name === domainName;
       if (isApex) {
-        query[`main_record_type${mainIdx}`] = type.toLowerCase();
-        query[`main_record${mainIdx}`] = r.value;
-        // MX distance rides in the second-value param (Value2 on read)
-        if (type === 'MX' && r.priority != null) query[`main_recordx${mainIdx}`] = r.priority;
-        mainIdx++;
+        mainList.push(entry);
       } else {
-        query[`subdomain${subIdx}`] = r.name;
-        query[`sub_record_type${subIdx}`] = type.toLowerCase();
-        query[`sub_record${subIdx}`] = r.value;
-        if (type === 'MX' && r.priority != null) query[`sub_recordx${subIdx}`] = r.priority;
-        subIdx++;
+        subList.push({ ...entry, sub_host: r.name });
       }
     }
-    if (ttl != null) query.ttl = ttl;
 
-    return this.mutate(query, 'DNS records updated successfully', opts);
+    const glue: V2GlueInfo = { glue_type: 'DNS', dns_main_list: mainList, dns_sub_list: subList };
+    if (ttl != null) glue.ttl = String(ttl);
+
+    return this.mutate(
+      'POST',
+      `/restful/v2/domains/${encodeURIComponent(domainName)}/records`,
+      glue,
+      'DNS records updated successfully',
+      opts
+    );
   }
 
-  // map a Dynadot domain payload to the normalized Domain shape
-  private toDomain(d: DynadotDomainInfo): Domain {
+  // map a v2 domain_info payload to the normalized Domain shape
+  private toDomain(d: V2DomainInfo): Domain {
     return createDomain({
-      domainName: d.Name,
+      domainName: d.domain_name,
       registrar: this.name,
-      status: d.Status ?? '',
-      createdDate: d.Registration ?? null,
-      expirationDate: d.Expiration ?? null,
-      renewalDate: d.Expiration ?? null,
-      autoRenew: d.RenewOption === 'auto' || d.RenewOption === 'auto-renew',
-      locked: d.Locked === 'yes',
-      privacy: d.Privacy === 'full' || d.Privacy === 'partial',
-      nameservers: extractNameservers(d.NameServerSettings),
+      status: d.status ?? '',
+      createdDate: d.registration_date ?? null,
+      expirationDate: d.expiration_date ?? null,
+      renewalDate: d.expiration_date ?? null,
+      autoRenew: d.renew_option === 'auto-renew' || d.renew_option === 'auto',
+      locked: d.locked === 'Yes',
+      privacy: isPrivacyOn(d.privacy),
+      nameservers: extractNameservers(d.glue_info),
     });
   }
 }
 
-// --- api3 envelope handling ---
+// --- signing ---
 
-interface Envelope {
-  ok: boolean;
-  message: string;
-  content: Record<string, unknown>;
+// Base64-encoded HMAC-SHA256 of `message`, keyed by `secret` (UTF-8). Uses Web
+// Crypto so it runs unchanged in browsers, edge runtimes, and Node.
+async function hmacSha256Base64(secret: string, message: string): Promise<string> {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, enc.encode(message));
+  let binary = '';
+  for (const byte of new Uint8Array(signature)) binary += String.fromCharCode(byte);
+  return btoa(binary);
 }
 
-/**
- * Unwrap a Dynadot api3 response. The payload is wrapped as
- * `{ <Cmd>Response: { <Cmd>Header: {...}, <Cmd>Content: {...} } }`, but the
- * header/content key names and the success field (`SuccessCode` vs
- * `ResponseCode`) vary by command, so we discover them structurally: any key
- * ending in `Header`/`Content`, falling back to the response object itself for
- * older flat commands. Success is code `0`; errors carry a `Status`/`Error`.
- */
-function unwrap(res: unknown): Envelope {
-  const root = asRecord(res);
-  const keys = Object.keys(root);
-  // descend one level into the single `<Cmd>Response` wrapper when present
-  const inner: Record<string, unknown> =
-    keys.length === 1 && isRecord(root[keys[0]]) ? asRecord(root[keys[0]]) : root;
+// --- mapping helpers ---
 
-  const headerKey = Object.keys(inner).find(k => /Header$/.test(k));
-  const contentKey = Object.keys(inner).find(k => /Content$/.test(k));
-  const header = headerKey && isRecord(inner[headerKey]) ? inner[headerKey] : inner;
-  const content = contentKey && isRecord(inner[contentKey]) ? inner[contentKey] : inner;
-
-  const codeRaw =
-    header.SuccessCode ?? header.ResponseCode ?? inner.SuccessCode ?? inner.ResponseCode;
-  const code = typeof codeRaw === 'string' || typeof codeRaw === 'number' ? String(codeRaw) : '';
-  const ok = code === '0';
-
-  const statusRaw = header.Error ?? header.Status ?? inner.Error ?? inner.Status;
-  const message =
-    typeof statusRaw === 'string' && statusRaw
-      ? statusRaw
-      : ok
-        ? 'success'
-        : `Dynadot request failed (code ${code || 'unknown'})`;
-
-  return { ok, message, content };
-}
-
-// map a Dynadot DNS record to the normalized DnsRecord shape
-function toDnsRecord(r: DynadotDnsRecord, name: string, ttl: number | undefined): DnsRecord {
-  const type = (r.RecordType ?? '').toUpperCase();
-  const record: DnsRecord = { type, name, value: r.Value ?? '' };
+// map a v2 DNS record to the normalized DnsRecord shape
+function toDnsRecord(r: V2DnsRecord, name: string, ttl: number | undefined): DnsRecord {
+  const type = (r.record_type ?? '').toUpperCase();
+  const record: DnsRecord = { type, name, value: r.record_value1 ?? '' };
   if (ttl != null) record.ttl = ttl;
-  // MX distance comes back in Value2
-  if (type === 'MX' && r.Value2 != null && r.Value2 !== '') record.priority = Number(r.Value2);
+  // MX priority (distance) rides in record_value2
+  if (type === 'MX' && r.record_value2 != null && r.record_value2 !== '') {
+    record.priority = Number(r.record_value2);
+  }
   return record;
 }
 
-// --- contact mapping between Dynadot's shape and the normalized Contact ---
-
-// read a role's numeric ContactId as a string ('' when absent)
-function contactId(role: DynadotWhoisRole | undefined): string {
-  return str(role?.ContactId);
-}
-
-// map a Dynadot get_contact record to the normalized Contact shape
-function toContact(c: DynadotContact): Contact {
-  const { firstName, lastName } = splitName(str(c.Name));
+// map a v2 contact record to the normalized Contact shape
+function toContact(c: V2Contact): Contact {
+  const { firstName, lastName } = splitName(str(c.name));
   const contact: Contact = {
     firstName,
     lastName,
-    email: str(c.Email),
-    phone: joinPhone(c.PhoneCc, c.PhoneNum),
-    address1: str(c.Address1),
-    city: str(c.City),
-    postalCode: str(c.ZipCode),
-    country: str(c.Country),
+    email: str(c.email),
+    phone: joinPhone(c.phone_cc, c.phone_number),
+    address1: str(c.address1),
+    city: str(c.city),
+    postalCode: str(c.zip),
+    country: str(c.country),
   };
-  const organization = str(c.Organization);
+  const organization = str(c.organization);
   if (organization) contact.organization = organization;
-  const fax = joinPhone(c.FaxCc, c.FaxNum);
+  const fax = joinPhone(c.fax_cc, c.fax_number);
   if (fax) contact.fax = fax;
-  const address2 = str(c.Address2);
+  const address2 = str(c.address2);
   if (address2) contact.address2 = address2;
-  const state = str(c.State);
+  const state = str(c.state);
   if (state) contact.state = state;
   return contact;
 }
 
-// Dynadot stores a single combined name; split it into first/last on the first
-// space (a lone token becomes the first name, with an empty last name).
+// whether a v2 privacy string denotes privacy being on ("Full Privacy",
+// "Partial Privacy"); "No Privacy"/empty are off
+function isPrivacyOn(privacy: string | undefined): boolean {
+  return typeof privacy === 'string' && /privacy/i.test(privacy) && !/^no\b/i.test(privacy.trim());
+}
+
+// pick the 1-year price entry (falling back to the first), mapping to numbers
+function oneYearPrice(
+  prices: V2Price[] | undefined
+): { currency?: string; registration?: number; renewal?: number; transfer?: number } | undefined {
+  if (!prices?.length) return undefined;
+  const oneYear = prices.find(p => /\b1\s*year\b/i.test(p.unit ?? '')) ?? prices[0];
+  return {
+    currency: oneYear.currency,
+    registration: toNumber(oneYear.registration_price),
+    renewal: toNumber(oneYear.renewal_price),
+    transfer: toNumber(oneYear.transfer_price),
+  };
+}
+
+// pull the external nameserver hostnames from a glue_info block
+function extractNameservers(glue: V2GlueInfo | undefined): string[] {
+  return (glue?.nameserver_list ?? []).map(ns => str(ns.server_name)).filter(Boolean);
+}
+
+// Dynadot stores a single combined name; split on the first space
 function splitName(name: string): { firstName: string; lastName: string } {
   const trimmed = name.trim();
   const space = trimmed.indexOf(' ');
@@ -625,46 +706,14 @@ function joinPhone(cc: string | number | undefined, num: string | number | undef
   return code ? `+${code}.${number}` : number;
 }
 
-// stringify a loosely-typed api3 scalar, guarding against objects/arrays
+// stringify a loosely-typed scalar, guarding against objects/arrays
 function str(value: unknown): string {
   return typeof value === 'string' ? value : typeof value === 'number' ? String(value) : '';
 }
 
-// parse an api3 price string like "77.00 in USD" into a number + currency
-function parsePrice(raw: string | undefined): { price?: number; currency?: string } {
-  if (!raw) return {};
-  const match = /([\d.]+)\s*(?:in\s*)?([A-Z]{3})?/.exec(raw);
-  if (!match) return {};
-  const price = Number(match[1]);
-  return {
-    price: Number.isFinite(price) ? price : undefined,
-    currency: match[2],
-  };
-}
-
-// Dynadot nameserver settings can be an array or an object with a NameServers array
-function extractNameservers(settings: unknown): string[] {
-  if (!settings) return [];
-  if (Array.isArray(settings)) return settings.map(String);
-  if (typeof settings === 'object' && 'NameServers' in settings) {
-    const ns = (settings as { NameServers?: unknown }).NameServers;
-    return Array.isArray(ns) ? ns.map(String) : [];
-  }
-  return [];
-}
-
-// --- small structural helpers for the loosely-typed api3 JSON ---
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return isRecord(value) ? value : {};
-}
-
-// api3 collapses single-element lists to a bare object; normalize to an array
-function asArray<T>(value: unknown): T[] {
-  if (value == null) return [];
-  return (Array.isArray(value) ? value : [value]) as T[];
+// parse a price string like "10.88" into a number, or undefined
+function toNumber(value: string | undefined): number | undefined {
+  if (value == null || value === '') return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
 }
