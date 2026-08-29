@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
+import { createHmac } from 'node:crypto';
 import { createRegistrar, ConsentRequiredError, NotImplementedError } from '../src/index';
 import type { RequestConfig } from '../src/http';
 
 // Stub the provider's HttpClient so no network calls happen. `handler` receives
-// each RequestConfig and returns the canned response body.
+// each RequestConfig (path is the full /restful/v2 path+query; headers carry the
+// computed X-Signature) and returns the canned v2 envelope.
 function stubHttp(provider: unknown, handler: (req: RequestConfig) => unknown): RequestConfig[] {
   const calls: RequestConfig[] = [];
   (provider as { http: { request: (req: RequestConfig) => Promise<unknown> } }).http.request = (
@@ -15,371 +17,344 @@ function stubHttp(provider: unknown, handler: (req: RequestConfig) => unknown): 
   return calls;
 }
 
+const KEY = 'k';
+const SECRET = 's';
 function dynadot() {
-  return createRegistrar('dynadot', { apiKey: 'k' });
+  return createRegistrar('dynadot', { apiKey: KEY, apiSecret: SECRET });
 }
 
-describe('Dynadot provider', () => {
-  it('unwraps the nested Header/Content envelope for list_domain', async () => {
-    const dy = dynadot();
-    stubHttp(dy, () => ({
-      ListDomainInfoResponse: {
-        ListDomainInfoHeader: { ResponseCode: '0', Status: 'success' },
-        ListDomainInfoContent: {
-          DomainInfoList: {
-            DomainInfo: [
-              {
-                Name: 'example.com',
-                Expiration: '1361430589062',
-                Locked: 'yes',
-                Privacy: 'full',
-                RenewOption: 'auto',
-              },
-            ],
-          },
-        },
-      },
-    }));
+// the reference signature: Base64 HMAC-SHA256 over key\npath\n\nbody
+function expectedSignature(pathAndQuery: string, body = ''): string {
+  return createHmac('sha256', SECRET).update(`${KEY}\n${pathAndQuery}\n\n${body}`).digest('base64');
+}
 
+// wrap a data payload in a success envelope
+const ok = (data: unknown) => ({ code: 200, message: 'Success', data });
+
+describe('Dynadot provider (RESTful v2)', () => {
+  it('signs each request: Bearer key + X-Signature over key\\npath\\n\\nbody', async () => {
+    const dy = dynadot();
+    const calls = stubHttp(dy, () => ok({ account_info: { username: 'u' } }));
+    const res = await dy.testConnection();
+    expect(res.success).toBe(true);
+    expect(calls[0].path).toBe('/restful/v2/accounts/info');
+    expect(calls[0].headers?.['X-Signature']).toBe(expectedSignature('/restful/v2/accounts/info'));
+  });
+
+  it('treats a non-200 envelope code as an error (surfacing error.description)', async () => {
+    const dy = dynadot();
+    stubHttp(dy, () => ({ code: 400, error: { description: 'domain not found' } }));
+    await expect(dy.getDomain('missing.com')).rejects.toThrow(/domain not found/);
+  });
+
+  it('listDomains maps domain_info_list: dates, lock, privacy, auto-renew, nameservers', async () => {
+    const dy = dynadot();
+    const calls = stubHttp(dy, () =>
+      ok({
+        domain_info_list: [
+          {
+            domain_name: 'example.com',
+            registration_date: 1432685548000,
+            expiration_date: 1811376748000,
+            locked: 'Yes',
+            privacy: 'Full Privacy',
+            renew_option: 'auto-renew',
+            status: 'active',
+            glue_info: {
+              glue_type: 'NAME_SERVERS',
+              nameserver_list: [{ server_name: 'ns1.domain.io' }, { server_name: 'ns2.domain.io' }],
+            },
+          },
+        ],
+      })
+    );
     const domains = await dy.listDomains();
-    expect(domains).toHaveLength(1);
+    expect(calls[0].path).toBe('/restful/v2/domains');
     expect(domains[0]).toMatchObject({
       domainName: 'example.com',
       registrar: 'dynadot',
+      status: 'active',
       locked: true,
       privacy: true,
       autoRenew: true,
+      nameservers: ['ns1.domain.io', 'ns2.domain.io'],
     });
+    expect(domains[0].expirationDate?.toISOString()).toBe('2027-05-27T00:12:28.000Z');
   });
 
-  it('tolerates the SuccessCode header variant and collapses single-item lists', async () => {
+  it('getDomain reads domain_info; "No Privacy" maps to privacy=false', async () => {
     const dy = dynadot();
-    // some commands report success as `SuccessCode`, and api3 collapses a
-    // one-element list to a bare object rather than an array
-    stubHttp(dy, () => ({
-      ListDomainInfoResponse: {
-        ListDomainInfoResponseHeader: { SuccessCode: '0' },
-        ListDomainInfoContent: {
-          DomainInfoList: { DomainInfo: { Name: 'solo.com' } },
-        },
-      },
-    }));
-
-    const domains = await dy.listDomains();
-    expect(domains).toHaveLength(1);
-    expect(domains[0].domainName).toBe('solo.com');
+    const calls = stubHttp(dy, () =>
+      ok({ domain_info: { domain_name: 'example.com', privacy: 'No Privacy', locked: 'No' } })
+    );
+    const d = await dy.getDomain('example.com');
+    expect(calls[0].path).toBe('/restful/v2/domains/example.com');
+    expect(d).toMatchObject({ domainName: 'example.com', privacy: false, locked: false });
   });
 
-  it('throws on a non-zero response code', async () => {
+  it('getContacts resolves distinct contact ids, de-dupes, splits name and joins phone', async () => {
     const dy = dynadot();
-    stubHttp(dy, () => ({
-      Response: { ResponseCode: '-1', Error: 'Invalid API key' },
-    }));
-    await expect(dy.listDomains()).rejects.toThrow('Invalid API key');
-  });
-
-  it('getDomain reads domain_info and maps the single DomainInfo object', async () => {
-    const dy = dynadot();
-    const calls = stubHttp(dy, () => ({
-      DomainInfoResponse: {
-        DomainInfoHeader: { ResponseCode: '0' },
-        DomainInfoContent: { DomainInfo: { Name: 'example.com', Locked: 'no' } },
-      },
-    }));
-    const domain = await dy.getDomain('example.com');
-    expect(domain.domainName).toBe('example.com');
-    expect(domain.locked).toBe(false);
-    expect(calls[0].query).toMatchObject({ command: 'domain_info', domain: 'example.com' });
-  });
-
-  it('checkAvailability parses the "77.00 in USD" price string', async () => {
-    const dy = dynadot();
-    stubHttp(dy, () => ({
-      SearchResponse: {
-        SearchHeader: { ResponseCode: '0' },
-        SearchContent: {
-          SearchResults: [
-            { DomainName: 'example.com', Available: 'yes', Price: '77.00 in USD' },
-            { DomainName: 'taken.com', Available: 'no' },
-          ],
-        },
-      },
-    }));
-
-    const results = await dy.checkAvailability(['example.com', 'taken.com']);
-    expect(results[0]).toMatchObject({
-      domainName: 'example.com',
-      available: true,
-      price: 77,
-      currency: 'USD',
-      period: 1,
-    });
-    expect(results[1]).toMatchObject({ domainName: 'taken.com', available: false });
-    expect(results[1].price).toBeUndefined();
-  });
-
-  it('getDnsRecords maps main + subdomain records, with MX distance from Value2', async () => {
-    const dy = dynadot();
-    stubHttp(dy, () => ({
-      GetDnsResponse: {
-        GetDnsHeader: { ResponseCode: '0' },
-        GetDnsContent: {
-          NameServerSettings: {
-            TTL: '3600',
-            MainDomains: {
-              MainDomainRecord: [
-                { RecordType: 'a', Value: '203.0.113.10' },
-                { RecordType: 'mx', Value: 'mail.example.com', Value2: '10' },
-              ],
-            },
-            SubDomains: {
-              SubDomainRecord: { Subhost: 'www', RecordType: 'cname', Value: 'example.com' },
-            },
+    const calls = stubHttp(dy, req => {
+      if (req.path === '/restful/v2/domains/example.com') {
+        return ok({
+          domain_info: {
+            registrant_contact_id: 111,
+            admin_contact_id: 111, // shares the registrant -> one fetch
+            technical_contact_id: 222,
+            billing_contact_id: 0, // no dedicated contact
           },
+        });
+      }
+      const id = req.path.split('/').pop();
+      const contact =
+        id === '111'
+          ? {
+              name: 'Homer Simpson',
+              organization: 'Springfield Power',
+              email: 'homer@example.com',
+              phone_cc: '1',
+              phone_number: '999-555-1212',
+              address1: '742 Evergreen Terrace',
+              city: 'Springfield',
+              state: 'IL',
+              zip: '55555',
+              country: 'US',
+            }
+          : { name: 'Solo', email: 't@example.com', city: 'Town', country: 'US' };
+      return ok({ contact });
+    });
+    const contacts = await dy.getContacts('example.com');
+    // domain_info first, then get_contact for 111 and 222 only (0 skipped, dupes merged)
+    expect(calls.map(c => c.path)).toEqual([
+      '/restful/v2/domains/example.com',
+      '/restful/v2/contacts/111',
+      '/restful/v2/contacts/222',
+    ]);
+    expect(contacts.registrant).toMatchObject({
+      firstName: 'Homer',
+      lastName: 'Simpson',
+      organization: 'Springfield Power',
+      phone: '+1.999-555-1212',
+      postalCode: '55555',
+    });
+    // admin shares id 111 -> same contact
+    expect(contacts.admin?.firstName).toBe('Homer');
+    // tech is a lone token -> empty last name
+    expect(contacts.tech).toMatchObject({ firstName: 'Solo', lastName: '' });
+    // billing id 0 -> unset
+    expect(contacts.billing).toBeUndefined();
+  });
+
+  it('getDnsRecords maps apex + subdomain records (MX priority from record_value2)', async () => {
+    const dy = dynadot();
+    const calls = stubHttp(dy, () =>
+      ok({
+        glue_info: {
+          glue_type: 'DNS',
+          ttl: '300',
+          dns_main_list: [
+            { record_type: 'a', record_value1: '1.2.3.4' },
+            { record_type: 'mx', record_value1: 'mail.example.com', record_value2: '10' },
+          ],
+          dns_sub_list: [{ sub_host: 'www', record_type: 'a', record_value1: '1.2.3.4' }],
         },
-      },
-    }));
-
+      })
+    );
     const records = await dy.getDnsRecords('example.com');
+    expect(calls[0].path).toBe('/restful/v2/domains/example.com/records');
     expect(records).toEqual([
-      { type: 'A', name: '@', value: '203.0.113.10', ttl: 3600 },
-      { type: 'MX', name: '@', value: 'mail.example.com', ttl: 3600, priority: 10 },
-      { type: 'CNAME', name: 'www', value: 'example.com', ttl: 3600 },
+      { type: 'A', name: '@', value: '1.2.3.4', ttl: 300 },
+      { type: 'MX', name: '@', value: 'mail.example.com', ttl: 300, priority: 10 },
+      { type: 'A', name: 'www', value: '1.2.3.4', ttl: 300 },
     ]);
   });
 
-  it('setDnsRecords splits apex vs subdomain params and rejects unsupported types', async () => {
+  it('getDnsRecords returns [] when the domain is not Dynadot-DNS-hosted', async () => {
     const dy = dynadot();
-    const calls = stubHttp(dy, () => ({
-      SetDnsResponse: { SetDnsHeader: { ResponseCode: '0' } },
-    }));
+    stubHttp(dy, () => ok({ glue_info: { glue_type: 'NAME_SERVERS', nameserver_list: [] } }));
+    expect(await dy.getDnsRecords('example.com')).toEqual([]);
+  });
 
-    const res = await dy.setDnsRecords('example.com', [
-      { type: 'A', name: '@', value: '203.0.113.10', ttl: 600 },
-      { type: 'MX', name: '@', value: 'mail.example.com', priority: 10 },
-      { type: 'CNAME', name: 'www', value: 'example.com' },
+  it('checkAvailability maps bulk_search: available/premium/price from the 1-year entry', async () => {
+    const dy = dynadot();
+    const calls = stubHttp(dy, () =>
+      ok({
+        domain_result_list: [
+          {
+            domain_name: 'free.com',
+            available: 'Yes',
+            premium: 'no',
+            price_list: [
+              { currency: 'USD', unit: '(price/1 year)', registration_price: '10.88' },
+              { currency: 'USD', unit: '(price/2 year)', registration_price: '21.76' },
+            ],
+          },
+          { domain_name: 'taken.com', available: 'No' },
+        ],
+      })
+    );
+    const results = await dy.checkAvailability(['free.com', 'taken.com']);
+    expect(calls[0].path).toBe(
+      '/restful/v2/domains/bulk_search?domain_name_list=free.com%2Ctaken.com&show_price=true'
+    );
+    expect(results).toEqual([
+      {
+        domainName: 'free.com',
+        available: true,
+        premium: false,
+        price: 10.88,
+        currency: 'USD',
+        period: 1,
+      },
+      {
+        domainName: 'taken.com',
+        available: false,
+        premium: undefined,
+        price: undefined,
+        currency: undefined,
+        period: undefined,
+      },
     ]);
-    expect(res.success).toBe(true);
-    expect(calls[0].query).toMatchObject({
-      command: 'set_dns2',
-      domain: 'example.com',
-      main_record_type0: 'a',
-      main_record0: '203.0.113.10',
-      main_record_type1: 'mx',
-      main_record1: 'mail.example.com',
-      main_recordx1: 10,
-      subdomain0: 'www',
-      sub_record_type0: 'cname',
-      sub_record0: 'example.com',
-      ttl: 600,
+  });
+
+  it('getPricing needs a full domain and maps register/renew/transfer', async () => {
+    const dy = dynadot();
+    stubHttp(dy, () =>
+      ok({
+        domain_result_list: [
+          {
+            domain_name: 'example.com',
+            price_list: [
+              {
+                currency: 'USD',
+                unit: '(price/1 year)',
+                registration_price: '10.88',
+                renewal_price: '12.99',
+                transfer_price: '9.50',
+              },
+            ],
+          },
+        ],
+      })
+    );
+    expect(await dy.getPricing('example.com')).toEqual({
+      tld: 'com',
+      currency: 'USD',
+      registration: 10.88,
+      renewal: 12.99,
+      transfer: 9.5,
     });
-
-    await expect(
-      dy.setDnsRecords('example.com', [{ type: 'SRV', name: '@', value: 'x' }])
-    ).rejects.toThrow(/not supported/);
-  });
-
-  it('setAutoRenew maps enabled/disabled to renew_option values', async () => {
-    const dy = dynadot();
-    const calls = stubHttp(dy, () => ({
-      SetRenewOptionResponse: { SetRenewOptionHeader: { ResponseCode: '0' } },
-    }));
-    await dy.setAutoRenew('example.com', true);
-    await dy.setAutoRenew('example.com', false);
-    expect(calls[0].query).toMatchObject({ command: 'set_renew_option', renew_option: 'auto' });
-    expect(calls[1].query).toMatchObject({ command: 'set_renew_option', renew_option: 'donot' });
-  });
-
-  it('setPrivacy maps enabled/disabled to option values', async () => {
-    const dy = dynadot();
-    const calls = stubHttp(dy, () => ({
-      SetPrivacyResponse: { SetPrivacyHeader: { ResponseCode: '0' } },
-    }));
-    await dy.setPrivacy('example.com', true);
-    await dy.setPrivacy('example.com', false);
-    expect(calls[0].query).toMatchObject({ command: 'set_privacy', option: 'full' });
-    expect(calls[1].query).toMatchObject({ command: 'set_privacy', option: 'off' });
-  });
-
-  it('updateNameservers rejects out-of-range counts and indexes ns params', async () => {
-    const dy = dynadot();
-    const calls = stubHttp(dy, () => ({
-      SetNsResponse: { SetNsHeader: { ResponseCode: '0' } },
-    }));
-    await expect(dy.updateNameservers('example.com', ['ns1.example.net'])).rejects.toThrow('2-13');
-
-    await dy.updateNameservers('example.com', ['ns1.example.net', 'ns2.example.net']);
-    expect(calls[0].query).toMatchObject({
-      command: 'set_ns',
-      ns0: 'ns1.example.net',
-      ns1: 'ns2.example.net',
-    });
-  });
-
-  it('a failed mutation surfaces the error message without throwing', async () => {
-    const dy = dynadot();
-    stubHttp(dy, () => ({
-      SetLockResponse: { SetLockHeader: { ResponseCode: '-1', Error: 'Domain is not eligible' } },
-    }));
-    const res = await dy.lockDomain('example.com');
-    expect(res).toEqual({ success: false, message: 'Domain is not eligible' });
-  });
-
-  it('getPricing throws for a bare TLD', async () => {
-    const dy = dynadot();
     await expect(dy.getPricing('com')).rejects.toBeInstanceOf(NotImplementedError);
   });
 
-  it('registerDomain sends register with duration and requires consent', async () => {
+  it('setDnsRecords POSTs the DNS glue body (apex/sub split, MX in record_value2)', async () => {
     const dy = dynadot();
-    const calls = stubHttp(dy, () => ({
-      RegisterResponse: { RegisterHeader: { ResponseCode: '0' } },
-    }));
-    const res = await dy.registerDomain('example.com', {
-      years: 2,
-      contacts: {},
-      consent: { agreedBy: 'user' },
-    });
+    const calls = stubHttp(dy, () => ok({}));
+    const res = await dy.setDnsRecords('example.com', [
+      { type: 'A', name: '@', value: '1.2.3.4', ttl: 600 },
+      { type: 'MX', name: '@', value: 'mail.example.com', priority: 20 },
+      { type: 'CNAME', name: 'www', value: 'example.com' },
+    ]);
     expect(res.success).toBe(true);
-    expect(calls[0].query).toMatchObject({
-      command: 'register',
-      domain: 'example.com',
-      duration: 2,
+    expect(calls[0]).toMatchObject({
+      method: 'POST',
+      path: '/restful/v2/domains/example.com/records',
     });
+    expect(calls[0].body).toEqual({
+      glue_type: 'DNS',
+      dns_main_list: [
+        { record_type: 'a', record_value1: '1.2.3.4' },
+        { record_type: 'mx', record_value1: 'mail.example.com', record_value2: '20' },
+      ],
+      dns_sub_list: [{ record_type: 'cname', record_value1: 'example.com', sub_host: 'www' }],
+      ttl: '600',
+    });
+  });
+
+  it('setDnsRecords rejects unsupported record types', async () => {
+    const dy = dynadot();
+    stubHttp(dy, () => ok({}));
+    await expect(
+      dy.setDnsRecords('example.com', [{ type: 'URL', name: '@', value: 'https://x.com' }])
+    ).rejects.toThrow(/not supported/);
+  });
+
+  it('updateNameservers PUTs name_server_list and enforces the 2-13 count', async () => {
+    const dy = dynadot();
+    const calls = stubHttp(dy, () => ok({}));
+    const res = await dy.updateNameservers('example.com', ['ns1.x.com', 'ns2.x.com']);
+    expect(res.success).toBe(true);
+    expect(calls[0]).toMatchObject({
+      method: 'PUT',
+      path: '/restful/v2/domains/example.com/nameservers',
+      body: { name_server_list: ['ns1.x.com', 'ns2.x.com'] },
+    });
+    await expect(dy.updateNameservers('example.com', ['only1.x.com'])).rejects.toThrow(/2-13/);
+  });
+
+  it('lock/unlock and setPrivacy PUT the expected status bodies', async () => {
+    const dy = dynadot();
+    const calls = stubHttp(dy, () => ok({}));
+    await dy.lockDomain('example.com');
+    await dy.unlockDomain('example.com');
+    await dy.setPrivacy('example.com', true);
+    expect(calls[0]).toMatchObject({
+      method: 'PUT',
+      path: '/restful/v2/domains/example.com/domain_lock_status',
+      body: { locked: 'Yes' },
+    });
+    expect(calls[1].body).toEqual({ locked: 'No' });
+    expect(calls[2]).toMatchObject({
+      path: '/restful/v2/domains/example.com/privacy',
+      body: { privacy: 'Full Privacy' },
+    });
+  });
+
+  it('setAutoRenew and renewDomain hit the right endpoints', async () => {
+    const dy = dynadot();
+    const calls = stubHttp(dy, () => ok({}));
+    await dy.setAutoRenew('example.com', true);
+    await dy.renewDomain('example.com', 2);
+    expect(calls[0]).toMatchObject({
+      method: 'PUT',
+      path: '/restful/v2/domains/example.com/renew_option',
+      body: { renew_option: 'auto-renew' },
+    });
+    expect(calls[1]).toMatchObject({
+      method: 'POST',
+      path: '/restful/v2/domains/example.com/renew',
+      body: { duration: 2 },
+    });
+  });
+
+  it('registerDomain/transferIn require consent and POST the v2 bodies', async () => {
+    const dy = dynadot();
+    const calls = stubHttp(dy, () => ok({}));
 
     await expect(dy.registerDomain('example.com', { contacts: {} })).rejects.toBeInstanceOf(
       ConsentRequiredError
     );
-  });
+    await expect(dy.transferIn('example.com', { authCode: 'EPP1' })).rejects.toBeInstanceOf(
+      ConsentRequiredError
+    );
 
-  it('transferIn sends transfer with the auth code param', async () => {
-    const dy = dynadot();
-    const calls = stubHttp(dy, () => ({
-      TransferResponse: { TransferHeader: { ResponseCode: '0' } },
-    }));
-    const res = await dy.transferIn('example.com', {
-      authCode: 'EPP123',
+    const reg = await dy.registerDomain('example.com', {
+      years: 2,
+      contacts: {},
       consent: { agreedBy: 'user' },
     });
-    expect(res.success).toBe(true);
-    expect(calls[0].query).toMatchObject({
-      command: 'transfer',
-      domain: 'example.com',
-      auth: 'EPP123',
-    });
-  });
-
-  it('getContacts resolves per-role ContactIds via get_contact and splits the name', async () => {
-    const dy = dynadot();
-    // registrant + admin share id 100; tech uses id 200; billing has no
-    // dedicated contact (id 0 -> account default whois, left unset).
-    const contacts: Record<string, unknown> = {
-      '100': {
-        ContactId: '100',
-        Name: 'John Q Doe',
-        Organization: 'Example Corp',
-        Email: 'john@example.com',
-        PhoneCc: '1',
-        PhoneNum: '4805551234',
-        FaxCc: '1',
-        FaxNum: '4805559999',
-        Address1: '123 Main St',
-        Address2: 'Suite 100',
-        City: 'Phoenix',
-        State: 'AZ',
-        ZipCode: '85001',
-        Country: 'US',
-      },
-      '200': {
-        ContactId: '200',
-        Name: 'Jane',
-        Email: 'jane@example.com',
-        PhoneNum: '2025550000',
-        Address1: '5 Tech Way',
-        City: 'Denver',
-        State: 'CO',
-        ZipCode: '80202',
-        Country: 'US',
-      },
-    };
-
-    const calls = stubHttp(dy, req => {
-      if (req.query?.command === 'domain_info') {
-        return {
-          DomainInfoResponse: {
-            DomainInfoHeader: { ResponseCode: '0' },
-            DomainInfoContent: {
-              DomainInfo: {
-                Name: 'example.com',
-                Whois: {
-                  Registrant: { ContactId: '100' },
-                  Admin: { ContactId: '100' },
-                  Technical: { ContactId: '200' },
-                  Billing: { ContactId: '0' },
-                },
-              },
-            },
-          },
-        };
-      }
-      // get_contact
-      const id = String(req.query?.contact_id ?? '');
-      return {
-        GetContactResponse: {
-          GetContactHeader: { ResponseCode: '0' },
-          GetContactContent: { Contact: contacts[id] },
-        },
-      };
+    expect(reg.success).toBe(true);
+    expect(calls.at(-1)).toMatchObject({
+      method: 'POST',
+      path: '/restful/v2/domains/register',
+      body: { domain_name: 'example.com', duration: 2 },
     });
 
-    const set = await dy.getContacts('example.com');
-
-    expect(set.registrant).toEqual({
-      firstName: 'John',
-      lastName: 'Q Doe',
-      organization: 'Example Corp',
-      email: 'john@example.com',
-      phone: '+1.4805551234',
-      fax: '+1.4805559999',
-      address1: '123 Main St',
-      address2: 'Suite 100',
-      city: 'Phoenix',
-      state: 'AZ',
-      postalCode: '85001',
-      country: 'US',
+    await dy.transferIn('example.com', { authCode: 'EPP1', consent: { agreedBy: 'user' } });
+    expect(calls.at(-1)).toMatchObject({
+      method: 'POST',
+      path: '/restful/v2/domains/transfer_in',
+      body: { domain_name: 'example.com', auth_code: 'EPP1' },
     });
-    // admin shares the same contact as registrant
-    expect(set.admin).toEqual(set.registrant);
-    // tech: single-token name -> empty last name; no country code on the phone
-    expect(set.tech).toMatchObject({
-      firstName: 'Jane',
-      lastName: '',
-      phone: '2025550000',
-      postalCode: '80202',
-    });
-    expect(set.tech?.organization).toBeUndefined();
-    expect(set.tech?.fax).toBeUndefined();
-    // billing had ContactId 0 -> left unset
-    expect(set.billing).toBeUndefined();
-
-    // domain_info once, then get_contact once per distinct id (100, 200) — id
-    // 100 is not re-fetched for admin
-    const commands = calls.map(c => c.query?.command);
-    expect(commands).toEqual(['domain_info', 'get_contact', 'get_contact']);
-    expect(calls[1].query).toMatchObject({ command: 'get_contact', contact_id: '100' });
-    expect(calls[2].query).toMatchObject({ command: 'get_contact', contact_id: '200' });
-  });
-
-  it('getContacts throws NotFoundError when domain_info has no DomainInfo', async () => {
-    const dy = dynadot();
-    stubHttp(dy, () => ({
-      DomainInfoResponse: { DomainInfoHeader: { ResponseCode: '0' }, DomainInfoContent: {} },
-    }));
-    await expect(dy.getContacts('missing.com')).rejects.toThrow(/not found/);
-  });
-
-  it('leaves updateContacts throwing NotImplementedError', async () => {
-    const dy = dynadot();
-    await expect(dy.updateContacts('example.com', {})).rejects.toBeInstanceOf(NotImplementedError);
   });
 });
