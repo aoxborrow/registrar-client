@@ -1,11 +1,16 @@
 import type {
   ConfigField,
   ConnectionResult,
+  Contact,
+  ContactSet,
+  DnsRecord,
   Domain,
+  DomainAvailability,
   ListDomainsOptions,
   OperationResult,
   RegistrarOptions,
   RequestOptions,
+  TldPricing,
 } from '../types';
 import { createDomain, filterDomains } from '../utils';
 import { toRegistrarError } from '../errors';
@@ -13,9 +18,39 @@ import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
 
-// Shape of a domain in `GET /v5/domain/domains`. `status` is an array of EPP
+// A contact as returned under `GET /v5/domain/domains/{fqdn}/contacts` (and
+// nested in the domain-detail `contacts` object). Gandi names fields `given`/
+// `family`/`streetaddr`/`zip`; privacy is `data_obfuscated` on the detail
+// endpoint (older responses carried `extra_parameters.whois_privacy`).
+interface GandiContact {
+  given?: string;
+  family?: string;
+  orgname?: string;
+  email?: string;
+  phone?: string;
+  fax?: string;
+  streetaddr?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+  country?: string;
+  data_obfuscated?: boolean;
+  extra_parameters?: { whois_privacy?: string };
+}
+
+// the four contact roles Gandi exposes; `bill` maps to our `billing`
+interface GandiContacts {
+  owner?: GandiContact;
+  admin?: GandiContact;
+  tech?: GandiContact;
+  bill?: GandiContact;
+}
+
+// Shape of a domain in `GET /v5/domain/domains` (list) and
+// `GET /v5/domain/domains/{fqdn}` (detail). `status` is an array of EPP
 // statuses; `autorenew` may be a bare boolean or an object; nameservers arrive
-// as `nameserver.hosts` (a fallback `nameservers` array is tolerated too).
+// as `nameserver.hosts` on the list endpoint and as a top-level `nameservers`
+// array on the detail endpoint.
 interface GandiDomain {
   fqdn: string;
   status?: string | string[];
@@ -26,9 +61,46 @@ interface GandiDomain {
     updated_at?: string;
   };
   autorenew?: boolean | { enabled?: boolean };
-  contacts?: { owner?: { extra_parameters?: { whois_privacy?: string } } };
+  contacts?: GandiContacts;
   nameserver?: { current?: string; hosts?: string[] };
   nameservers?: string[];
+}
+
+// one record set from `GET /v5/livedns/domains/{fqdn}/records`; a set can hold
+// multiple values (e.g. several A records for one name), flattened on read.
+interface GandiRecord {
+  rrset_type?: string;
+  rrset_name?: string;
+  rrset_ttl?: number;
+  rrset_values?: string[];
+}
+
+// a single price entry within a pricing/check product
+interface GandiPrice {
+  min_duration?: number;
+  max_duration?: number;
+  duration_unit?: string;
+  price_before_taxes?: number;
+  price_after_taxes?: number;
+  type?: string;
+  discount?: boolean;
+}
+
+// a product in `GET /v5/domain/pricing` and `GET /v5/domain/check`. Each product
+// carries the `process` (create/renew/transfer) its `prices` apply to; `check`
+// products also carry availability `status`.
+interface GandiProduct {
+  name?: string;
+  status?: string;
+  process?: string;
+  prices?: GandiPrice[];
+}
+
+// envelope shared by the pricing and check endpoints
+interface GandiPricingResponse {
+  currency?: string;
+  grid?: string;
+  products?: GandiProduct[];
 }
 
 /**
@@ -57,7 +129,7 @@ export class GandiRegistrar extends BaseRegistrar {
   // state as idempotent success.
   static readonly extendedFeatures: readonly RegistrarFeature[] = [
     Feature.GetAuthCode,
-    Feature.ConfigureDnssec,
+    Feature.SetDnssec,
     Feature.GetGlueRecords,
     Feature.SetGlueRecords,
     Feature.ProvisionMailbox,
@@ -131,9 +203,162 @@ export class GandiRegistrar extends BaseRegistrar {
       renewalDate: d.dates?.updated_at,
       autoRenew,
       locked: statuses.some(s => /transferprohibited|locked/i.test(s)),
-      privacy: d.contacts?.owner?.extra_parameters?.whois_privacy === 'enabled',
+      privacy:
+        d.contacts?.owner?.extra_parameters?.whois_privacy === 'enabled' ||
+        d.contacts?.owner?.data_obfuscated === true,
       nameservers: d.nameserver?.hosts ?? d.nameservers ?? [],
     });
+  }
+
+  // fetch a single domain's details (dates, status, nameservers, privacy) via
+  // `GET /v5/domain/domains/{fqdn}` and normalize through the shared toDomain.
+  override async getDomain(domainName: string, opts?: RequestOptions): Promise<Domain> {
+    const d = await this.http.request<GandiDomain>({
+      path: `/domain/domains/${domainName}`,
+      ...opts,
+    });
+    return this.toDomain({ ...d, fqdn: d.fqdn ?? domainName });
+  }
+
+  // read the nameservers set on a domain. The dedicated endpoint returns a bare
+  // JSON array of hostname strings.
+  override async getNameservers(domainName: string, opts?: RequestOptions): Promise<string[]> {
+    const res = await this.http.request<string[]>({
+      path: `/domain/domains/${domainName}/nameservers`,
+      ...opts,
+    });
+    return Array.isArray(res) ? res.map(String) : [];
+  }
+
+  // read the registrant/admin/tech/billing contacts. Gandi keys these
+  // owner/admin/tech/bill; `owner` is the registrant and `bill` the billing role.
+  override async getContacts(domainName: string, opts?: RequestOptions): Promise<ContactSet> {
+    const res = await this.http.request<GandiContacts>({
+      path: `/domain/domains/${domainName}/contacts`,
+      ...opts,
+    });
+    return {
+      registrant: fromGandiContact(res.owner),
+      admin: fromGandiContact(res.admin),
+      tech: fromGandiContact(res.tech),
+      billing: fromGandiContact(res.bill),
+    };
+  }
+
+  /**
+   * Read DNS records from LiveDNS (`GET /v5/livedns/domains/{fqdn}/records`).
+   * A LiveDNS record set carries an array of values, so each value is emitted as
+   * its own normalized DnsRecord. MX values are "priority target" and SRV values
+   * "priority weight port target"; those numeric prefixes are split into the
+   * dedicated DnsRecord fields, leaving `value` as the target.
+   */
+  override async getDnsRecords(domainName: string, opts?: RequestOptions): Promise<DnsRecord[]> {
+    const rrsets = await this.http.request<GandiRecord[]>({
+      path: `/livedns/domains/${domainName}/records`,
+      ...opts,
+    });
+    const records: DnsRecord[] = [];
+    for (const rr of rrsets ?? []) {
+      const type = (rr.rrset_type ?? '').toUpperCase();
+      const name = rr.rrset_name ?? '';
+      for (const value of rr.rrset_values ?? []) {
+        const record: DnsRecord = { type, name, value };
+        if (rr.rrset_ttl != null) record.ttl = rr.rrset_ttl;
+        if (type === 'MX') {
+          const [priority, ...rest] = value.split(/\s+/);
+          const p = Number(priority);
+          if (Number.isFinite(p) && rest.length > 0) {
+            record.priority = p;
+            record.value = rest.join(' ');
+          }
+        } else if (type === 'SRV') {
+          const parts = value.split(/\s+/);
+          if (parts.length === 4) {
+            record.priority = Number(parts[0]);
+            record.weight = Number(parts[1]);
+            record.port = Number(parts[2]);
+            record.value = parts[3];
+          }
+        }
+        records.push(record);
+      }
+    }
+    return records;
+  }
+
+  /**
+   * Per-TLD pricing via `GET /v5/domain/pricing`. `processes` is a repeatable
+   * query param and each returned product is tagged with the `process` its prices
+   * cover, so a single call fetches register/renew/transfer. A bare TLD is turned
+   * into a sample fqdn (`example.<tld>`) since the endpoint keys off a domain
+   * name. Gandi returns prices in major currency units already.
+   */
+  override async getPricing(tldOrDomain: string, opts?: RequestOptions): Promise<TldPricing> {
+    const tld = (
+      tldOrDomain.includes('.') ? tldOrDomain.slice(tldOrDomain.indexOf('.') + 1) : tldOrDomain
+    ).toLowerCase();
+    const name = tldOrDomain.includes('.') ? tldOrDomain : `example.${tld}`;
+
+    // `processes` must be repeated (create/renew/transfer); the query map can't
+    // hold a repeated key, so the params are encoded directly into the path.
+    const params = new URLSearchParams({ name });
+    for (const process of ['create', 'renew', 'transfer']) {
+      params.append('processes', process);
+    }
+
+    const resp = await this.http.request<GandiPricingResponse>({
+      path: `/domain/pricing?${params.toString()}`,
+      ...opts,
+    });
+    const products = resp.products ?? [];
+    const priceFor = (process: string): number | undefined =>
+      pickPrice(products.find(p => p.process === process)?.prices?.[0]);
+
+    return {
+      tld,
+      currency: resp.currency ?? 'USD',
+      registration: priceFor('create'),
+      renewal: priceFor('renew'),
+      transfer: priceFor('transfer'),
+    };
+  }
+
+  /**
+   * Availability via `GET /v5/domain/check`, which checks a single name per call,
+   * so multiple names are looped. The default `create` product carries the
+   * availability `status` and registration price; a status of `available*` means
+   * registrable, and a `premium` price type (or `*premium` status) flags premium
+   * names.
+   */
+  override async checkAvailability(
+    domainNames: string[],
+    opts?: RequestOptions
+  ): Promise<DomainAvailability[]> {
+    const results: DomainAvailability[] = [];
+    for (const domainName of domainNames) {
+      const resp = await this.http.request<GandiPricingResponse>({
+        path: '/domain/check',
+        query: { name: domainName },
+        ...opts,
+      });
+      const products = resp.products ?? [];
+      const product = products.find(p => p.process === 'create') ?? products[0];
+      const status = product?.status ?? '';
+      const price = product?.prices?.[0];
+      const result: DomainAvailability = {
+        domainName: product?.name ?? domainName,
+        available: status.startsWith('available'),
+        premium: status.includes('premium') || price?.type === 'premium',
+      };
+      const amount = pickPrice(price);
+      if (amount != null) result.price = amount;
+      if (resp.currency) result.currency = resp.currency;
+      if (price?.duration_unit === 'y' && price.min_duration != null) {
+        result.period = price.min_duration;
+      }
+      results.push(result);
+    }
+    return results;
   }
 
   override async renewDomain(
@@ -191,4 +416,32 @@ export class GandiRegistrar extends BaseRegistrar {
       return { success: false, message: toRegistrarError(error).message };
     }
   }
+}
+
+// map a Gandi contact into the normalized Contact shape. Gandi has no distinct
+// second address line, so `address2` is left undefined.
+function fromGandiContact(c: GandiContact | undefined): Contact | undefined {
+  if (!c) return undefined;
+  return {
+    firstName: c.given ?? '',
+    lastName: c.family ?? '',
+    organization: c.orgname ? String(c.orgname) : undefined,
+    email: c.email ?? '',
+    phone: c.phone ?? '',
+    fax: c.fax ? String(c.fax) : undefined,
+    address1: c.streetaddr ?? '',
+    city: c.city ?? '',
+    state: c.state ? String(c.state) : undefined,
+    postalCode: c.zip ?? '',
+    country: c.country ?? '',
+  };
+}
+
+// pick a numeric price from a Gandi price entry, preferring the tax-inclusive
+// amount. Gandi reports prices in major currency units (e.g. 15.5), so no
+// cents-to-dollars conversion is needed.
+function pickPrice(price: GandiPrice | undefined): number | undefined {
+  if (!price) return undefined;
+  const value = price.price_after_taxes ?? price.price_before_taxes;
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }

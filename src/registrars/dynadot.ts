@@ -1,6 +1,8 @@
 import type {
   ConfigField,
   ConnectionResult,
+  Contact,
+  ContactSet,
   DnsRecord,
   Domain,
   DomainAvailability,
@@ -28,6 +30,39 @@ interface DynadotDomainInfo {
   Locked?: string;
   Privacy?: string;
   NameServerSettings?: unknown;
+  // per-role contact ids (domain_info only); each role is `{ ContactId }`
+  Whois?: DynadotWhois;
+}
+
+// the Whois block on domain_info: one `{ ContactId }` object per role
+interface DynadotWhoisRole {
+  ContactId?: string | number;
+}
+
+interface DynadotWhois {
+  Registrant?: DynadotWhoisRole;
+  Admin?: DynadotWhoisRole;
+  Technical?: DynadotWhoisRole;
+  Billing?: DynadotWhoisRole;
+}
+
+// a full contact record as `get_contact` returns it. Name is a single combined
+// field (not first/last); phone/fax split into a country code + number.
+interface DynadotContact {
+  ContactId?: string | number;
+  Name?: string;
+  Organization?: string;
+  Email?: string;
+  PhoneCc?: string | number;
+  PhoneNum?: string | number;
+  FaxCc?: string | number;
+  FaxNum?: string | number;
+  Address1?: string;
+  Address2?: string;
+  City?: string;
+  State?: string;
+  ZipCode?: string;
+  Country?: string;
 }
 
 // one result from the `search` command
@@ -77,12 +112,15 @@ const SUPPORTED_DNS_TYPES = new Set(['A', 'AAAA', 'CNAME', 'MX', 'TXT']);
  * they use the account's default WHOIS contact (api3 doesn't take inline contact
  * data) and spend real money, so treat them as documented-but-unverified.
  *
+ * `getContacts` reads the per-role `ContactId`s from `domain_info`'s `Whois`
+ * block, then resolves each distinct id via `get_contact`. Dynadot's contact
+ * shape is lossy against ours — a single `Name` field (split into first/last on
+ * the first space) and separate `PhoneCc`/`PhoneNum` (rejoined as `+cc.num`).
+ *
  * ## Not implemented (fall through to BaseRegistrar's NotImplementedError)
- * - `getContacts` / `updateContacts` — api3 references contacts on a domain only
- *   by numeric `ContactId` (via `domain_info`'s `Whois` block), requiring a
- *   second `get_contact` call per role, and its contact shape is lossy against
- *   ours (a single `Name` field, not first/last; split `PhoneCc`/`PhoneNum`).
- *   That round-trip and mapping need live verification before shipping.
+ * - `updateContacts` — api3 sets a domain's whois from an existing numeric
+ *   `ContactId` (via `set_contact`/`set_whois`), not from inline contact data,
+ *   so mapping our `Contact` onto it needs a create-or-match step; unverified.
  *
  * Confirmed against real captures / the `7c/dynadot` wrapper: the envelope,
  * `list_domain`, `domain_info`, `get_dns`, `set_dns2`, `set_ns`. Implemented
@@ -105,7 +143,7 @@ export class DynadotRegistrar extends BaseRegistrar {
   // appraisal, and bulk (Smart Folder) settings. Email is forwarding-only.
   static readonly extendedFeatures: readonly RegistrarFeature[] = [
     Feature.GetAuthCode,
-    Feature.ConfigureDnssec,
+    Feature.SetDnssec,
     Feature.GetGlueRecords,
     Feature.SetGlueRecords,
     Feature.SetEmailForwarding,
@@ -196,6 +234,42 @@ export class DynadotRegistrar extends BaseRegistrar {
   override async getNameservers(domainName: string, opts?: RequestOptions): Promise<string[]> {
     const domain = await this.getDomain(domainName, opts);
     return domain.nameservers;
+  }
+
+  /**
+   * Reads the registrant/admin/tech/billing contacts. `domain_info` only carries
+   * a numeric `ContactId` per role in its `Whois` block, so this resolves each
+   * distinct id with a `get_contact` call (roles typically share one contact, so
+   * ids are de-duplicated). A `0`/empty id means the role has no dedicated
+   * contact (the account default whois), and is left unset.
+   */
+  override async getContacts(domainName: string, opts?: RequestOptions): Promise<ContactSet> {
+    const content = await this.read({ command: 'domain_info', domain: domainName }, opts);
+    const info = content.DomainInfo as DynadotDomainInfo | undefined;
+    if (!info) throw new NotFoundError(`Dynadot: domain '${domainName}' not found`);
+
+    const whois = info.Whois ?? {};
+    const roleIds: [keyof ContactSet, string][] = [
+      ['registrant', contactId(whois.Registrant)],
+      ['admin', contactId(whois.Admin)],
+      ['tech', contactId(whois.Technical)],
+      ['billing', contactId(whois.Billing)],
+    ];
+
+    // fetch each distinct, non-default id once
+    const byId = new Map<string, Contact>();
+    for (const [, id] of roleIds) {
+      if (!id || id === '0' || byId.has(id)) continue;
+      const res = await this.read({ command: 'get_contact', contact_id: id }, opts);
+      byId.set(id, toContact(asRecord(res.Contact ?? res)));
+    }
+
+    const contacts: ContactSet = {};
+    for (const [role, id] of roleIds) {
+      const contact = byId.get(id);
+      if (contact) contacts[role] = contact;
+    }
+    return contacts;
   }
 
   /**
@@ -501,6 +575,59 @@ function toDnsRecord(r: DynadotDnsRecord, name: string, ttl: number | undefined)
   // MX distance comes back in Value2
   if (type === 'MX' && r.Value2 != null && r.Value2 !== '') record.priority = Number(r.Value2);
   return record;
+}
+
+// --- contact mapping between Dynadot's shape and the normalized Contact ---
+
+// read a role's numeric ContactId as a string ('' when absent)
+function contactId(role: DynadotWhoisRole | undefined): string {
+  return str(role?.ContactId);
+}
+
+// map a Dynadot get_contact record to the normalized Contact shape
+function toContact(c: DynadotContact): Contact {
+  const { firstName, lastName } = splitName(str(c.Name));
+  const contact: Contact = {
+    firstName,
+    lastName,
+    email: str(c.Email),
+    phone: joinPhone(c.PhoneCc, c.PhoneNum),
+    address1: str(c.Address1),
+    city: str(c.City),
+    postalCode: str(c.ZipCode),
+    country: str(c.Country),
+  };
+  const organization = str(c.Organization);
+  if (organization) contact.organization = organization;
+  const fax = joinPhone(c.FaxCc, c.FaxNum);
+  if (fax) contact.fax = fax;
+  const address2 = str(c.Address2);
+  if (address2) contact.address2 = address2;
+  const state = str(c.State);
+  if (state) contact.state = state;
+  return contact;
+}
+
+// Dynadot stores a single combined name; split it into first/last on the first
+// space (a lone token becomes the first name, with an empty last name).
+function splitName(name: string): { firstName: string; lastName: string } {
+  const trimmed = name.trim();
+  const space = trimmed.indexOf(' ');
+  if (space === -1) return { firstName: trimmed, lastName: '' };
+  return { firstName: trimmed.slice(0, space), lastName: trimmed.slice(space + 1).trim() };
+}
+
+// rejoin a split country code + number as "+cc.number" (e.g. "+1.4805551234")
+function joinPhone(cc: string | number | undefined, num: string | number | undefined): string {
+  const number = str(num);
+  if (!number) return '';
+  const code = str(cc);
+  return code ? `+${code}.${number}` : number;
+}
+
+// stringify a loosely-typed api3 scalar, guarding against objects/arrays
+function str(value: unknown): string {
+  return typeof value === 'string' ? value : typeof value === 'number' ? String(value) : '';
 }
 
 // parse an api3 price string like "77.00 in USD" into a number + currency

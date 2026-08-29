@@ -1,14 +1,18 @@
 import type {
   ConfigField,
   ConnectionResult,
+  ContactSet,
+  DnsRecord,
   Domain,
+  DomainAvailability,
   ListDomainsOptions,
   OperationResult,
   RegistrarOptions,
   RequestOptions,
+  TldPricing,
 } from '../types';
 import { createDomain, filterDomains } from '../utils';
-import { toRegistrarError } from '../errors';
+import { NotImplementedError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import type { RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
@@ -30,6 +34,31 @@ interface CfDomain {
   auto_renew?: boolean;
   locked?: boolean;
   name_servers?: string[];
+}
+
+// a zone object from the Cloudflare Zones API. Nameservers and DNS records live
+// on the Zones API, not the Registrar API, so several read methods resolve the
+// domain to its zone first.
+interface CfZone {
+  id: string;
+  name: string;
+  name_servers?: string[];
+}
+
+// a DNS record from the Cloudflare Zones DNS API. For SRV records, weight/port
+// are carried on a nested `data` object; `content` holds the primary value for
+// every type, and `priority` is populated for MX/SRV.
+interface CfDnsRecord {
+  type: string;
+  name: string;
+  content?: string;
+  ttl?: number;
+  priority?: number;
+  data?: {
+    weight?: number;
+    port?: number;
+    priority?: number;
+  };
 }
 
 /**
@@ -118,26 +147,121 @@ export class CloudflareRegistrar extends BaseRegistrar {
         throw new Error(res.errors?.[0]?.message ?? 'API request failed');
       }
       const list = res.result ?? [];
-      for (const d of list) {
-        domains.push(
-          createDomain({
-            domainName: d.name,
-            registrar: this.name,
-            status: d.status,
-            createdDate: d.created_at,
-            expirationDate: d.expires_at,
-            renewalDate: d.expires_at,
-            autoRenew: d.auto_renew ?? false,
-            locked: d.locked ?? false,
-            privacy: true, // Cloudflare includes WHOIS privacy by default
-            nameservers: d.name_servers ?? [],
-          })
-        );
-      }
+      for (const d of list) domains.push(this.toDomain(d));
       hasMore = list.length === perPage;
       page++;
     }
     return filterDomains(domains, search);
+  }
+
+  // map a Cloudflare Registrar domain payload to the normalized Domain shape
+  private toDomain(d: CfDomain): Domain {
+    return createDomain({
+      domainName: d.name,
+      registrar: this.name,
+      status: d.status,
+      createdDate: d.created_at,
+      expirationDate: d.expires_at,
+      renewalDate: d.expires_at,
+      autoRenew: d.auto_renew ?? false,
+      locked: d.locked ?? false,
+      privacy: true, // Cloudflare includes WHOIS privacy by default
+      nameservers: d.name_servers ?? [],
+    });
+  }
+
+  override async getDomain(domainName: string, opts?: RequestOptions): Promise<Domain> {
+    // Registrar API: GET /accounts/{account_id}/registrar/domains/{domain}
+    const res = await this.http.request<CfEnvelope<CfDomain>>({
+      path: `${this.accountPath}/${encodeURIComponent(domainName)}`,
+      ...opts,
+    });
+    if (!res.success || !res.result) {
+      throw new Error(res.errors?.[0]?.message ?? `Domain ${domainName} not found`);
+    }
+    return this.toDomain(res.result);
+  }
+
+  /**
+   * Nameservers come from the Zones API, not the Registrar API: a domain must be
+   * an active zone in the account for its Cloudflare-assigned nameservers to be
+   * known. GET /zones?name={domain} → the zone's `name_servers`.
+   */
+  override async getNameservers(domainName: string, opts?: RequestOptions): Promise<string[]> {
+    const zone = await this.findZone(domainName, opts);
+    if (!zone) {
+      throw new Error(
+        `${this.name}: ${domainName} is not a zone in this account; nameservers are only ` +
+          'available via the Zones API for domains added as zones'
+      );
+    }
+    return zone.name_servers ?? [];
+  }
+
+  /**
+   * DNS records live on the Zones API. Two-step: resolve the domain to its
+   * zone_id via GET /zones?name={domain}, then GET /zones/{zone_id}/dns_records.
+   */
+  override async getDnsRecords(domainName: string, opts?: RequestOptions): Promise<DnsRecord[]> {
+    const zone = await this.findZone(domainName, opts);
+    if (!zone) {
+      throw new Error(
+        `${this.name}: ${domainName} is not a zone in this account; DNS records are managed ` +
+          'through the Zones API for domains added as zones'
+      );
+    }
+    const res = await this.http.request<CfEnvelope<CfDnsRecord[]>>({
+      path: `/zones/${encodeURIComponent(zone.id)}/dns_records`,
+      ...opts,
+    });
+    if (!res.success) {
+      throw new Error(res.errors?.[0]?.message ?? 'Failed to list DNS records');
+    }
+    return (res.result ?? []).map(toDnsRecord);
+  }
+
+  override getContacts(_domainName: string, _opts?: RequestOptions): Promise<ContactSet> {
+    return Promise.reject(
+      new NotImplementedError(
+        `${this.name}: getContacts is not available — the Cloudflare Registrar API does not ` +
+          'expose editable WHOIS contact details'
+      )
+    );
+  }
+
+  override getPricing(_tldOrDomain: string, _opts?: RequestOptions): Promise<TldPricing> {
+    return Promise.reject(
+      new NotImplementedError(
+        `${this.name}: getPricing is not available — Cloudflare Registrar is at-cost with no ` +
+          'price-lookup API'
+      )
+    );
+  }
+
+  override checkAvailability(
+    _domainNames: string[],
+    _opts?: RequestOptions
+  ): Promise<DomainAvailability[]> {
+    return Promise.reject(
+      new NotImplementedError(
+        `${this.name}: checkAvailability is not available — the Cloudflare Registrar API has no ` +
+          'domain-availability endpoint (it only manages domains already in the account)'
+      )
+    );
+  }
+
+  // resolve a domain name to its Cloudflare zone via the Zones API (null if the
+  // domain is not a zone in this account)
+  private async findZone(domainName: string, opts?: RequestOptions): Promise<CfZone | null> {
+    const res = await this.http.request<CfEnvelope<CfZone[]>>({
+      path: '/zones',
+      query: { name: domainName },
+      ...opts,
+    });
+    if (!res.success) {
+      throw new Error(res.errors?.[0]?.message ?? 'Failed to look up zone');
+    }
+    return res.result?.find(z => z.name === domainName) ?? null;
   }
 
   override async renewDomain(
@@ -203,4 +327,20 @@ export class CloudflareRegistrar extends BaseRegistrar {
       return { success: false, message: toRegistrarError(error).message };
     }
   }
+}
+
+// map a Cloudflare DNS record to the generic DnsRecord shape. `content` holds
+// the value for every type; MX/SRV carry a `priority`, and SRV's weight/port
+// live on the nested `data` object.
+function toDnsRecord(r: CfDnsRecord): DnsRecord {
+  const type = r.type.toUpperCase();
+  const record: DnsRecord = { type, name: r.name, value: r.content ?? '' };
+  if (r.ttl != null) record.ttl = r.ttl;
+  const priority = r.priority ?? r.data?.priority;
+  if ((type === 'MX' || type === 'SRV') && priority != null) record.priority = priority;
+  if (type === 'SRV') {
+    if (r.data?.weight != null) record.weight = r.data.weight;
+    if (r.data?.port != null) record.port = r.data.port;
+  }
+  return record;
 }

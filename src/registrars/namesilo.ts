@@ -1,14 +1,20 @@
 import type {
   ConfigField,
   ConnectionResult,
+  Contact,
+  ContactSet,
+  DnsRecord,
   Domain,
+  DomainAvailability,
   ListDomainsOptions,
   OperationResult,
   RegistrarOptions,
   RequestOptions,
+  TldPricing,
 } from '../types';
 import { createDomain, filterDomains } from '../utils';
 import { NotFoundError, toRegistrarError } from '../errors';
+import { ensureArray } from '../xml';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
@@ -28,10 +34,72 @@ interface NsReply {
   private?: string;
   auto_renew?: string;
   nameservers?: unknown;
+  // getDomainInfo also returns the per-role internal contact IDs
+  contact_ids?: NsContactIds;
+  // contactList returns full contact records (single object or array)
+  contact?: NsContact | NsContact[];
+  // dnsListRecords returns resource_record entries (single object or array)
+  resource_record?: NsResourceRecord | NsResourceRecord[];
+  // checkRegisterAvailability groups results; each group wraps `domain` entries
+  available?: unknown;
+  unavailable?: unknown;
+  invalid?: unknown;
+  // getPrices returns one node per TLD keyed directly on the reply (e.g.
+  // reply.com = { registration, renew, transfer }); read via a Record cast
 }
 
 interface NsResponse {
   reply?: NsReply;
+}
+
+// getDomainInfo.contact_ids: internal NameSilo IDs per role (strings)
+interface NsContactIds {
+  registrant?: string | number;
+  administrative?: string | number;
+  technical?: string | number;
+  billing?: string | number;
+}
+
+// a full contact record from contactList (empty XML elements parse to '' or {})
+interface NsContact {
+  contact_id?: string | number;
+  first_name?: unknown;
+  last_name?: unknown;
+  company?: unknown;
+  address?: unknown;
+  address2?: unknown;
+  city?: unknown;
+  state?: unknown;
+  zip?: unknown;
+  country?: unknown;
+  email?: unknown;
+  phone?: unknown;
+  fax?: unknown;
+}
+
+// a DNS record from dnsListRecords (distance carries the MX priority)
+interface NsResourceRecord {
+  record_id?: string | number;
+  type?: unknown;
+  host?: unknown;
+  value?: unknown;
+  ttl?: unknown;
+  distance?: unknown;
+}
+
+// one TLD's price node from getPrices
+interface NsPriceNode {
+  registration?: unknown;
+  renew?: unknown;
+  transfer?: unknown;
+}
+
+// a normalized availability entry parsed from a checkRegisterAvailability group
+interface NsAvailEntry {
+  name: string;
+  price?: number;
+  premium?: boolean;
+  duration?: number;
 }
 
 // a domain entry from listDomains, which may arrive as a bare name or an object
@@ -74,7 +142,7 @@ export class NameSiloRegistrar extends BaseRegistrar {
   // forwarding, and domain forwarding. No webhooks (polling only).
   static readonly extendedFeatures: readonly RegistrarFeature[] = [
     Feature.GetAuthCode,
-    Feature.ConfigureDnssec,
+    Feature.SetDnssec,
     Feature.GetGlueRecords,
     Feature.SetGlueRecords,
     Feature.SetEmailForwarding,
@@ -189,6 +257,129 @@ export class NameSiloRegistrar extends BaseRegistrar {
     return domain.nameservers;
   }
 
+  /**
+   * NameSilo has no per-domain contact read: getDomainInfo returns only the
+   * internal contact IDs per role, so we resolve them against the full account
+   * contact profiles from `contactList` (one extra call), matching by ID.
+   */
+  override async getContacts(domainName: string, opts?: RequestOptions): Promise<ContactSet> {
+    const infoRes = await this.call('getDomainInfo', { domain: domainName }, opts);
+    if (!replyOk(infoRes)) {
+      throw new NotFoundError(
+        `NameSilo: domain '${domainName}' not found (${replyDetail(infoRes)})`
+      );
+    }
+    const ids = infoRes.reply?.contact_ids ?? {};
+
+    const listRes = await this.call('contactList', {}, opts);
+    if (!replyOk(listRes)) {
+      throw new Error(replyDetail(listRes));
+    }
+    const byId = new Map<string, NsContact>();
+    for (const c of ensureArray(listRes.reply?.contact)) {
+      byId.set(text(c.contact_id), c);
+    }
+
+    const lookup = (id: string | number | undefined): Contact | undefined => {
+      const key = text(id);
+      return key ? fromNsContact(byId.get(key)) : undefined;
+    };
+    return {
+      registrant: lookup(ids.registrant),
+      admin: lookup(ids.administrative),
+      tech: lookup(ids.technical),
+      billing: lookup(ids.billing),
+    };
+  }
+
+  override async getDnsRecords(domainName: string, opts?: RequestOptions): Promise<DnsRecord[]> {
+    const res = await this.call('dnsListRecords', { domain: domainName }, opts);
+    if (!replyOk(res)) {
+      throw new Error(replyDetail(res));
+    }
+    return ensureArray(res.reply?.resource_record).map(rr => {
+      const type = text(rr.type).toUpperCase();
+      const record: DnsRecord = {
+        type,
+        name: text(rr.host),
+        value: text(rr.value),
+      };
+      const ttl = Number(rr.ttl);
+      if (Number.isFinite(ttl)) record.ttl = ttl;
+      // NameSilo carries the MX priority in `distance`
+      const distance = Number(rr.distance);
+      if (type === 'MX' && Number.isFinite(distance)) record.priority = distance;
+      return record;
+    });
+  }
+
+  /**
+   * Per-TLD pricing via getPrices, which returns every supported TLD keyed
+   * directly on the reply (e.g. reply.com = { registration, renew, transfer }).
+   * Prices are already in major USD units. A bare TLD works; a full domain is
+   * reduced to its TLD.
+   */
+  override async getPricing(tldOrDomain: string, opts?: RequestOptions): Promise<TldPricing> {
+    const tld = (
+      tldOrDomain.includes('.') ? tldOrDomain.slice(tldOrDomain.indexOf('.') + 1) : tldOrDomain
+    ).toLowerCase();
+
+    const res = await this.call('getPrices', {}, opts);
+    if (!replyOk(res)) {
+      throw new Error(replyDetail(res));
+    }
+    const reply = (res.reply ?? {}) as Record<string, unknown>;
+    const node = reply[tld];
+    if (!node || typeof node !== 'object') {
+      throw new NotFoundError(`NameSilo: no pricing found for TLD '${tld}'`);
+    }
+    const price = node as NsPriceNode;
+    return {
+      tld,
+      currency: 'USD',
+      registration: toPrice(price.registration),
+      renewal: toPrice(price.renew),
+      transfer: toPrice(price.transfer),
+    };
+  }
+
+  /**
+   * Availability via checkRegisterAvailability (up to 200 domains per request).
+   * The reply splits names into `available`, `unavailable`, and `invalid`
+   * groups; available entries carry `price`/`premium`/`duration` attributes.
+   * Malformed names land in `invalid` and are omitted from the result.
+   */
+  override async checkAvailability(
+    domainNames: string[],
+    opts?: RequestOptions
+  ): Promise<DomainAvailability[]> {
+    const res = await this.call(
+      'checkRegisterAvailability',
+      { domains: domainNames.join(',') },
+      opts
+    );
+    if (!replyOk(res)) {
+      throw new Error(replyDetail(res));
+    }
+    const reply = res.reply ?? {};
+    const results: DomainAvailability[] = [];
+
+    for (const entry of extractAvailEntries(reply.available)) {
+      const result: DomainAvailability = { domainName: entry.name, available: true };
+      if (entry.premium != null) result.premium = entry.premium;
+      if (entry.price != null) {
+        result.price = entry.price;
+        result.currency = 'USD';
+      }
+      if (entry.duration != null) result.period = entry.duration;
+      results.push(result);
+    }
+    for (const entry of extractAvailEntries(reply.unavailable)) {
+      results.push({ domainName: entry.name, available: false });
+    }
+    return results;
+  }
+
   override async renewDomain(
     domainName: string,
     years = 1,
@@ -225,6 +416,78 @@ export class NameSiloRegistrar extends BaseRegistrar {
     const res = await this.call('domainUnlock', { domain: domainName }, opts);
     return statusResult(res, [253]);
   }
+}
+
+// safely stringify an unknown XML value: strings/numbers/booleans pass through
+// (trimmed), everything else (e.g. an empty `{}` from a self-closing element)
+// becomes ''. Guards against no-base-to-string on arbitrary objects.
+function text(v: unknown): string {
+  if (typeof v === 'string') return v.trim();
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  return '';
+}
+
+// parse an unknown price-ish value into a positive number, or undefined
+function toPrice(v: unknown): number | undefined {
+  if (typeof v !== 'string' && typeof v !== 'number') return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+// map a NameSilo contact record to the normalized Contact shape
+function fromNsContact(c: NsContact | undefined): Contact | undefined {
+  if (!c) return undefined;
+  const opt = (v: unknown): string | undefined => {
+    const s = text(v);
+    return s ? s : undefined;
+  };
+  return {
+    firstName: text(c.first_name),
+    lastName: text(c.last_name),
+    organization: opt(c.company),
+    email: text(c.email),
+    phone: text(c.phone),
+    fax: opt(c.fax),
+    address1: text(c.address),
+    address2: opt(c.address2),
+    city: text(c.city),
+    state: text(c.state),
+    postalCode: text(c.zip),
+    country: text(c.country),
+  };
+}
+
+// normalize a checkRegisterAvailability group into availability entries. A group
+// is `{ domain: <entry|entry[]> }`; each entry is a bare domain string, or (for
+// available names) an object carrying the name plus price/premium/duration.
+// NameSilo's JSON attribute naming isn't contractually documented, so read the
+// bare, `@`, and `@_` forms defensively (mirroring extractNsHosts' #text guard).
+function extractAvailEntries(group: unknown): NsAvailEntry[] {
+  if (!group) return [];
+  const raw =
+    typeof group === 'object' && !Array.isArray(group) && 'domain' in group
+      ? ((group as { domain?: unknown }).domain ?? [])
+      : group;
+  return ensureArray(raw)
+    .map((item): NsAvailEntry => {
+      if (typeof item === 'string') return { name: item.trim() };
+      if (item && typeof item === 'object') {
+        const o = item as Record<string, unknown>;
+        const name = text(o['#text'] ?? o.value ?? o.domain);
+        const priceRaw = o.price ?? o['@price'] ?? o['@_price'];
+        const premiumRaw = o.premium ?? o['@premium'] ?? o['@_premium'];
+        const durationRaw = o.duration ?? o['@duration'] ?? o['@_duration'];
+        const entry: NsAvailEntry = { name };
+        const price = toPrice(priceRaw);
+        if (price != null && price > 0) entry.price = price;
+        if (premiumRaw != null && text(premiumRaw) !== '') entry.premium = isYes(premiumRaw);
+        const duration = toPrice(durationRaw);
+        if (duration != null && duration > 0) entry.duration = duration;
+        return entry;
+      }
+      return { name: '' };
+    })
+    .filter(e => e.name);
 }
 
 // NameSilo booleans arrive as "Yes"/"No" (or 1/0) strings

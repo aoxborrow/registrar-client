@@ -1,14 +1,18 @@
 import type {
   ConfigField,
   ConnectionResult,
+  ContactSet,
+  DnsRecord,
   Domain,
+  DomainAvailability,
   ListDomainsOptions,
   OperationResult,
   RegistrarOptions,
   RequestOptions,
+  TldPricing,
 } from '../types';
-import { createDomain, filterDomains } from '../utils';
-import { toRegistrarError } from '../errors';
+import { createDomain, filterDomains, normalizeDomain } from '../utils';
+import { NotFoundError, NotImplementedError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
@@ -28,6 +32,48 @@ interface PbDomain {
   securityLock?: string | number;
   whoisPrivacy?: string | number;
   autoRenew?: string | number;
+}
+
+// domain/getNs response — `ns` is the current nameserver list
+interface PbNsResponse extends PbResponse {
+  ns?: string[];
+}
+
+// a single DNS record from dns/retrieve. All fields arrive as strings.
+interface PbDnsRecord {
+  id?: string;
+  name?: string; // fully-qualified host, e.g. "www.example.com" ("example.com" at apex)
+  type?: string;
+  content?: string; // record data (for SRV: "weight port target")
+  ttl?: string;
+  prio?: string; // priority, for MX / SRV
+  notes?: string;
+}
+
+interface PbDnsResponse extends PbResponse {
+  records?: PbDnsRecord[];
+}
+
+// one TLD's price points from pricing/get. Values are strings in major USD units.
+interface PbTldPrice {
+  registration?: string;
+  renewal?: string;
+  transfer?: string;
+}
+
+interface PbPricingResponse extends PbResponse {
+  pricing?: Record<string, PbTldPrice>;
+}
+
+// domain/checkDomain response — availability sits under `response`
+interface PbCheckResponse extends PbResponse {
+  response?: {
+    avail?: string; // "yes" | "no"
+    type?: string; // "registration" | ...
+    price?: string;
+    regularPrice?: string;
+    premium?: string; // "yes" | "no"
+  };
 }
 
 /**
@@ -73,7 +119,7 @@ export class PorkbunRegistrar extends BaseRegistrar {
   // signed webhooks. No auth-code retrieval; transfer lock and WHOIS-privacy
   // toggles have no write endpoint (privacy is set only at registration).
   static readonly extendedFeatures: readonly RegistrarFeature[] = [
-    Feature.ConfigureDnssec,
+    Feature.SetDnssec,
     Feature.GetGlueRecords,
     Feature.SetGlueRecords,
     Feature.SetDomainForwarding,
@@ -96,12 +142,12 @@ export class PorkbunRegistrar extends BaseRegistrar {
   }
 
   // POST an operation with the credentials merged into the JSON body
-  private call(
+  private call<T extends PbResponse = PbResponse>(
     path: string,
     extra: Record<string, unknown> = {},
     opts?: RequestOptions
-  ): Promise<PbResponse> {
-    return this.http.request<PbResponse>({
+  ): Promise<T> {
+    return this.http.request<T>({
       method: 'POST',
       path,
       body: {
@@ -163,6 +209,109 @@ export class PorkbunRegistrar extends BaseRegistrar {
     return filterDomains(domains, search);
   }
 
+  /**
+   * Porkbun has no per-domain "get info" endpoint, so this lists the account and
+   * returns the matching record. `listDomains` already normalizes every field, so
+   * the result carries the same shape as any other provider's `getDomain`. Throws
+   * NotFoundError when the domain isn't in the account.
+   */
+  override async getDomain(domainName: string, opts?: RequestOptions): Promise<Domain> {
+    const target = normalizeDomain(domainName);
+    const domains = await this.listDomains(opts);
+    const match = domains.find(d => normalizeDomain(d.domainName) === target);
+    if (!match) {
+      throw new NotFoundError(`${this.name}: domain ${domainName} not found in this account`);
+    }
+    return match;
+  }
+
+  override async getNameservers(domainName: string, opts?: RequestOptions): Promise<string[]> {
+    const res = await this.call<PbNsResponse>(
+      `/domain/getNs/${encodeURIComponent(domainName)}`,
+      {},
+      opts
+    );
+    if (!isOk(res)) throw new Error(res.message ?? 'API request failed');
+    return res.ns ?? [];
+  }
+
+  /**
+   * Porkbun exposes no WHOIS/contact retrieval endpoint — contact details are
+   * only settable at registration and never read back through the API — so there
+   * is no way to fulfil this. (Mirrors Spaceship's `getPricing` gap handling.)
+   */
+  override getContacts(_domainName: string, _opts?: RequestOptions): Promise<ContactSet> {
+    return Promise.reject(
+      new NotImplementedError(
+        `${this.name}: getContacts is not available — Porkbun's API has no contact-read ` +
+          '(WHOIS) endpoint'
+      )
+    );
+  }
+
+  override async getDnsRecords(domainName: string, opts?: RequestOptions): Promise<DnsRecord[]> {
+    const res = await this.call<PbDnsResponse>(
+      `/dns/retrieve/${encodeURIComponent(domainName)}`,
+      {},
+      opts
+    );
+    if (!isOk(res)) throw new Error(res.message ?? 'API request failed');
+    return (res.records ?? []).map(r => toDnsRecord(r, domainName));
+  }
+
+  /**
+   * pricing/get returns every TLD's price points at once (as strings in major USD
+   * units), so this fetches the table and picks the requested TLD. A full domain
+   * is reduced to its TLD. Throws NotFoundError when the TLD isn't in the table.
+   */
+  override async getPricing(tldOrDomain: string, opts?: RequestOptions): Promise<TldPricing> {
+    const tld = extractTld(tldOrDomain);
+    const res = await this.call<PbPricingResponse>('/pricing/get', {}, opts);
+    if (!isOk(res)) throw new Error(res.message ?? 'API request failed');
+    const price = res.pricing?.[tld];
+    if (!price) {
+      throw new NotFoundError(`${this.name}: no pricing found for TLD .${tld}`);
+    }
+    return {
+      tld,
+      currency: 'USD', // Porkbun prices are always quoted in USD
+      registration: toPrice(price.registration),
+      renewal: toPrice(price.renewal),
+      transfer: toPrice(price.transfer),
+    };
+  }
+
+  /**
+   * Porkbun's checkDomain takes a single domain per call, so this issues one
+   * request per name. The price it reports (major USD units) is the first-year
+   * registration price for both regular and premium names.
+   */
+  override async checkAvailability(
+    domainNames: string[],
+    opts?: RequestOptions
+  ): Promise<DomainAvailability[]> {
+    const results: DomainAvailability[] = [];
+    for (const domainName of domainNames) {
+      const res = await this.call<PbCheckResponse>(
+        `/domain/checkDomain/${encodeURIComponent(domainName)}`,
+        {},
+        opts
+      );
+      if (!isOk(res)) throw new Error(res.message ?? 'API request failed');
+      const info = res.response ?? {};
+      const price = toPrice(info.price);
+      results.push({
+        domainName,
+        available: info.avail === 'yes',
+        premium: info.premium === 'yes',
+        price,
+        currency: price != null ? 'USD' : undefined,
+        period: price != null ? 1 : undefined,
+      });
+    }
+    return results;
+  }
+
   override async updateNameservers(
     domainName: string,
     nameservers: string[],
@@ -194,4 +343,61 @@ function statusResult(res: PbResponse): OperationResult {
 // Porkbun booleans arrive as "1"/"0" (sometimes numbers) — normalize to boolean
 function isYes(value: string | number | undefined): boolean {
   return value === '1' || value === 1 || value === 'yes';
+}
+
+// reduce a TLD or full domain to its bare TLD (no leading dot, lowercased). A
+// multi-label TLD (e.g. "co.uk") is preserved by taking everything after the
+// first label of a full domain.
+function extractTld(tldOrDomain: string): string {
+  const value = tldOrDomain.trim().toLowerCase().replace(/^\.+/, '');
+  return value.includes('.') ? value.slice(value.indexOf('.') + 1) : value;
+}
+
+// parse a Porkbun price string (major USD units) into a number, or undefined
+function toPrice(value: string | undefined): number | undefined {
+  if (value == null || value === '') return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+// convert a Porkbun fully-qualified record name to a name relative to the zone
+// apex ("@" at the apex), matching the DnsRecord contract.
+function relativeName(name: string, domainName: string): string {
+  const fqdn = normalizeDomain(name);
+  const zone = normalizeDomain(domainName);
+  if (fqdn === zone || fqdn === '') return '@';
+  if (fqdn.endsWith(`.${zone}`)) return fqdn.slice(0, -(zone.length + 1));
+  return fqdn;
+}
+
+// map a Porkbun DNS record to the normalized DnsRecord shape. Porkbun stores SRV
+// data as prio=priority and content="weight port target"; other types put their
+// value in `content`.
+function toDnsRecord(r: PbDnsRecord, domainName: string): DnsRecord {
+  const type = (r.type ?? '').toUpperCase();
+  const record: DnsRecord = {
+    type,
+    name: relativeName(r.name ?? '', domainName),
+    value: r.content ?? '',
+  };
+  if (r.ttl != null && r.ttl !== '') {
+    const ttl = Number(r.ttl);
+    if (Number.isFinite(ttl)) record.ttl = ttl;
+  }
+  const prio = r.prio != null && r.prio !== '' ? Number(r.prio) : NaN;
+  if ((type === 'MX' || type === 'SRV') && Number.isFinite(prio)) {
+    record.priority = prio;
+  }
+  if (type === 'SRV') {
+    // content is "<weight> <port> <target>"
+    const parts = (r.content ?? '').trim().split(/\s+/);
+    if (parts.length === 3) {
+      const weight = Number(parts[0]);
+      const port = Number(parts[1]);
+      if (Number.isFinite(weight)) record.weight = weight;
+      if (Number.isFinite(port)) record.port = port;
+      record.value = parts[2];
+    }
+  }
+  return record;
 }
