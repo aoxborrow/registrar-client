@@ -141,15 +141,10 @@ export class SpaceshipRegistrar extends BaseRegistrar {
     { name: 'apiSecret', label: 'API Secret', type: 'password', required: true },
   ];
   static readonly supportsSandbox = false; // Spaceship has no public sandbox environment
-  // Modern REST API. Beyond core, auth-code retrieval, glue records (first-class
-  // "personal nameservers"), and marketplace listing. No DNSSEC, domain
-  // forwarding, or webhooks; Spacemail (email) has no public API.
-  static readonly extendedFeatures: readonly RegistrarFeature[] = [
-    Feature.GetAuthCode,
-    Feature.GetGlueRecords,
-    Feature.SetGlueRecords,
-    Feature.ListOnMarketplace,
-  ];
+  // Modern REST API. Beyond core: transfer-out auth-code retrieval
+  // (GET .../transfer/auth-code). No DNSSEC or forwarding via the API; Spacemail
+  // (email) has no public API.
+  static readonly extendedFeatures: readonly RegistrarFeature[] = [Feature.GetAuthCode];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
     super(
@@ -211,6 +206,19 @@ export class SpaceshipRegistrar extends BaseRegistrar {
   override async getNameservers(domainName: string, opts?: RequestOptions): Promise<string[]> {
     const d = await this.getRaw(domainName, opts);
     return d.nameservers?.hosts ?? [];
+  }
+
+  /**
+   * Transfer authorization (EPP) code via GET /v1/domains/{domain}/transfer/auth-code.
+   * Synchronous; the code is returned in `authCode`. Requires the API key to
+   * carry the `domains:transfer` scope.
+   */
+  override async getAuthCode(domainName: string, opts?: RequestOptions): Promise<string> {
+    const res = await this.http.request<{ authCode?: string }>({
+      path: `/v1/domains/${encodeURIComponent(domainName)}/transfer/auth-code`,
+      ...opts,
+    });
+    return res.authCode ?? '';
   }
 
   /**

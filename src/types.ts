@@ -230,8 +230,7 @@ export type RegistrarCredentials = Record<string, string>;
 // --- extended-feature payloads ---
 
 // An alias-style email forward: mail sent to `alias`@domain is redirected to
-// `forwardTo`. This is redirect-only forwarding — no real mailbox is provisioned
-// (see the ProvisionMailbox feature for that).
+// `forwardTo`. This is redirect-only forwarding — no real mailbox is provisioned.
 export interface EmailForward {
   // the local part of the source address at the domain, e.g. "hello" for
   // hello@example.com. Where the registrar supports it, "@" or "*" denotes a
@@ -257,6 +256,28 @@ export interface DomainForward {
   url: string;
   // the redirect style
   type: DomainForwardType;
+}
+
+// A DNSSEC delegation-signer (DS) record published at the parent zone. Fields
+// mirror the DS RR (RFC 4034). Registrars that expose DNSSEC only as DNSKEY data
+// may not populate every field; `digest` is the hex delegation digest.
+export interface DsRecord {
+  // the key tag identifying the DNSKEY this DS refers to
+  keyTag: number;
+  // DNSSEC algorithm number (e.g. 8 = RSA/SHA-256, 13 = ECDSA P-256)
+  algorithm: number;
+  // digest type (1 = SHA-1, 2 = SHA-256, 4 = SHA-384)
+  digestType: number;
+  // the delegation digest, hex-encoded
+  digest: string;
+}
+
+// DNSSEC status for a domain. `enabled` is the headline signal (is DNSSEC turned
+// on at the registrar); `dsRecords` carries the published DS records when the
+// registrar exposes them (may be empty even when enabled).
+export interface DnssecStatus {
+  enabled: boolean;
+  dsRecords: DsRecord[];
 }
 
 // The core interface every registrar implementation fulfils. `BaseRegistrar`
@@ -382,6 +403,17 @@ export interface Registrar {
     forwards: DomainForward[],
     opts?: RequestOptions
   ): Promise<OperationResult>;
+
+  // retrieve the transfer authorization (EPP/auth) code used to transfer the
+  // domain away to another registrar
+  getAuthCode(domainName: string, opts?: RequestOptions): Promise<string>;
+
+  // read DNSSEC status for a domain (whether it's enabled, plus any DS records)
+  getDnssec(domainName: string, opts?: RequestOptions): Promise<DnssecStatus>;
+
+  // disable/turn off DNSSEC for a domain (removes the registrar's DS records at
+  // the parent). Enabling DNSSEC is intentionally not part of this interface.
+  disableDnssec(domainName: string, opts?: RequestOptions): Promise<OperationResult>;
 }
 
 // static side of a registrar class: the constructor plus discovery metadata

@@ -4,8 +4,12 @@ import type {
   Contact,
   ContactSet,
   DnsRecord,
+  DnssecStatus,
   Domain,
   DomainAvailability,
+  DomainForward,
+  DomainForwardType,
+  EmailForward,
   ListDomainsOptions,
   OperationResult,
   RegisterDomainInput,
@@ -44,12 +48,35 @@ interface NsReply {
   contact_id?: string | number;
   // dnsListRecords returns resource_record entries (single object or array)
   resource_record?: NsResourceRecord | NsResourceRecord[];
+  // dnsSecListRecords returns ds_record entries (single object or array)
+  ds_record?: NsDsRecord | NsDsRecord[];
+  // listEmailForwards returns addresses entries (single object or array)
+  addresses?: NsEmailAddresses | NsEmailAddresses[];
+  // getDomainInfo also carries the apex URL-forwarding config
+  forward_url?: string;
+  forward_type?: string;
+  traffic_type?: string;
   // checkRegisterAvailability groups results; each group wraps `domain` entries
   available?: unknown;
   unavailable?: unknown;
   invalid?: unknown;
   // getPrices returns one node per TLD keyed directly on the reply (e.g.
   // reply.com = { registration, renew, transfer }); read via a Record cast
+}
+
+// one DS record from dnsSecListRecords (read fields are snake_case)
+interface NsDsRecord {
+  digest?: string;
+  digest_type?: string | number;
+  algorithm?: string | number;
+  key_tag?: string | number;
+}
+
+// one mailbox from listEmailForwards: `email` is the local part, `forwards_to`
+// is one address or an array of them
+interface NsEmailAddresses {
+  email?: string;
+  forwards_to?: string | string[];
 }
 
 interface NsResponse {
@@ -141,15 +168,17 @@ export class NameSiloRegistrar extends BaseRegistrar {
   // NameSilo runs an OTE/test environment at ote.namesilo.com; sandbox keys are
   // issued by emailing NameSilo support (not self-service).
   static readonly supportsSandbox = true;
-  // JSON API with broad coverage. Beyond core: auth-code retrieval (emailed to
-  // the registrant, not returned inline), DNSSEC, glue records, email
-  // forwarding, and domain forwarding. No webhooks (polling only).
+  // JSON API with broad coverage. Beyond core: DNSSEC read/disable, email
+  // forwarding, and domain (URL) forwarding. GetAuthCode is intentionally NOT
+  // declared — NameSilo's retrieveAuthCode emails the EPP code to the
+  // registrant and never returns it, so it can't satisfy the getAuthCode
+  // contract. No webhooks (polling only).
   static readonly extendedFeatures: readonly RegistrarFeature[] = [
-    Feature.GetAuthCode,
-    Feature.SetDnssec,
-    Feature.GetGlueRecords,
-    Feature.SetGlueRecords,
+    Feature.GetDnssec,
+    Feature.DisableDnssec,
+    Feature.GetEmailForwarding,
     Feature.SetEmailForwarding,
+    Feature.GetDomainForwarding,
     Feature.SetDomainForwarding,
   ];
 
@@ -421,6 +450,180 @@ export class NameSiloRegistrar extends BaseRegistrar {
     return statusResult(res, [253]);
   }
 
+  // --- extended capabilities ---------------------------------------------
+
+  /**
+   * DNSSEC status via dnsSecListRecords, which returns zero or more `ds_record`
+   * entries (snake_case fields on read). A non-empty list means DNSSEC is on.
+   */
+  override async getDnssec(domainName: string, opts?: RequestOptions): Promise<DnssecStatus> {
+    const res = await this.call('dnsSecListRecords', { domain: domainName }, opts);
+    if (!replyOk(res)) throw new Error(replyDetail(res));
+    const list = ensureArray<NsDsRecord>(res.reply?.ds_record);
+    return {
+      enabled: list.length > 0,
+      dsRecords: list.map(d => ({
+        keyTag: Number(d.key_tag) || 0,
+        algorithm: Number(d.algorithm) || 0,
+        digestType: Number(d.digest_type) || 0,
+        digest: text(d.digest),
+      })),
+    };
+  }
+
+  /**
+   * Disable DNSSEC by deleting every DS record (dnsSecDeleteRecord, once per
+   * record — NameSilo has no bulk off). The delete params are camelCase and echo
+   * the record's identifying fields.
+   */
+  override async disableDnssec(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    try {
+      const res = await this.call('dnsSecListRecords', { domain: domainName }, opts);
+      if (!replyOk(res)) return statusResult(res);
+      for (const d of ensureArray<NsDsRecord>(res.reply?.ds_record)) {
+        const del = await this.call(
+          'dnsSecDeleteRecord',
+          {
+            domain: domainName,
+            digest: text(d.digest),
+            keyTag: text(d.key_tag),
+            digestType: text(d.digest_type),
+            alg: text(d.algorithm),
+          },
+          opts
+        );
+        if (!replyOk(del)) return statusResult(del);
+      }
+      return { success: true, message: 'DNSSEC disabled successfully' };
+    } catch (error) {
+      return { success: false, message: toRegistrarError(error).message };
+    }
+  }
+
+  /**
+   * Read email forwarding via listEmailForwards. Each `addresses` entry has an
+   * `email` (local part) and one or more `forwards_to`; expand each destination
+   * into its own {alias, forwardTo} row.
+   */
+  override async getEmailForwarding(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<EmailForward[]> {
+    const res = await this.call('listEmailForwards', { domain: domainName }, opts);
+    if (!replyOk(res)) throw new Error(replyDetail(res));
+    const out: EmailForward[] = [];
+    for (const a of ensureArray<NsEmailAddresses>(res.reply?.addresses)) {
+      const alias = text(a.email);
+      for (const dest of ensureArray<string>(a.forwards_to)) {
+        if (alias && dest) out.push({ alias, forwardTo: text(dest) });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Replace email forwarding (full replace; empty clears). NameSilo has no bulk
+   * endpoint, so diff by mailbox: configureEmailForward upserts one alias with up
+   * to 5 destinations (forward1..forward5); deleteEmailForward removes an alias.
+   */
+  override async setEmailForwarding(
+    domainName: string,
+    forwards: EmailForward[],
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    try {
+      const desired = new Map<string, string[]>();
+      for (const f of forwards) {
+        const list = desired.get(f.alias) ?? [];
+        list.push(f.forwardTo);
+        desired.set(f.alias, list);
+      }
+      const res = await this.call('listEmailForwards', { domain: domainName }, opts);
+      if (!replyOk(res)) return statusResult(res);
+      const currentAliases = new Set(
+        ensureArray<NsEmailAddresses>(res.reply?.addresses)
+          .map(a => text(a.email))
+          .filter(Boolean)
+      );
+
+      for (const alias of currentAliases) {
+        if (!desired.has(alias)) {
+          const del = await this.call(
+            'deleteEmailForward',
+            { domain: domainName, email: alias },
+            opts
+          );
+          if (!replyOk(del)) return statusResult(del);
+        }
+      }
+      for (const [alias, destinations] of desired) {
+        const query: Record<string, string | number> = { domain: domainName, email: alias };
+        // NameSilo supports up to 5 destinations: forward1..forward5
+        destinations.slice(0, 5).forEach((dest, i) => {
+          query[`forward${i + 1}`] = dest;
+        });
+        const set = await this.call('configureEmailForward', query, opts);
+        if (!replyOk(set)) return statusResult(set);
+      }
+      return { success: true, message: 'Email forwarding updated successfully' };
+    } catch (error) {
+      return { success: false, message: toRegistrarError(error).message };
+    }
+  }
+
+  /**
+   * Read the apex URL forwarding from getDomainInfo (`forward_url`/`forward_type`).
+   * NameSilo has no forwarding-list endpoint, so only the apex forward is
+   * readable — per-subdomain forwards can be set but not enumerated.
+   */
+  override async getDomainForwarding(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<DomainForward[]> {
+    const res = await this.call('getDomainInfo', { domain: domainName }, opts);
+    if (!replyOk(res)) throw new Error(replyDetail(res));
+    const url = text(res.reply?.forward_url);
+    if (!url) return [];
+    return [{ host: '@', url, type: nsForwardType(res.reply?.forward_type) }];
+  }
+
+  /**
+   * Set apex URL forwarding via domainForward (method 301/302/cloaked). NameSilo
+   * can't list per-subdomain forwards, so this interface supports the apex forward
+   * only (host "@"); an empty list clears it by restoring NameSilo's default
+   * nameservers (there is no dedicated "stop forwarding" command).
+   */
+  override async setDomainForwarding(
+    domainName: string,
+    forwards: DomainForward[],
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    if (forwards.length === 0) {
+      return this.updateNameservers(domainName, NAMESILO_DEFAULT_NS, opts);
+    }
+    if (forwards.length > 1) {
+      throw new Error('NameSilo supports a single apex ("@") forward via this interface');
+    }
+    const f = forwards[0];
+    if (f.host && f.host !== '@') {
+      throw new Error(
+        'NameSilo per-subdomain forwards are not listable, so only the apex ("@") forward is supported'
+      );
+    }
+    const scheme = /^(https?):\/\/(.*)$/i.exec(f.url);
+    const protocol = scheme ? scheme[1].toLowerCase() : 'http';
+    const address = scheme ? scheme[2] : f.url;
+    const res = await this.call(
+      'domainForward',
+      { domain: domainName, protocol, address, method: NS_FORWARD_METHOD[f.type] },
+      opts
+    );
+    return statusResult(res);
+  }
+
   override async setAutoRenew(
     domainName: string,
     enabled: boolean,
@@ -688,6 +891,25 @@ function isYes(v: unknown): boolean {
   if (typeof v !== 'string' && typeof v !== 'number' && typeof v !== 'boolean') return false;
   const s = String(v).trim().toLowerCase();
   return s === 'yes' || s === '1' || s === 'true';
+}
+
+// NameSilo's default nameservers, used to switch a domain off URL forwarding
+// (there is no dedicated "stop forwarding" command).
+const NAMESILO_DEFAULT_NS = ['ns1.namesilo.com', 'ns2.namesilo.com'];
+
+// map our generic forward type to NameSilo's domainForward `method`
+const NS_FORWARD_METHOD: Record<DomainForwardType, string> = {
+  permanent: '301',
+  redirect: '302',
+  frame: 'cloaked',
+};
+
+// interpret NameSilo's read-side forward_type into our generic type
+function nsForwardType(v: string | undefined): DomainForwardType {
+  const s = (v ?? '').toLowerCase();
+  if (s.includes('302') || s.includes('temp')) return 'redirect';
+  if (s.includes('cloak') || s.includes('frame') || s.includes('mask')) return 'frame';
+  return 'permanent';
 }
 
 // getDomainInfo returns nameservers as an array of `{ nameserver: "HOST",

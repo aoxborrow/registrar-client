@@ -4,8 +4,11 @@ import type {
   Contact,
   ContactSet,
   DnsRecord,
+  DnssecStatus,
   Domain,
   DomainAvailability,
+  DomainForward,
+  EmailForward,
   ListDomainsOptions,
   OperationResult,
   RegisterDomainInput,
@@ -45,14 +48,39 @@ interface V2DnsRecord {
 }
 
 // the glue/DNS block: `glue_type` is NAME_SERVERS (external NS), DNS (Dynadot-
-// hosted records), or REGISTRAR_FORWARDING
+// hosted records), REGISTRAR_FORWARDING (URL redirect), or
+// REGISTRAR_STEALTH_FORWARDING (framed/cloaked redirect). It also carries the
+// per-domain email-forwarding settings inline.
 interface V2GlueInfo {
   glue_type?: string;
   nameserver_list?: V2Nameserver[];
   dns_main_list?: V2DnsRecord[];
   dns_sub_list?: V2DnsRecord[];
   ttl?: string | number;
+  // domain (URL) forwarding, present when glue_type is REGISTRAR_FORWARDING /
+  // REGISTRAR_STEALTH_FORWARDING. `forward_type` reads back as
+  // "permanently"/"temporarily"; stealth carries a `stealth_title` instead.
+  forward_url?: string;
+  forward_type?: string;
+  stealth_title?: string;
+  // email forwarding: `email_forward_type` reads back uppercase
+  // (MTYPE_NONE/MTYPE_FORWARD/MTYPE_MX); aliases carry username -> destination.
+  email_forward_type?: string;
+  email_alias_list?: { username?: string; email?: string }[];
 }
+
+// one DNS-security record from GET .../dnssec. `algorithm` / `digest_type` read
+// back as human labels with the numeric code in parentheses, e.g. "SHA-256 (2)".
+interface V2DnssecInfo {
+  key_tag?: string | number;
+  algorithm?: string | number;
+  digest_type?: string | number;
+  digest?: string;
+}
+
+// Dynadot's default nameservers, used to switch a domain off URL forwarding
+// (there is no dedicated "clear forwarding" endpoint).
+const DYNADOT_DEFAULT_NS = ['ns1.dynadot.com', 'ns2.dynadot.com'];
 
 interface V2DomainInfo {
   domain_name?: string;
@@ -161,22 +189,17 @@ export class DynadotRegistrar extends BaseRegistrar {
     { name: 'apiSecret', label: 'API Secret', type: 'password', required: true },
   ];
   static readonly supportsSandbox = true; // api-sandbox.dynadot.com mirrors the API
-  // Broadest coverage of the set: on top of core, it adds DNSSEC, glue records,
-  // email + domain forwarding, webhooks, aftermarket/marketplace, push,
-  // appraisal, and bulk (folder) settings. Email is forwarding-only. These are
-  // declared but not yet implemented on the v2 transport (extended layer).
+  // On top of core: transfer-out auth code, DNSSEC read/disable, and email +
+  // domain (URL) forwarding. All implemented on the v2 transport and verified in
+  // the Dynadot sandbox.
   static readonly extendedFeatures: readonly RegistrarFeature[] = [
     Feature.GetAuthCode,
-    Feature.SetDnssec,
-    Feature.GetGlueRecords,
-    Feature.SetGlueRecords,
+    Feature.GetDnssec,
+    Feature.DisableDnssec,
+    Feature.GetEmailForwarding,
     Feature.SetEmailForwarding,
+    Feature.GetDomainForwarding,
     Feature.SetDomainForwarding,
-    Feature.SubscribeWebhooks,
-    Feature.ListOnMarketplace,
-    Feature.PushToAccount,
-    Feature.AppraiseDomain,
-    Feature.ApplyBulkSettings,
   ];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
@@ -209,7 +232,10 @@ export class DynadotRegistrar extends BaseRegistrar {
       method,
       path: pathAndQuery,
       body,
-      headers: { 'X-Signature': signature },
+      // Dynadot requires application/json even on bodyless mutations (e.g. the
+      // DELETE for disableDnssec), so set it explicitly rather than relying on
+      // the client's body-present default.
+      headers: { 'X-Signature': signature, 'Content-Type': 'application/json' },
       ...opts,
     });
   }
@@ -278,6 +304,12 @@ export class DynadotRegistrar extends BaseRegistrar {
   }
 
   override async getDomain(domainName: string, opts?: RequestOptions): Promise<Domain> {
+    return this.toDomain(await this.domainInfo(domainName, opts));
+  }
+
+  // fetch and unwrap GET /domains/{name} -> data.domain_info (shared by getDomain,
+  // getContacts, and the forwarding reads, which all read from domain_info)
+  private async domainInfo(domainName: string, opts?: RequestOptions): Promise<V2DomainInfo> {
     const data = await this.read<{ domain_info?: V2DomainInfo }>(
       'GET',
       `/restful/v2/domains/${encodeURIComponent(domainName)}`,
@@ -285,7 +317,7 @@ export class DynadotRegistrar extends BaseRegistrar {
       opts
     );
     if (!data.domain_info) throw new NotFoundError(`Dynadot: domain '${domainName}' not found`);
-    return this.toDomain(data.domain_info);
+    return data.domain_info;
   }
 
   override async getNameservers(domainName: string, opts?: RequestOptions): Promise<string[]> {
@@ -301,14 +333,7 @@ export class DynadotRegistrar extends BaseRegistrar {
    * (roles usually share one contact, so ids are de-duplicated).
    */
   override async getContacts(domainName: string, opts?: RequestOptions): Promise<ContactSet> {
-    const data = await this.read<{ domain_info?: V2DomainInfo }>(
-      'GET',
-      `/restful/v2/domains/${encodeURIComponent(domainName)}`,
-      undefined,
-      opts
-    );
-    const info = data.domain_info;
-    if (!info) throw new NotFoundError(`Dynadot: domain '${domainName}' not found`);
+    const info = await this.domainInfo(domainName, opts);
 
     const roleIds: [keyof ContactSet, string][] = [
       ['registrant', str(info.registrant_contact_id)],
@@ -673,6 +698,174 @@ export class DynadotRegistrar extends BaseRegistrar {
     );
   }
 
+  // --- extended capabilities ---------------------------------------------
+
+  /**
+   * The transfer authorization (EPP) code via GET .../transfer_auth_code. Reads
+   * the current code (Dynadot can also mint a fresh one with `new_code=true`, not
+   * used here to avoid a side effect on a read).
+   */
+  override async getAuthCode(domainName: string, opts?: RequestOptions): Promise<string> {
+    const data = await this.read<{ auth_code?: string }>(
+      'GET',
+      `/restful/v2/domains/${encodeURIComponent(domainName)}/transfer_auth_code`,
+      undefined,
+      opts
+    );
+    return data.auth_code ?? '';
+  }
+
+  /**
+   * DNSSEC status via GET .../dnssec, which returns a list of DS records
+   * (`dnssec_info_list`); a non-empty list means DNSSEC is enabled. `algorithm`
+   * and `digest_type` come back as labels with the numeric code in parentheses
+   * (e.g. "SHA-256 (2)"), so parse the code out.
+   */
+  override async getDnssec(domainName: string, opts?: RequestOptions): Promise<DnssecStatus> {
+    const data = await this.read<{ dnssec_info_list?: V2DnssecInfo[] }>(
+      'GET',
+      `/restful/v2/domains/${encodeURIComponent(domainName)}/dnssec`,
+      undefined,
+      opts
+    );
+    const list = data.dnssec_info_list ?? [];
+    return {
+      enabled: list.length > 0,
+      dsRecords: list.map(d => ({
+        keyTag: parseCode(d.key_tag),
+        algorithm: parseCode(d.algorithm),
+        digestType: parseCode(d.digest_type),
+        digest: d.digest ?? '',
+      })),
+    };
+  }
+
+  // Disable DNSSEC via DELETE .../dnssec (removes the registrar's DS records).
+  override disableDnssec(domainName: string, opts?: RequestOptions): Promise<OperationResult> {
+    return this.mutate(
+      'DELETE',
+      `/restful/v2/domains/${encodeURIComponent(domainName)}/dnssec`,
+      undefined,
+      'DNSSEC disabled successfully',
+      opts
+    );
+  }
+
+  /**
+   * Read alias-style email forwarding from domain_info's inline `glue_info`
+   * (Dynadot has no standalone endpoint). Only `MTYPE_FORWARD` carries redirect
+   * aliases; MX-mode (`MTYPE_MX`) and none return no rules.
+   */
+  override async getEmailForwarding(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<EmailForward[]> {
+    const glue = (await this.domainInfo(domainName, opts)).glue_info;
+    if ((glue?.email_forward_type ?? '').toUpperCase() !== 'MTYPE_FORWARD') return [];
+    return (glue?.email_alias_list ?? [])
+      .map(a => ({ alias: a.username ?? '', forwardTo: a.email ?? '' }))
+      .filter(f => f.alias && f.forwardTo);
+  }
+
+  /**
+   * Replace email forwarding via PUT .../email_forwarding (full replace; an empty
+   * list clears it with `mtype_none`). Requires the domain to use Dynadot DNS —
+   * the API rejects it when the record is a CNAME.
+   */
+  override async setEmailForwarding(
+    domainName: string,
+    forwards: EmailForward[],
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const body =
+      forwards.length === 0
+        ? { email_forward_type: 'mtype_none', email_alias_list: [], email_exchange_list: [] }
+        : {
+            email_forward_type: 'mtype_forward',
+            email_alias_list: forwards.map(f => ({ username: f.alias, email: f.forwardTo })),
+            email_exchange_list: [],
+          };
+    return this.mutate(
+      'PUT',
+      `/restful/v2/domains/${encodeURIComponent(domainName)}/email_forwarding`,
+      body,
+      'Email forwarding updated successfully',
+      opts
+    );
+  }
+
+  /**
+   * Read domain (URL) forwarding from domain_info's inline `glue_info`. Dynadot
+   * forwards the whole domain, so this returns at most one rule at host "@":
+   * REGISTRAR_FORWARDING is a 301/302 redirect (`forward_type`
+   * permanently/temporarily), REGISTRAR_STEALTH_FORWARDING is a framed redirect.
+   */
+  override async getDomainForwarding(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<DomainForward[]> {
+    const glue = (await this.domainInfo(domainName, opts)).glue_info;
+    const type = (glue?.glue_type ?? '').toUpperCase();
+    if (!glue?.forward_url) return [];
+    if (type === 'REGISTRAR_STEALTH_FORWARDING') {
+      return [{ host: '@', url: glue.forward_url, type: 'frame' }];
+    }
+    if (type === 'REGISTRAR_FORWARDING') {
+      const temporary = (glue.forward_type ?? '').toLowerCase().startsWith('temp');
+      return [{ host: '@', url: glue.forward_url, type: temporary ? 'redirect' : 'permanent' }];
+    }
+    return [];
+  }
+
+  /**
+   * Set domain (URL) forwarding. Dynadot forwards the entire domain, so at most
+   * one rule (host "@") is accepted: `frame` uses stealth forwarding, `redirect`/
+   * `permanent` use standard forwarding (302 vs 301). An empty list clears
+   * forwarding — Dynadot has no "off" for it, so we restore its default
+   * nameservers, which is the neutral non-forwarding state.
+   */
+  override async setDomainForwarding(
+    domainName: string,
+    forwards: DomainForward[],
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const enc = encodeURIComponent(domainName);
+    if (forwards.length === 0) {
+      return this.mutate(
+        'PUT',
+        `/restful/v2/domains/${enc}/nameservers`,
+        { nameserver_list: DYNADOT_DEFAULT_NS },
+        'Domain forwarding cleared successfully',
+        opts
+      );
+    }
+    if (forwards.length > 1) {
+      throw new Error('Dynadot forwards the whole domain; only a single "@" rule is supported');
+    }
+    const f = forwards[0];
+    if (f.host && f.host !== '@') {
+      throw new Error(
+        'Dynadot forwards the whole domain; per-host forwarding is not supported (use host "@")'
+      );
+    }
+    if (f.type === 'frame') {
+      return this.mutate(
+        'PUT',
+        `/restful/v2/domains/${enc}/stealth_forwarding`,
+        { stealth_url: f.url, stealth_title: '' },
+        'Domain forwarding updated successfully',
+        opts
+      );
+    }
+    return this.mutate(
+      'PUT',
+      `/restful/v2/domains/${enc}/domain_forwarding`,
+      { forward_url: f.url, is_temporary: f.type === 'redirect' },
+      'Domain forwarding updated successfully',
+      opts
+    );
+  }
+
   // map a v2 domain_info payload to the normalized Domain shape
   private toDomain(d: V2DomainInfo): Domain {
     return createDomain({
@@ -847,4 +1040,15 @@ function toNumber(value: string | undefined): number | undefined {
   if (value == null || value === '') return undefined;
   const n = Number(value);
   return Number.isFinite(n) ? n : undefined;
+}
+
+// Dynadot reports DNSSEC algorithm / digest-type as a label with the numeric
+// code in parentheses, e.g. "SHA-256 (2)" or "RSA/SHA-256 (8)". Pull out the
+// code; tolerate a bare number (key_tag) or numeric string too.
+function parseCode(value: string | number | undefined): number {
+  if (typeof value === 'number') return value;
+  const paren = /\((\d+)\)/.exec(value ?? '');
+  if (paren) return Number(paren[1]);
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
 }

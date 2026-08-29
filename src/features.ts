@@ -48,20 +48,12 @@ export const Feature = {
 
   // --- extended (opt-in; declared per provider) ---
   GetAuthCode: 'getAuthCode', // retrieve transfer auth/EPP code (transfer out)
-  GetDnssec: 'getDnssec', // read DNSSEC keys / DS records
-  SetDnssec: 'setDnssec', // manage DNSSEC keys / DS records
-  GetGlueRecords: 'getGlueRecords', // read glue / host records
-  SetGlueRecords: 'setGlueRecords', // write glue / host records
+  GetDnssec: 'getDnssec', // read whether DNSSEC is enabled (DS / key records)
+  DisableDnssec: 'disableDnssec', // turn DNSSEC off (no enable / key management)
   GetEmailForwarding: 'getEmailForwarding', // read alias-style email forwarding rules
   SetEmailForwarding: 'setEmailForwarding', // alias-style email forwarding (redirect only)
-  ProvisionMailbox: 'provisionMailbox', // provision a real hosted mailbox
   GetDomainForwarding: 'getDomainForwarding', // read URL redirect / domain forwarding
   SetDomainForwarding: 'setDomainForwarding', // URL redirect / domain forwarding
-  SubscribeWebhooks: 'subscribeWebhooks', // register webhook / event subscriptions
-  ListOnMarketplace: 'listOnMarketplace', // list a domain on an aftermarket/marketplace
-  PushToAccount: 'pushToAccount', // instant intra-registrar ownership push
-  AppraiseDomain: 'appraiseDomain', // domain valuation/appraisal lookup
-  ApplyBulkSettings: 'applyBulkSettings', // bulk-apply settings to a group of domains
 } as const;
 
 // A registrar capability identifier — the value of one of the `Feature` members.
@@ -94,19 +86,11 @@ export const CORE_FEATURES = [
 export const EXTENDED_FEATURES = [
   Feature.GetAuthCode,
   Feature.GetDnssec,
-  Feature.SetDnssec,
-  Feature.GetGlueRecords,
-  Feature.SetGlueRecords,
+  Feature.DisableDnssec,
   Feature.GetEmailForwarding,
   Feature.SetEmailForwarding,
-  Feature.ProvisionMailbox,
   Feature.GetDomainForwarding,
   Feature.SetDomainForwarding,
-  Feature.SubscribeWebhooks,
-  Feature.ListOnMarketplace,
-  Feature.PushToAccount,
-  Feature.AppraiseDomain,
-  Feature.ApplyBulkSettings,
 ] as const satisfies readonly RegistrarFeature[];
 
 // Every feature, core first.
