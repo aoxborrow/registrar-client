@@ -1,5 +1,6 @@
 import type {
   ConfigField,
+  Contact,
   ConnectionResult,
   ContactSet,
   DnsRecord,
@@ -7,9 +8,11 @@ import type {
   DomainAvailability,
   ListDomainsOptions,
   OperationResult,
+  RegisterDomainInput,
   RegistrarOptions,
   RequestOptions,
   TldPricing,
+  TransferDomainInput,
 } from '../types';
 import { createDomain, filterDomains, normalizeDomain } from '../utils';
 import { NotFoundError, NotImplementedError, toRegistrarError } from '../errors';
@@ -65,6 +68,29 @@ interface PbPricingResponse extends PbResponse {
   pricing?: Record<string, PbTldPrice>;
 }
 
+// bulk/per-domain response (e.g. domain/updateAutoRenew) — the per-domain
+// outcome is nested under `results`, keyed by domain name.
+interface PbBulkResponse extends PbResponse {
+  results?: Record<string, { status?: string; message?: string }>;
+}
+
+// Porkbun's contact shape: phone is split into a national number plus a numeric
+// country code, distinct from the library's single international `phone`.
+interface PbContact {
+  firstName: string;
+  lastName: string;
+  organization?: string;
+  email: string;
+  phone: string;
+  phoneCountryCode: string;
+  address1: string;
+  address2?: string;
+  city: string;
+  state?: string;
+  postalCode: string;
+  country: string;
+}
+
 // domain/checkDomain response — availability sits under `response`
 interface PbCheckResponse extends PbResponse {
   response?: {
@@ -87,10 +113,23 @@ interface PbCheckResponse extends PbResponse {
  * Note: Porkbun uses a JSON POST API; credentials travel in the request body as
  * `apikey` / `secretapikey`. Success is signalled by `status: "SUCCESS"`.
  *
+ * Write field notes (all verified end-to-end in the sandbox): register and renew
+ * take a `cost` in pennies that must exactly match the current price (fetched
+ * from `checkDomain`/`pricing/get`), plus `agreeToTerms: "yes"` on register;
+ * Porkbun always registers/renews the registry-minimum term, so `years` is not
+ * honored. `create` carries no nameservers/auto-renew/contacts fields, so those
+ * are applied as follow-up calls (contacts default to the account WHOIS at
+ * registration — set them afterwards with `updateContacts`). Auto-renew is
+ * toggled with `status: "on"|"off"` and reports its result in a nested
+ * `results[domain]` object. Transfer-in needs `authCode` + the transfer `cost`.
+ * Porkbun manages the apex NS records itself (creating NS at the apex is
+ * rejected and its default nameservers auto-restore), so `setDnsRecords` leaves
+ * them untouched.
+ *
  * API gaps (left as NotImplementedError): the transfer lock is read-only via the
- * API (`securityLock` is exposed but has no toggle endpoint), and renewal
- * requires matching the current price via a `cost` field, so it isn't a simple
- * `renewDomain(years)` call.
+ * API (`securityLock` is exposed but has no toggle endpoint), WHOIS privacy has
+ * no post-registration toggle (settable only at registration), and there is no
+ * contact-read (WHOIS) endpoint.
  */
 export class PorkbunRegistrar extends BaseRegistrar {
   readonly name = 'porkbun';
@@ -327,6 +366,186 @@ export class PorkbunRegistrar extends BaseRegistrar {
     );
     return statusResult(res);
   }
+
+  /**
+   * Registers a domain. Porkbun's `create` requires a `cost` (pennies) that
+   * exactly matches the domain's current price — fetched here via `checkDomain`
+   * — plus agreement to its terms (sent automatically; invoking this method is
+   * the agreement). It always registers the registry-minimum term, so `years` is
+   * ignored. Contacts aren't accepted at registration (Porkbun applies the
+   * account-default WHOIS); use `updateContacts` afterwards to set them.
+   * Nameservers and auto-renew have no `create` field, so they're applied as
+   * follow-up calls when provided.
+   */
+  override async registerDomain(
+    domainName: string,
+    input: RegisterDomainInput,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const [availability] = await this.checkAvailability([domainName], opts);
+    if (!availability?.available) {
+      throw new Error(`${this.name}: ${domainName} is not available for registration`);
+    }
+    if (availability.price == null) {
+      throw new Error(`${this.name}: could not determine the registration price for ${domainName}`);
+    }
+    const body: Record<string, unknown> = {
+      cost: toPennies(availability.price),
+      agreeToTerms: 'yes',
+    };
+    // whoisPrivacy is optional; omitting it uses the account default
+    if (input.privacy != null) body.whoisPrivacy = input.privacy;
+
+    const res = await this.call(`/domain/create/${encodeURIComponent(domainName)}`, body, opts);
+    if (!isOk(res)) return statusResult(res);
+
+    // create has no nameserver / auto-renew fields — apply them separately
+    if (input.nameservers && input.nameservers.length > 0) {
+      await this.updateNameservers(domainName, input.nameservers, opts);
+    }
+    if (input.autoRenew != null) {
+      await this.setAutoRenew(domainName, input.autoRenew, opts);
+    }
+    return { success: true, message: `Domain ${domainName} registered successfully` };
+  }
+
+  /**
+   * Renews a domain. Porkbun renews the registry-minimum term (usually 1 year)
+   * and ignores any requested `years`; it requires a `cost` (pennies) matching
+   * the domain's current renewal price, fetched here from `pricing/get`. Premium
+   * renewals aren't supported via the API.
+   */
+  override async renewDomain(
+    domainName: string,
+    _years = 1,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const pricing = await this.getPricing(extractTld(domainName), opts);
+    if (pricing.renewal == null) {
+      throw new Error(`${this.name}: could not determine the renewal price for ${domainName}`);
+    }
+    const res = await this.call(
+      `/domain/renew/${encodeURIComponent(domainName)}`,
+      { cost: toPennies(pricing.renewal) },
+      opts
+    );
+    return statusResult(res);
+  }
+
+  override async setAutoRenew(
+    domainName: string,
+    enabled: boolean,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const res = await this.call<PbBulkResponse>(
+      `/domain/updateAutoRenew/${encodeURIComponent(domainName)}`,
+      { status: enabled ? 'on' : 'off' },
+      opts
+    );
+    // updateAutoRenew reports the real outcome in a nested results[domain] entry,
+    // even when the top-level status is SUCCESS.
+    return bulkResult(
+      res,
+      domainName,
+      `Auto-renew ${enabled ? 'enabled' : 'disabled'} successfully`
+    );
+  }
+
+  /**
+   * Transfers a domain in with its EPP auth code. Porkbun's `transfer` requires a
+   * `cost` (pennies) matching the current transfer price, fetched here from
+   * `pricing/get`. The transfer body carries no contacts/privacy/auto-renew — the
+   * existing registration's details carry over — and premium/`.uk` transfers
+   * aren't supported via the API.
+   */
+  override async transferIn(
+    domainName: string,
+    input: TransferDomainInput,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const pricing = await this.getPricing(extractTld(domainName), opts);
+    if (pricing.transfer == null) {
+      throw new Error(`${this.name}: could not determine the transfer price for ${domainName}`);
+    }
+    const res = await this.call(
+      `/domain/transfer/${encodeURIComponent(domainName)}`,
+      { authCode: input.authCode, cost: toPennies(pricing.transfer) },
+      opts
+    );
+    return statusResult(res, `Domain ${domainName} transfer requested successfully`);
+  }
+
+  /**
+   * Updates contact roles. Only the roles present in `contacts` are changed;
+   * unspecified roles are left as-is. Porkbun splits the phone into a national
+   * number plus a numeric country code, and runs Google Address Validation on
+   * registrant changes for address-validated TLDs.
+   */
+  override async updateContacts(
+    domainName: string,
+    contacts: ContactSet,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const roles: Record<string, PbContact> = {};
+    if (contacts.registrant) roles.registrant = toPorkbunContact(contacts.registrant);
+    if (contacts.admin) roles.admin = toPorkbunContact(contacts.admin);
+    if (contacts.tech) roles.tech = toPorkbunContact(contacts.tech);
+    if (contacts.billing) roles.billing = toPorkbunContact(contacts.billing);
+    if (Object.keys(roles).length === 0) {
+      throw new Error(`${this.name}: updateContacts requires at least one contact role`);
+    }
+    const res = await this.call(
+      `/domain/updateContacts/${encodeURIComponent(domainName)}`,
+      { contacts: roles },
+      opts
+    );
+    return statusResult(res, 'Contacts updated successfully');
+  }
+
+  /**
+   * Replaces the entire editable record set (full-replace / PUT semantics):
+   * retrieves the current records, deletes them, then creates the supplied set.
+   * The apex NS records are Porkbun-managed (it rejects creating NS at the apex
+   * and auto-restores its defaults), so they're skipped on both delete and
+   * create. Because Porkbun has no atomic "set all" endpoint, this issues one
+   * call per record.
+   */
+  override async setDnsRecords(
+    domainName: string,
+    records: DnsRecord[],
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const zone = normalizeDomain(domainName);
+    const existing = await this.call<PbDnsResponse>(
+      `/dns/retrieve/${encodeURIComponent(domainName)}`,
+      {},
+      opts
+    );
+    if (!isOk(existing)) return statusResult(existing);
+
+    for (const r of existing.records ?? []) {
+      if (isApexNs(r.type, r.name, zone) || r.id == null) continue;
+      const del = await this.call(
+        `/dns/delete/${encodeURIComponent(domainName)}/${r.id}`,
+        {},
+        opts
+      );
+      if (!isOk(del)) return statusResult(del);
+    }
+
+    for (const record of records) {
+      const name = relativeName(record.name, domainName);
+      const type = record.type.toUpperCase();
+      if (type === 'NS' && (name === '@' || name === '')) continue; // apex NS is managed by Porkbun
+      const create = await this.call(
+        `/dns/create/${encodeURIComponent(domainName)}`,
+        toPorkbunDnsRecord(record, name, type),
+        opts
+      );
+      if (!isOk(create)) return statusResult(create);
+    }
+    return { success: true, message: 'DNS records updated successfully' };
+  }
 }
 
 // whether the response status is "SUCCESS"
@@ -335,9 +554,24 @@ function isOk(res: PbResponse): boolean {
 }
 
 // map a response's status to an OperationResult
-function statusResult(res: PbResponse): OperationResult {
-  if (isOk(res)) return { success: true, message: 'SUCCESS' };
+function statusResult(res: PbResponse, successMessage = 'SUCCESS'): OperationResult {
+  if (isOk(res)) return { success: true, message: res.message ?? successMessage };
   return { success: false, message: res.message ?? 'Unknown response' };
+}
+
+// map a bulk/per-domain response (e.g. updateAutoRenew) to an OperationResult.
+// The top-level status can be SUCCESS while the per-domain entry failed, so the
+// real outcome is read from results[domain].
+function bulkResult(
+  res: PbBulkResponse,
+  domainName: string,
+  successMessage: string
+): OperationResult {
+  const entry = res.results?.[domainName];
+  if (isOk(res) && (!entry || entry.status === 'SUCCESS')) {
+    return { success: true, message: entry?.message ?? successMessage };
+  }
+  return { success: false, message: entry?.message ?? res.message ?? 'Unknown response' };
 }
 
 // Porkbun booleans arrive as "1"/"0" (sometimes numbers) — normalize to boolean
@@ -351,6 +585,79 @@ function isYes(value: string | number | undefined): boolean {
 function extractTld(tldOrDomain: string): string {
   const value = tldOrDomain.trim().toLowerCase().replace(/^\.+/, '');
   return value.includes('.') ? value.slice(value.indexOf('.') + 1) : value;
+}
+
+// convert major USD units (e.g. 11.08) to integer pennies (1108), as Porkbun's
+// `cost` field requires
+function toPennies(major: number): number {
+  return Math.round(major * 100);
+}
+
+// whether a record is an apex NS record (Porkbun-managed: can't be created and
+// auto-restores, so setDnsRecords must leave it alone). `name` may be the
+// fully-qualified host from a retrieve, or "@"/"" for the apex.
+function isApexNs(type: string | undefined, name: string | undefined, zone: string): boolean {
+  if ((type ?? '').toUpperCase() !== 'NS') return false;
+  const n = normalizeDomain(name ?? '');
+  return n === zone || n === '' || name === '@';
+}
+
+// map a normalized DnsRecord to a Porkbun dns/create body. `name` is already the
+// zone-relative host ("@"/"" at the apex); Porkbun wants the bare subdomain
+// (empty string at the apex). SRV data is packed as "<weight> <port> <target>".
+function toPorkbunDnsRecord(
+  record: DnsRecord,
+  name: string,
+  type: string
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    name: name === '@' ? '' : name,
+    type,
+    content: record.value,
+  };
+  if (record.ttl != null) body.ttl = String(record.ttl);
+  if (record.priority != null) body.prio = String(record.priority);
+  if (type === 'SRV') {
+    body.content = `${record.weight ?? 0} ${record.port ?? 0} ${record.value}`;
+  }
+  return body;
+}
+
+// map the library's Contact to Porkbun's shape, splitting the international
+// phone ("+1.4805551234") into a national number + numeric country code
+function toPorkbunContact(c: Contact): PbContact {
+  const { countryCode, national } = splitPhone(c.phone);
+  const contact: PbContact = {
+    firstName: c.firstName,
+    lastName: c.lastName,
+    email: c.email,
+    phone: national,
+    phoneCountryCode: countryCode,
+    address1: c.address1,
+    city: c.city,
+    postalCode: c.postalCode,
+    country: c.country,
+  };
+  if (c.organization) contact.organization = c.organization;
+  if (c.address2) contact.address2 = c.address2;
+  if (c.state) contact.state = c.state;
+  return contact;
+}
+
+// split an international phone ("+1.4805551234" — "+<cc>.<national>") into its
+// numeric country code and national number (digits only). Falls back gracefully
+// for values without the leading "+" or the "." separator.
+function splitPhone(phone: string): { countryCode: string; national: string } {
+  const trimmed = (phone ?? '').trim();
+  const dot = trimmed.indexOf('.');
+  if (trimmed.startsWith('+') && dot > 1) {
+    return {
+      countryCode: trimmed.slice(1, dot).replace(/\D/g, ''),
+      national: trimmed.slice(dot + 1).replace(/\D/g, ''),
+    };
+  }
+  // no recognizable separator: return all digits as the national number
+  return { countryCode: '', national: trimmed.replace(/\D/g, '') };
 }
 
 // parse a Porkbun price string (major USD units) into a number, or undefined
