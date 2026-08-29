@@ -47,3 +47,6 @@ tsconfig.tsbuildinfo
 
 # eslint cache
 .eslintcache
+
+# gandi live harness (gitignored)
+.gdlive/

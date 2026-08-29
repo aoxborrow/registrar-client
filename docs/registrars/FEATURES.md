@@ -42,7 +42,7 @@ folder ([cloudflare](cloudflare.md) · [dynadot](dynadot.md) · [gandi](gandi.md
 | 17  | DNSSEC management                | ✗   | ✓   | ✓   | ~   | ✗   | ✗   | 2 / 3           |
 | 18  | Glue / host records              | ✗   | ✓   | ✓   | ✗   | ~   | ✓   | 3 / 4           |
 | 19  | Email forwarding / mailbox       | ✗   | ~   | ✓   | ✗   | ~   | ✗   | 1 / 3           |
-| 20  | Domain forwarding / URL redirect | ✗   | ✓   | ~   | ✓   | ✓   | ✗   | 3 / 4           |
+| 20  | Domain forwarding / URL redirect | ✗   | ✓   | ✓   | ✓   | ✓   | ✗   | 4 / 4           |
 | 21  | Webhooks / event notifications   | ✗   | ✓   | ✗   | ~   | ✗   | ✗   | 1 / 2           |
 
 ¹ Cloudflare _does_ offer world-class DNS record management — but through its
@@ -128,29 +128,33 @@ webhooks, mailbox provisioning, and bulk settings. DNSSEC was narrowed from full
 key management to **read-status + disable** (`getDnssec` / `disableDnssec`);
 enabling DNSSEC is out of scope for this library for now.
 
-| `Feature`             | Declared by        | Notes                                                                                           |
-| --------------------- | ------------------ | ----------------------------------------------------------------------------------------------- |
-| `GetAuthCode`         | DY, GA, SP         | transfer-out EPP code; NameSilo emails it (can't return it); GD/NC gate it behind the dashboard |
-| `GetDnssec`           | DY, GA, NS, PB     | read whether DNSSEC is enabled (DS / key records)                                               |
-| `DisableDnssec`       | DY, GA, NS, PB     | turn DNSSEC off; no enable / key management (out of scope)                                      |
-| `GetEmailForwarding`  | DY, GA, NC, NS     | read counterpart of `SetEmailForwarding`                                                        |
-| `SetEmailForwarding`  | DY, GA, NC, NS     | alias redirect only — **distinct from a mailbox**                                               |
-| `GetDomainForwarding` | DY, GD, NC, NS, PB | read counterpart of `SetDomainForwarding`                                                       |
-| `SetDomainForwarding` | DY, GD, NC, NS, PB | some model it as `URL`/`URL301`/`FRAME` DNS records                                             |
+| `Feature`             | Declared by            | Notes                                                                                           |
+| --------------------- | ---------------------- | ----------------------------------------------------------------------------------------------- |
+| `GetAuthCode`         | DY, GA, SP             | transfer-out EPP code; NameSilo emails it (can't return it); GD/NC gate it behind the dashboard |
+| `GetDnssec`           | DY, GA, NS, PB         | read whether DNSSEC is enabled (DS / key records)                                               |
+| `DisableDnssec`       | DY, GA, NS, PB         | turn DNSSEC off; no enable / key management (out of scope)                                      |
+| `GetEmailForwarding`  | DY, GA, NC, NS         | read counterpart of `SetEmailForwarding`                                                        |
+| `SetEmailForwarding`  | DY, GA, NC, NS         | alias redirect only — **distinct from a mailbox**                                               |
+| `GetDomainForwarding` | DY, GA, GD, NC, NS, PB | read counterpart of `SetDomainForwarding`                                                       |
+| `SetDomainForwarding` | DY, GA, GD, NC, NS, PB | some model it as `URL`/`URL301`/`FRAME` DNS records; Gandi uses `webredirs` (subdomain-only)    |
 
 **Implementation status:** every declared extended feature above is now
-implemented on its provider(s). **Dynadot** and **Porkbun** are verified
-end-to-end in their sandboxes; **Namecheap** forwarding predates this work; the
-rest (**Gandi**, **GoDaddy**, **NameSilo**, **Spaceship**) are implemented from
+implemented on its provider(s). **Dynadot**, **Gandi**, and **Porkbun** are
+verified end-to-end in their sandboxes; **Namecheap** forwarding predates this
+work; the rest (**GoDaddy**, **NameSilo**, **Spaceship**) are implemented from
 verified endpoint docs but not live-verified (no sandbox credentials available).
 Two provider-specific limitations worth noting: **NameSilo** dropped
 `GetAuthCode` (its `retrieveAuthCode` emails the code to the registrant rather
 than returning it) and reads only the apex URL forward (no forwarding-list
 endpoint); **Dynadot** and **NameSilo** forward the whole domain / apex, so their
 `DomainForward` support is a single `@` rule and clearing restores default
-nameservers. Modeling note: core `setPrivacy` / lock are sometimes "on by policy"
-rather than a toggle (Gandi, Cloudflare), so those setters treat an
-already-correct state as idempotent success.
+nameservers. **Gandi** is the inverse — its `webredirs` forward per-subdomain and
+cannot forward the apex (`@` is rejected), and updating a redirect is
+delete-then-recreate (no PUT). Modeling note: core `setPrivacy` / lock are
+sometimes "on by policy" rather than a toggle (Gandi, Cloudflare), so those
+setters treat an already-correct state as idempotent success; on Gandi,
+`setPrivacy(false)` is additionally a no-op for individual registrants (WHOIS
+obfuscation stays on for GDPR).
 
 ## Discovery mechanism (implemented)
 

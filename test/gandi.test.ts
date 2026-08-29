@@ -342,6 +342,65 @@ describe('Gandi provider', () => {
     expect(post?.body).toEqual({ source: 'new', destinations: ['c@z.com'] });
   });
 
+  it('getDomainForwarding maps webredirs to apex-relative hosts and types', async () => {
+    const g = gandi();
+    stubHttp(g, () => [
+      { host: 'shop.example.com', type: 'http301', url: 'https://a.com', protocol: 'http' },
+      { host: 'docs.example.com', type: 'cloak', url: 'https://b.com', protocol: 'http' },
+    ]);
+    expect(await g.getDomainForwarding('example.com')).toEqual([
+      { host: 'shop', url: 'https://a.com', type: 'permanent' },
+      { host: 'docs', url: 'https://b.com', type: 'frame' },
+    ]);
+  });
+
+  it('setDomainForwarding diffs: DELETE changed/removed hosts, POST new/changed', async () => {
+    const g = gandi();
+    const calls = stubHttp(g, req => {
+      if (req.method === undefined) {
+        // current: "keep" (identical, untouched), "old" (removed), "shop" (changed url)
+        return [
+          { host: 'keep.example.com', type: 'http301', url: 'https://keep.com' },
+          { host: 'old.example.com', type: 'http302', url: 'https://old.com' },
+          { host: 'shop.example.com', type: 'http301', url: 'https://was.com' },
+        ];
+      }
+      return '';
+    });
+    const res = await g.setDomainForwarding('example.com', [
+      { host: 'keep', url: 'https://keep.com', type: 'permanent' },
+      { host: 'shop', url: 'https://now.com', type: 'permanent' },
+    ]);
+    expect(res.success).toBe(true);
+    const deletes = calls
+      .filter(c => c.method === 'DELETE')
+      .map(c => c.path)
+      .sort();
+    // "old" removed and "shop" changed are both deleted; "keep" is untouched
+    expect(deletes).toEqual([
+      '/domain/domains/example.com/webredirs/old.example.com',
+      '/domain/domains/example.com/webredirs/shop.example.com',
+    ]);
+    const posts = calls.filter(c => c.method === 'POST');
+    // only "shop" is (re)created; "keep" was identical so no POST
+    expect(posts).toHaveLength(1);
+    expect(posts[0].body).toEqual({
+      host: 'shop.example.com',
+      type: 'http301',
+      url: 'https://now.com',
+    });
+  });
+
+  it('setDomainForwarding rejects the apex host (Gandi cannot forward "@")', async () => {
+    const g = gandi();
+    stubHttp(g, () => []);
+    const res = await g.setDomainForwarding('example.com', [
+      { host: '@', url: 'https://example.com', type: 'permanent' },
+    ]);
+    expect(res.success).toBe(false);
+    expect(res.message).toMatch(/apex/i);
+  });
+
   it('setAutoRenew PATCHes the /autorenew subresource', async () => {
     const g = gandi();
     const calls = stubHttp(g, () => ({}));
@@ -351,6 +410,25 @@ describe('Gandi provider', () => {
       path: '/domain/domains/example.com/autorenew',
       body: { enabled: true },
     });
+  });
+
+  it('setAutoRenew(false) treats "no autorenew record" as idempotent success', async () => {
+    const g = gandi();
+    stubHttp(g, () => {
+      throw new Error('400 Bad Request: This product has no autorenew record');
+    });
+    const res = await g.setAutoRenew('example.com', false);
+    expect(res.success).toBe(true);
+    expect(res.message).toMatch(/disabled/i);
+  });
+
+  it('setAutoRenew(true) still surfaces a "no autorenew record" error', async () => {
+    const g = gandi();
+    stubHttp(g, () => {
+      throw new Error('400 Bad Request: This product has no autorenew record');
+    });
+    const res = await g.setAutoRenew('example.com', true);
+    expect(res.success).toBe(false);
   });
 
   it('setPrivacy PATCHes the owner contact data_obfuscated flag', async () => {
@@ -435,6 +513,27 @@ describe('Gandi provider', () => {
       country: 'GB',
     });
     expect(body.bill).toBeDefined();
+  });
+
+  it('maps a bare state to the ISO 3166-2 code Gandi requires, and leaves an existing one', async () => {
+    const g = gandi();
+    const calls = stubHttp(g, () => ({}));
+    const base = {
+      firstName: 'A',
+      lastName: 'B',
+      email: 'a@b.com',
+      phone: '+1.4155550000',
+      address1: '1 St',
+      city: 'City',
+      postalCode: '00000',
+      country: 'US',
+    };
+    // bare "CA" -> "US-CA"
+    await g.updateContacts('d.com', { registrant: { ...base, state: 'CA' } });
+    expect((calls[0].body as { owner: { state: string } }).owner.state).toBe('US-CA');
+    // already-qualified "US-CA" -> unchanged
+    await g.updateContacts('d.com', { registrant: { ...base, state: 'US-CA' } });
+    expect((calls[1].body as { owner: { state: string } }).owner.state).toBe('US-CA');
   });
 
   it('registerDomain POSTs fqdn/duration/owner and carries privacy on the owner', async () => {
