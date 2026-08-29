@@ -258,6 +258,28 @@ export interface DomainForward {
   type: DomainForwardType;
 }
 
+// A DNSSEC delegation-signer (DS) record published at the parent zone. Fields
+// mirror the DS RR (RFC 4034). Registrars that expose DNSSEC only as DNSKEY data
+// may not populate every field; `digest` is the hex delegation digest.
+export interface DsRecord {
+  // the key tag identifying the DNSKEY this DS refers to
+  keyTag: number;
+  // DNSSEC algorithm number (e.g. 8 = RSA/SHA-256, 13 = ECDSA P-256)
+  algorithm: number;
+  // digest type (1 = SHA-1, 2 = SHA-256, 4 = SHA-384)
+  digestType: number;
+  // the delegation digest, hex-encoded
+  digest: string;
+}
+
+// DNSSEC status for a domain. `enabled` is the headline signal (is DNSSEC turned
+// on at the registrar); `dsRecords` carries the published DS records when the
+// registrar exposes them (may be empty even when enabled).
+export interface DnssecStatus {
+  enabled: boolean;
+  dsRecords: DsRecord[];
+}
+
 // The core interface every registrar implementation fulfils. `BaseRegistrar`
 // (src/registrar.ts) provides the shared plumbing and `NotImplementedError`
 // defaults; concrete providers under src/registrars/ extend it.
@@ -381,6 +403,17 @@ export interface Registrar {
     forwards: DomainForward[],
     opts?: RequestOptions
   ): Promise<OperationResult>;
+
+  // retrieve the transfer authorization (EPP/auth) code used to transfer the
+  // domain away to another registrar
+  getAuthCode(domainName: string, opts?: RequestOptions): Promise<string>;
+
+  // read DNSSEC status for a domain (whether it's enabled, plus any DS records)
+  getDnssec(domainName: string, opts?: RequestOptions): Promise<DnssecStatus>;
+
+  // disable/turn off DNSSEC for a domain (removes the registrar's DS records at
+  // the parent). Enabling DNSSEC is intentionally not part of this interface.
+  disableDnssec(domainName: string, opts?: RequestOptions): Promise<OperationResult>;
 }
 
 // static side of a registrar class: the constructor plus discovery metadata
