@@ -53,6 +53,14 @@ Long-running operations (register, transfer, renew, restore) are asynchronous: t
 - Async operations (register, transfer, renew, restore) require polling `GET /async-operations/{operationId}` — plan for a poll loop / backoff rather than assuming synchronous completion.
 - Rate limits are per-endpoint and fairly tight on some operations (as low as 5 requests per window) — implementors should inspect response headers / 429s and back off per-endpoint rather than using a single global rate limiter.
 - No pricing API — TLD/domain pricing must be sourced out-of-band (scraping, manual price list, or a different Spaceship product surface) if the client library needs cost data before registering.
+- `getAuthCode`, `lockDomain`, and `unlockDomain` all require the key to carry the `domains:transfer` scope — without it every one of these returns `403`.
+
+## Live verification (2026-08-29)
+
+Verified against the production account with a `domains:transfer`-scoped key:
+
+- **`getAuthCode`** — works synchronously; returns the 16-char EPP code (confirmed on `dnslayer.com` and `post.link`).
+- **`lockDomain` / `unlockDomain`** — the `PUT .../transfer/lock` call is accepted (200), but the transfer lock is reported as the `clientTransferProhibited` EPP status (see `toDomain`), which **propagates with a delay**. An immediate `getDomain` read-back returns the _previous_ state; poll `getDomain` until it settles rather than trusting a read right after the write (same behavior as GoDaddy). A lock→unlock→restore round-trip on `post.link` completed and settled back to its original locked state.
 
 ## Sources
 

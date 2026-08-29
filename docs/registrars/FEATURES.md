@@ -30,7 +30,7 @@ folder ([cloudflare](cloudflare.md) · [dynadot](dynadot.md) · [gandi](gandi.md
 | 5   | Get pricing (TLD / domain)       | ✓   | ✓   | ✓   | ✓   | ✓   | ✗   | 5 / 5           |
 | 6   | **Register a domain**            | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | **6 / 6**       |
 | 7   | Renew a domain                   | ✗   | ✓   | ✓   | ✓   | ✓   | ✓   | 5 / 5           |
-| 8   | Auto-renew toggle                | ~   | ✓   | ✓   | ✓   | ~   | ✓   | 4 / 6           |
+| 8   | Auto-renew toggle                | ~   | ✓   | ✓   | ✓   | ✓   | ✓   | 5 / 6           |
 | 9   | Transfer domain in               | ✗   | ✓   | ✓   | ✓   | ✓   | ✓   | 5 / 5           |
 | 10  | Transfer out / get auth code     | ✗   | ✓   | ✓   | ~   | ~   | ✓   | 3 / 5           |
 | 11  | Update nameservers               | ✗   | ✓   | ✓   | ✓   | ✓   | ✓   | 5 / 5           |
@@ -141,8 +141,10 @@ enabling DNSSEC is out of scope for this library for now.
 **Implementation status:** every declared extended feature above is now
 implemented on its provider(s). **Dynadot**, **Gandi**, and **Porkbun** are
 verified end-to-end in their sandboxes; **Namecheap** forwarding predates this
-work; the rest (**GoDaddy**, **NameSilo**, **Spaceship**) are implemented from
-verified endpoint docs but not live-verified (no sandbox credentials available).
+work; **Spaceship**'s only extended feature (`GetAuthCode`) is live-verified
+against the production account (2026-08-29, `domains:transfer`-scoped key); the
+rest (**GoDaddy**, **NameSilo**) are implemented from verified endpoint docs but
+not live-verified (no sandbox credentials available).
 Two provider-specific limitations worth noting: **NameSilo** dropped
 `GetAuthCode` (its `retrieveAuthCode` emails the code to the registrant rather
 than returning it) and reads only the apex URL forward (no forwarding-list
@@ -215,10 +217,16 @@ it exercises the `requestText` + `parseXml` path). Implemented: `getDomain`
 `getNameservers` (dns.getList), `getContacts`/`updateContacts` (setContacts
 requires all four roles, so omitted roles fall back to the registrant), and
 `getDnsRecords`/`setDnsRecords` (dns.getHosts/setHosts, full-replace, 1-indexed;
-the reader tolerates both `<Host>` per the docs and the live `<host>`). Deferred:
-`setAutoRenew` (no public API command — it's a dashboard setting), `setPrivacy`
-(WhoisGuard is a separate entity needing its numeric id + a forwarding email the
-signature doesn't carry), and `registerDomain`/`transferIn` (paid + consent).
+the reader tolerates both `<Host>` per the docs and the live `<host>`),
+`setAutoRenew` (`domains.setAutoRenew` — undocumented in the method index but
+live, keyed on `DomainName` + `IsAutoRenew`, read from its inner `IsSuccess`),
+and `setPrivacy` (WhoisGuard is a separate entity needing its numeric id + a
+forwarding email pulled from the registrant contact). All read/write paths were
+**live-verified in the sandbox 2026-08-29** (see namecheap.md), which also
+corrected the `getDomain` lock read to the authoritative `getRegistrarLock`
+command (getList's per-row `IsLocked` lags). `registerDomain`/`transferIn` are
+implemented (paid + consent); registration was exercised live in the sandbox,
+transfer-in remains unverified (needs an external domain + auth code).
 
 **Spaceship** is done against its modern REST/JSON API, mapped from the official
 OpenAPI spec (which also corrected several wrong paths/fields in the pre-existing
@@ -300,5 +308,6 @@ error isolation, so one provider failing never sinks the combined view. `opts`
   extend the existing email/domain-forwarding surface (built only for Namecheap
   today) to the other declared providers.
 - **Verify the doc-ambiguous flags** against live sandbox accounts and widen
-  `extendedFeatures` (or core) accordingly: NC auto-renew, GD auth-code, and
-  per-provider DNSSEC and pricing endpoints.
+  `extendedFeatures` (or core) accordingly: GD auth-code and per-provider DNSSEC
+  and pricing endpoints. (NC auto-renew resolved — implemented + sandbox-verified
+  2026-08-29.)

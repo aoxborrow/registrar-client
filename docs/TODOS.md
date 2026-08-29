@@ -7,11 +7,11 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
 
 ## Needs live testing (built + unit-tested, not executed)
 
-- [ ] `registerDomain` / `renewDomain` / `transferIn` on **NameSilo,
-      Namecheap** (and NameBright register/renew) — paid/irreversible; built to
-      documented shapes, never run. (Dynadot, Gandi register+renew, and Porkbun
-      are sandbox-verified; Gandi `transferIn` needs an external domain + auth
-      code, not reproducible in the sandbox.)
+- [ ] `registerDomain` / `renewDomain` / `transferIn` on **NameSilo** (and
+      NameBright register/renew) — paid/irreversible; built to documented
+      shapes, never run. (Dynadot, Gandi register+renew, Porkbun, and Namecheap
+      register+renew are sandbox-verified; Namecheap and Gandi `transferIn` need an
+      external domain + auth code, not reproducible in the sandbox.)
 - [ ] **GoDaddy** register/renew/transfer — v3 register (quote→execute) is paid
       with **no v3 sandbox** (OTE is v1-only). The v1 purchase path is correct
       (`POST /v1/domains/purchase/validate` returns 200 for our body) but OTE
@@ -23,15 +23,16 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
       validated for this path.
 - [ ] **GoDaddy** `updateNameservers` (v3 PUT bare-array) — built + unit-tested;
       not run live (would repoint a real domain's NS). Verify with a reversible swap.
-- [ ] `updateContacts` on **NameSilo, GoDaddy, Namecheap** — can trigger
-      registrant-change verification / 60-day locks; reviewed only. (Dynadot and
-      Gandi are sandbox-verified.)
+- [ ] `updateContacts` on **NameSilo, GoDaddy** — can trigger registrant-change
+      verification / 60-day locks; reviewed only. (Dynadot, Gandi, and Namecheap
+      are sandbox-verified.)
 - [ ] **GoDaddy** `setPrivacy` — disabling is a one-way DELETE (enabling is a paid
       purchase, left `NotImplementedError`); not exercised.
-- [ ] **Extended features on GoDaddy / NameSilo / Spaceship** (authCode, DNSSEC
+- [ ] **Extended features on GoDaddy / NameSilo** (authCode, DNSSEC
       read/disable, email + domain forwarding) — built from docs only; add sandbox
       creds to `.env.testing` and verify. (Dynadot, Gandi, and Porkbun are
-      sandbox-verified; GoDaddy forwarding is v1-only — check on a real domain.)
+      sandbox-verified; GoDaddy forwarding is v1-only — check on a real domain.
+      Spaceship `getAuthCode` is now live-verified — see confirmed quirks below.)
 - [ ] **NameBright** `updateNameservers` — coded from the documented endpoints; no
       safe way to test NS replacement on the live account, so unverified.
 - [ ] **Dynadot** DNSSEC enabled→disabled transition — `disableDnssec`/`getDnssec`
@@ -55,22 +56,27 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
   endpoint 404s for domains on external nameservers. A PAT authenticates v1 too
   (GET 200 / PATCH 204); v1 PATCH is eventually-consistent (read-after-write lag).
   See `docs/registrars/godaddy.md`.
+- **Namecheap** `setAutoRenew` uses the undocumented-but-live `domains.setAutoRenew`
+  (DomainName + IsAutoRenew; reads its inner `IsSuccess`). `getDomain`'s `locked`
+  reads the dedicated `getRegistrarLock` command — getList's per-row `IsLocked`
+  (and `AutoRenew`) lag in the sandbox even after a successful write. Reverting to
+  Namecheap DNS is a separate `dns.setDefault` command (setCustom rejects the
+  BasicDNS hosts). `setPrivacy` genuinely toggles WhoisGuard (not a no-op). See
+  `docs/registrars/namecheap.md`.
+- **Spaceship** (live-verified 2026-08-29 with a `domains:transfer`-scoped key):
+  `getAuthCode` returns the 16-char EPP code synchronously; `lockDomain`/
+  `unlockDomain` are accepted (200) but the lock state (the `clientTransferProhibited`
+  eppStatus) propagates with a delay, so an immediate read-back is stale — poll
+  `getDomain` to confirm, same as GoDaddy. See `docs/registrars/spaceship.md`.
 
 ## Blocked (need better credentials / a suitable domain)
 
 - [ ] **Cloudflare** writes (auto-renew, nameservers, lock) — token is read-only
       for registrar ops (422); needs a Domain-Registration:Edit token.
-- [ ] **Spaceship** `lockDomain`/`unlockDomain` — API key lacks the transfer-lock
-      scope (403); needs a lock-scoped key.
-- [ ] **Namecheap** `lockDomain`/`unlockDomain` — request is correct but the
-      account holds only ccTLDs that don't expose the registrar lock; needs a gTLD
-      to confirm the flag flips.
 
 ## Not buildable (no public API endpoint)
 
 - [ ] **NameBright** `transferIn` — NameBright's REST API has no transfer-in endpoint.
-- [ ] **Namecheap** `setAutoRenew` — no auto-renew command in the public API
-      (dashboard-only).
 - [ ] **NameSilo** `getAuthCode` — `retrieveAuthCode` only emails the EPP code to
       the registrant; it can't be returned synchronously (declaration dropped).
 

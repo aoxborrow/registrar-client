@@ -1,6 +1,45 @@
 # Namecheap — API Research
 
-> Researched: 2026-08-26 · Docs: https://www.namecheap.com/support/api/intro/ , https://www.namecheap.com/support/api/methods/
+> Researched: 2026-08-26 · **Live-verified: 2026-08-29** · Docs: https://www.namecheap.com/support/api/intro/ , https://www.namecheap.com/support/api/methods/
+
+## Live verification (2026-08-29)
+
+Exercised end-to-end against the **sandbox** (`https://api.sandbox.namecheap.com/xml.response`,
+separate account, query-string auth) on a freshly registered test domain. Every
+core read and write path ran live and was read back, except `transferIn` (needs
+an external domain + auth code, not reproducible in the sandbox).
+
+**Reads — all verified:** `testConnection`, `listDomains`, `checkAvailability`,
+`getPricing`, `getDomain`, `getNameservers`, `getContacts`, `getDnsRecords`,
+`getEmailForwarding`, `getDomainForwarding`.
+
+**Writes — all verified:** `registerDomain`, `renewDomain` (expiry advanced),
+`setAutoRenew`, `lockDomain`/`unlockDomain`, `updateNameservers`, `setDnsRecords`,
+`updateContacts`, `setPrivacy` (WhoisGuard toggles on/off — a real change, not a
+no-op), `setEmailForwarding`, `setDomainForwarding`.
+
+**Fixes/discoveries from this pass:**
+
+- **`setAutoRenew` is implementable** (was `NotImplementedError`). The command
+  `namecheap.domains.setAutoRenew` isn't in the published method index but is live;
+  it takes `DomainName` + `IsAutoRenew` (an `SLD`/`TLD` form is rejected) and
+  returns its own `IsSuccess` flag inside an otherwise-`OK` envelope — the client
+  reads that inner flag, not the envelope status.
+- **`getDomain` lock source fixed.** `locked` now comes from the dedicated
+  `namecheap.domains.getRegistrarLock` command. getList's per-row `IsLocked` lags:
+  after a lock the API reported as applied (`RegistrarLockStatus=true`), getList
+  still returned `IsLocked=false`. The dedicated command is authoritative and costs
+  the same single call.
+- **Sandbox getList staleness.** getList's `IsLocked`/`AutoRenew` columns don't
+  reflect recent toggles in the sandbox even when the write succeeded — verify via
+  the dedicated per-domain commands, not the list.
+- **Restoring Namecheap DNS needs `dns.setDefault`.** Passing the BasicDNS hosts
+  (`dns1.registrar-servers.com`) to `updateNameservers` (setCustom) is rejected
+  ("BasicDNS can not be used as Custom DNS"); reverting to Namecheap DNS is a
+  distinct `namecheap.domains.dns.setDefault` command (out of the core contract's
+  scope — `updateNameservers` is for custom NS).
+- Registration requires the whitelisted `ClientIp` to also be the request's
+  outbound IP; both must match.
 
 ## Overview
 
@@ -21,7 +60,7 @@ Auth is via query-string parameters on every request — no bearer tokens or sig
 | Get domain/TLD pricing                      | ✓       | `namecheap.users.getPricing` (register/renew/transfer prices incl. promos), `namecheap.domains.getTldList` (TLD metadata: min/max years, API-registerable/renewable flags)                                                                    |
 | Register a new domain                       | ✓       | `namecheap.domains.create`                                                                                                                                                                                                                    |
 | Renew a domain                              | ✓       | `namecheap.domains.renew`; `namecheap.domains.reactivate` for expired domains                                                                                                                                                                 |
-| Auto-renew toggle                           | ~       | Not a distinct dedicated command in the public docs; account-level auto-renew behavior generally managed via dashboard, though some renewal params exist on create/renew — treat as ambiguous/unconfirmed from docs alone                     |
+| Auto-renew toggle                           | ✓       | `namecheap.domains.setAutoRenew` (DomainName + IsAutoRenew). Not in the published method index but live-verified; returns its own `IsSuccess` flag                                                                                            |
 | Transfer domain in                          | ✓       | `namecheap.domains.transfer.create` (limited TLD list: .com/.net/.org/.co/.info/.biz/.me/.tv/.us/.ca/.cc/.in/.mobi/.pe/.es and a few ccTLD variants)                                                                                          |
 | Transfer out / get auth/EPP code            | ~       | No documented API method to fetch EPP code directly; EPP/auth code retrieval is dashboard-only ("Get EPP Code" link after unlocking), domain must be unlocked first via `setRegistrarLock`                                                    |
 | Update nameservers                          | ✓       | `namecheap.domains.dns.setCustom` (custom NS) / `namecheap.domains.dns.setDefault` (revert to Namecheap DNS)                                                                                                                                  |
