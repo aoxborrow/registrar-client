@@ -5,6 +5,7 @@ import type {
   DnsRecord,
   Domain,
   DomainAvailability,
+  ListDomainsOptions,
   OperationResult,
   Registrar,
   RegisterDomainInput,
@@ -25,7 +26,7 @@ export class RegistrarClient {
     return this.provider.testConnection(opts);
   }
 
-  listDomains(opts?: RequestOptions): Promise<Domain[]> {
+  listDomains(opts?: ListDomainsOptions): Promise<Domain[]> {
     return this.provider.listDomains(opts);
   }
 

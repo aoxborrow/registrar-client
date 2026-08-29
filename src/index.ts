@@ -1,6 +1,8 @@
 // Public API surface.
 
 export { RegistrarClient } from './client';
+export { listPortfolio } from './portfolio';
+export type { DomainSource, PortfolioError, PortfolioResult } from './portfolio';
 export { HttpClient } from './http';
 export type { HttpClientConfig, RequestConfig } from './http';
 

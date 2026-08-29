@@ -2,12 +2,14 @@ import type {
   ConfigField,
   ConnectionResult,
   Domain,
+  ListDomainsOptions,
   OperationResult,
   RegistrarOptions,
   RequestOptions,
 } from '../types';
-import { createDomain } from '../utils';
-import { toRegistrarError } from '../errors';
+import { applyListOptions, createDomain } from '../utils';
+import { DEFAULT_LIST_LIMIT } from '../constants';
+import { NotFoundError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
@@ -19,6 +21,14 @@ interface NsReply {
   detail?: string;
   domains?: unknown;
   pager?: { page?: number; page_size?: number; total_count?: number };
+  // getDomainInfo fields (present only on that call's reply)
+  created?: string;
+  expires?: string;
+  status?: string;
+  locked?: string;
+  private?: string;
+  auto_renew?: string;
+  nameservers?: unknown;
 }
 
 interface NsResponse {
@@ -51,7 +61,9 @@ export class NameSiloRegistrar extends BaseRegistrar {
   static readonly displayName = 'NameSilo';
   static readonly helpText =
     'Generate an API key in your NameSilo account under Account Options > API Manager. ' +
-    'You can optionally restrict the key to specific IP addresses there.';
+    'You can optionally restrict the key to specific IP addresses there. For sandbox ' +
+    'testing, use { environment: "sandbox" } (OTE host ote.namesilo.com) — OTE ' +
+    'credentials are not self-service; you must contact NameSilo support to be issued them.';
   static readonly configFields: ConfigField[] = [
     { name: 'apiKey', label: 'API Key', type: 'password', required: true },
   ];
@@ -108,14 +120,21 @@ export class NameSiloRegistrar extends BaseRegistrar {
     }
   }
 
-  override async listDomains(opts?: RequestOptions): Promise<Domain[]> {
+  /**
+   * listDomains returns names + created/expires dates only. Nameservers, status,
+   * lock, privacy, and auto-renew are NOT in the list response and cannot be
+   * batched in — use `getDomain` per domain for those. `search` is applied
+   * client-side (NameSilo has no server-side name filter).
+   */
+  override async listDomains(opts?: ListDomainsOptions): Promise<Domain[]> {
+    const { limit = DEFAULT_LIST_LIMIT, search, ...reqOpts } = opts ?? {};
     const domains: Domain[] = [];
-    const pageSize = 100;
+    const pageSize = Math.min(limit, 100);
     let page = 1;
     let hasMore = true;
 
-    while (hasMore) {
-      const res = await this.call('listDomains', { page, pageSize }, opts);
+    while (hasMore && domains.length < limit) {
+      const res = await this.call('listDomains', { page, pageSize }, reqOpts);
       if (!replyOk(res)) {
         throw new Error(replyDetail(res));
       }
@@ -130,7 +149,7 @@ export class NameSiloRegistrar extends BaseRegistrar {
             createdDate: entry.created,
             expirationDate: entry.expires,
             renewalDate: entry.expires,
-            nameservers: [], // not returned by listDomains (see getDomainInfo)
+            nameservers: [], // not returned by listDomains (see getDomain)
           })
         );
       }
@@ -138,7 +157,37 @@ export class NameSiloRegistrar extends BaseRegistrar {
       hasMore = entries.length === pageSize;
       page++;
     }
-    return domains;
+    return applyListOptions(domains, { limit, search });
+  }
+
+  /**
+   * getDomainInfo carries the details listDomains omits: status, lock, privacy,
+   * auto-renew, and nameservers. This is the only way to get NS for a NameSilo
+   * domain (one call per domain).
+   */
+  override async getDomain(domainName: string, opts?: RequestOptions): Promise<Domain> {
+    const res = await this.call('getDomainInfo', { domain: domainName }, opts);
+    if (!replyOk(res)) {
+      throw new NotFoundError(`NameSilo: domain '${domainName}' not found (${replyDetail(res)})`);
+    }
+    const r = res.reply ?? {};
+    return createDomain({
+      domainName,
+      registrar: this.name,
+      status: r.status,
+      createdDate: r.created,
+      expirationDate: r.expires,
+      renewalDate: r.expires,
+      autoRenew: isYes(r.auto_renew),
+      locked: isYes(r.locked),
+      privacy: isYes(r.private),
+      nameservers: extractNsHosts(r.nameservers),
+    });
+  }
+
+  override async getNameservers(domainName: string, opts?: RequestOptions): Promise<string[]> {
+    const domain = await this.getDomain(domainName, opts);
+    return domain.nameservers;
   }
 
   override async renewDomain(
@@ -177,6 +226,33 @@ export class NameSiloRegistrar extends BaseRegistrar {
     const res = await this.call('domainUnlock', { domain: domainName }, opts);
     return statusResult(res, [253]);
   }
+}
+
+// NameSilo booleans arrive as "Yes"/"No" (or 1/0) strings
+function isYes(v: unknown): boolean {
+  if (typeof v !== 'string' && typeof v !== 'number' && typeof v !== 'boolean') return false;
+  const s = String(v).trim().toLowerCase();
+  return s === 'yes' || s === '1' || s === 'true';
+}
+
+// getDomainInfo returns nameservers as `{ nameserver: [...] }`, where each entry
+// may be a plain host string or an object carrying the host in `#text`.
+function extractNsHosts(ns: unknown): string[] {
+  if (!ns) return [];
+  const raw =
+    typeof ns === 'object' && !Array.isArray(ns) && 'nameserver' in ns
+      ? ((ns as { nameserver?: unknown }).nameserver ?? [])
+      : ns;
+  const list = Array.isArray(raw) ? raw : [raw];
+  return list
+    .map(item =>
+      typeof item === 'string'
+        ? item
+        : item && typeof item === 'object' && '#text' in item
+          ? String((item as { '#text': unknown })['#text'])
+          : String(item)
+    )
+    .filter(Boolean);
 }
 
 // whether the response's reply.code is in the success family (300)

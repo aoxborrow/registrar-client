@@ -8,6 +8,7 @@ import type {
   DnsRecord,
   Domain,
   DomainAvailability,
+  ListDomainsOptions,
   OperationResult,
   Registrar,
   RegisterDomainInput,
@@ -89,7 +90,7 @@ export abstract class BaseRegistrar implements Registrar {
     );
   }
 
-  listDomains(_opts?: RequestOptions): Promise<Domain[]> {
+  listDomains(_opts?: ListDomainsOptions): Promise<Domain[]> {
     return Promise.reject(new NotImplementedError(`${this.name}: listDomains is not implemented`));
   }
 

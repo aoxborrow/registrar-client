@@ -85,6 +85,45 @@ command) and `setPrivacy` (its WhoisGuard flow needs a separate id + forwarding
 email); Spaceship defers `getPricing` (it has no pricing endpoint at all).
 Namecheap is the only one with real per-TLD `getPricing`.
 
+## Listing domains & portfolios
+
+`listDomains` accepts `{ limit, search }` (alongside the usual request options).
+`limit` defaults to **1000** — providers request capped page sizes and stop
+paginating once that many domains are collected, so a 10k-domain account never
+pulls every page by default. `search` filters by domain-name substring:
+server-side where the API supports it (**Namecheap** `SearchTerm`, **Gandi**
+`fqdn`) and client-side everywhere else.
+
+```ts
+const recent = await client.listDomains({ limit: 100 });
+const acme = await client.listDomains({ search: 'acme' });
+```
+
+Nameservers come back **in the single list call** on **GoDaddy** (via
+`includes=nameServers`), **Gandi**, **Spaceship**, and **Dynadot**. The others
+(**Namecheap**, **Porkbun**, **NameSilo**, **NameBright**) don't return
+nameservers from their list endpoint — use `getNameservers` / `getDomain`
+per domain for those. **Cloudflare** manages nameservers via its Zones API, not
+the Registrar list.
+
+To build a combined view across registrars, `listPortfolio` fans out over many
+providers concurrently with per-registrar error isolation (one provider being
+down never sinks the whole view). Every `Domain` already carries its `registrar`:
+
+```ts
+import { listPortfolio, createRegistrar } from '@aoxborrow/registrar-client';
+
+const { domains, errors } = await listPortfolio(
+  [
+    createRegistrar('godaddy', godaddyCreds),
+    createRegistrar('namecheap', namecheapCreds),
+    createRegistrar('gandi', gandiCreds),
+  ],
+  { limit: 1000 } // applied to each registrar independently
+);
+// domains: Domain[] (each tagged with .registrar); errors: { registrar, error }[]
+```
+
 ## Capabilities
 
 Registrars don't all support the same operations. **Core** is a fixed contract
@@ -163,6 +202,13 @@ const gd = createRegistrar('godaddy', oteCredentials, { environment: 'sandbox' }
 Requesting `sandbox` on a provider that has none (`cloudflare`, `dynadot`,
 `spaceship`) throws a `ConfigurationError` — a test can never silently hit
 production. Check `SomeRegistrar.supportsSandbox` to discover which do.
+
+Some providers key their sandbox off the **credential**, not a separate host.
+**Porkbun**'s sandbox shares the production base URL — a sandbox key is prefixed
+`pk1_sb_`, starts with $1,000 of fake credit, and marks every response with
+`"sandbox": true` (top up / reset via `POST /sandbox/topup` · `POST
+/sandbox/reset`). There, `{ environment: 'sandbox' }` is cosmetic; the `pk1_sb_`
+key is what routes to the test environment.
 
 ### Integration tests
 

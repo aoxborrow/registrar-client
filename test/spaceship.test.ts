@@ -44,6 +44,18 @@ describe('Spaceship provider', () => {
     expect(d.expirationDate?.toISOString()).toBe('2027-01-01T00:00:00.000Z');
   });
 
+  it('listDomains caps take at limit and filters by search client-side', async () => {
+    const sp = spaceship();
+    const calls = stubHttp(sp, () => ({ items: [{ name: 'foo.com' }, { name: 'bar.com' }] }));
+
+    const capped = await sp.listDomains({ limit: 5 });
+    expect(calls[0].query).toMatchObject({ take: 5, skip: 0 });
+    expect(capped).toHaveLength(2);
+
+    const matched = await sp.listDomains({ search: 'foo' });
+    expect(matched.map(d => d.domainName)).toEqual(['foo.com']);
+  });
+
   it('checkAvailability maps the result enum and premium register price', async () => {
     const sp = spaceship();
     const calls = stubHttp(sp, () => ({

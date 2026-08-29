@@ -2,11 +2,13 @@ import type {
   ConfigField,
   ConnectionResult,
   Domain,
+  ListDomainsOptions,
   OperationResult,
   RegistrarOptions,
   RequestOptions,
 } from '../types';
-import { createDomain } from '../utils';
+import { applyListOptions, createDomain } from '../utils';
+import { DEFAULT_LIST_LIMIT } from '../constants';
 import { toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import type { RegistrarFeature } from '../features';
@@ -97,17 +99,21 @@ export class CloudflareRegistrar extends BaseRegistrar {
     }
   }
 
-  override async listDomains(opts?: RequestOptions): Promise<Domain[]> {
+  override async listDomains(opts?: ListDomainsOptions): Promise<Domain[]> {
+    // The Registrar list endpoint has no name filter, so `search` is applied
+    // client-side. It also does not return nameservers (those live on the Zones
+    // API); `nameservers` therefore reflects only what the list response carries.
+    const { limit = DEFAULT_LIST_LIMIT, search, ...reqOpts } = opts ?? {};
     const domains: Domain[] = [];
-    const perPage = 200; // Cloudflare API maximum page size
+    const perPage = Math.min(limit, 200); // Cloudflare API maximum page size
     let page = 1;
     let hasMore = true;
 
-    while (hasMore) {
+    while (hasMore && domains.length < limit) {
       const res = await this.http.request<CfEnvelope<CfDomain[]>>({
         path: this.accountPath,
         query: { per_page: perPage, page },
-        ...opts,
+        ...reqOpts,
       });
       if (!res.success) {
         throw new Error(res.errors?.[0]?.message ?? 'API request failed');
@@ -132,7 +138,7 @@ export class CloudflareRegistrar extends BaseRegistrar {
       hasMore = list.length === perPage;
       page++;
     }
-    return domains;
+    return applyListOptions(domains, { limit, search });
   }
 
   override async renewDomain(
