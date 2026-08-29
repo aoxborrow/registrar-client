@@ -256,4 +256,89 @@ describe('Gandi provider', () => {
     });
     expect(results[1].price).toBeUndefined();
   });
+
+  // --- extended capabilities ---
+
+  it('getAuthCode reads the authinfo field from domain details', async () => {
+    const g = gandi();
+    const calls = stubHttp(g, () => ({ fqdn: 'example.com', authinfo: 's3cr3t-epp' }));
+    expect(await g.getAuthCode('example.com')).toBe('s3cr3t-epp');
+    expect(calls[0].path).toBe('/domain/domains/example.com');
+  });
+
+  it('getDnssec parses the DS line from LiveDNS keys and ignores deleted keys', async () => {
+    const g = gandi();
+    stubHttp(g, () => [
+      { id: 'k1', deleted: false, ds: 'example.com. 3600 IN DS 50651 13 2 01CC01EE0123ABCD' },
+      { id: 'k2', deleted: true, ds: 'example.com. 3600 IN DS 111 8 1 DEAD' },
+    ]);
+    expect(await g.getDnssec('example.com')).toEqual({
+      enabled: true,
+      dsRecords: [{ keyTag: 50651, algorithm: 13, digestType: 2, digest: '01CC01EE0123ABCD' }],
+    });
+  });
+
+  it('getDnssec reports disabled for no active keys', async () => {
+    const g = gandi();
+    stubHttp(g, () => []);
+    expect(await g.getDnssec('example.com')).toEqual({ enabled: false, dsRecords: [] });
+  });
+
+  it('disableDnssec deletes each active LiveDNS key by id', async () => {
+    const g = gandi();
+    const calls = stubHttp(g, req => {
+      if (req.method === undefined)
+        return [{ id: 'k1' }, { id: 'k2', deleted: true }, { id: 'k3' }];
+      return '';
+    });
+    const res = await g.disableDnssec('example.com');
+    expect(res.success).toBe(true);
+    const deletes = calls.filter(c => c.method === 'DELETE');
+    expect(deletes.map(c => c.path)).toEqual([
+      '/livedns/domains/example.com/keys/k1',
+      '/livedns/domains/example.com/keys/k3',
+    ]);
+  });
+
+  it('getEmailForwarding expands each destination into its own row', async () => {
+    const g = gandi();
+    stubHttp(g, () => [
+      { source: 'hello', destinations: ['a@x.com', 'b@y.com'] },
+      { source: 'sales', destinations: ['c@z.com'] },
+    ]);
+    expect(await g.getEmailForwarding('example.com')).toEqual([
+      { alias: 'hello', forwardTo: 'a@x.com' },
+      { alias: 'hello', forwardTo: 'b@y.com' },
+      { alias: 'sales', forwardTo: 'c@z.com' },
+    ]);
+  });
+
+  it('setEmailForwarding diffs: POST new, PUT changed, DELETE removed sources', async () => {
+    const g = gandi();
+    const calls = stubHttp(g, req => {
+      if (req.method === undefined) {
+        // current forwards: "old" (to remove) and "hello" (to update)
+        return [
+          { source: 'old', destinations: ['x@x.com'] },
+          { source: 'hello', destinations: ['a@x.com'] },
+        ];
+      }
+      return '';
+    });
+    const res = await g.setEmailForwarding('example.com', [
+      { alias: 'hello', forwardTo: 'a@x.com' },
+      { alias: 'hello', forwardTo: 'b@y.com' },
+      { alias: 'new', forwardTo: 'c@z.com' },
+    ]);
+    expect(res.success).toBe(true);
+    const byMethod = (m: string) => calls.filter(c => c.method === m).map(c => c.path);
+    expect(byMethod('DELETE')).toEqual(['/email/forwards/example.com/old']);
+    // hello already exists -> PUT with both destinations
+    const put = calls.find(c => c.method === 'PUT');
+    expect(put?.path).toBe('/email/forwards/example.com/hello');
+    expect(put?.body).toEqual({ destinations: ['a@x.com', 'b@y.com'] });
+    // new source -> POST
+    const post = calls.find(c => c.method === 'POST');
+    expect(post?.body).toEqual({ source: 'new', destinations: ['c@z.com'] });
+  });
 });

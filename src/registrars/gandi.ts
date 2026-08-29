@@ -4,8 +4,11 @@ import type {
   Contact,
   ContactSet,
   DnsRecord,
+  DnssecStatus,
   Domain,
   DomainAvailability,
+  DsRecord,
+  EmailForward,
   ListDomainsOptions,
   OperationResult,
   RegistrarOptions,
@@ -103,6 +106,23 @@ interface GandiPricingResponse {
   products?: GandiProduct[];
 }
 
+// a DNSSEC key from GET /v5/livedns/domains/{fqdn}/keys. `ds` is the full DS
+// RR line ("<owner> <ttl> IN DS <keyTag> <algorithm> <digestType> <digest>").
+interface GandiKey {
+  id?: string;
+  deleted?: boolean;
+  flags?: number;
+  algorithm?: number;
+  ds?: string;
+}
+
+// an email forward from GET /v5/email/forwards/{domain}: `source` is the local
+// part (mailbox), `destinations` the full addresses it forwards to.
+interface GandiForward {
+  source?: string;
+  destinations?: string[];
+}
+
 /**
  * Gandi.net Registrar
  * API docs: https://api.gandi.net/docs/
@@ -125,10 +145,10 @@ export class GandiRegistrar extends BaseRegistrar {
   ];
   // Gandi's v5 API offers a sandbox at api.sandbox.gandi.net (separate account)
   static readonly supportsSandbox = true;
-  // Rich API on top of core: DNSSEC and glue records (LiveDNS), real hosted
-  // mailboxes plus forwarding. Note core `setPrivacy` is automatic/GDPR-driven
-  // on Gandi rather than a clean toggle — the method treats an already-correct
-  // state as idempotent success.
+  // On top of core: transfer-out auth code (`authinfo`), DNSSEC read/disable
+  // (LiveDNS keys), and email forwarding. Note core `setPrivacy` is
+  // automatic/GDPR-driven on Gandi rather than a clean toggle — the method treats
+  // an already-correct state as idempotent success.
   static readonly extendedFeatures: readonly RegistrarFeature[] = [
     Feature.GetAuthCode,
     Feature.GetDnssec,
@@ -405,6 +425,139 @@ export class GandiRegistrar extends BaseRegistrar {
     );
   }
 
+  // --- extended capabilities ---------------------------------------------
+
+  // The transfer authorization (EPP) code is the `authinfo` field on the
+  // domain-details endpoint (present for domains the account manages).
+  override async getAuthCode(domainName: string, opts?: RequestOptions): Promise<string> {
+    const d = await this.http.request<{ authinfo?: string }>({
+      path: `/domain/domains/${domainName}`,
+      ...opts,
+    });
+    return d.authinfo ?? '';
+  }
+
+  /**
+   * DNSSEC status via Gandi LiveDNS keys (GET /livedns/domains/{fqdn}/keys). A
+   * non-deleted key means DNSSEC is enabled; each key's `ds` field is the full DS
+   * RR line, which we parse into keyTag/algorithm/digestType/digest.
+   */
+  override async getDnssec(domainName: string, opts?: RequestOptions): Promise<DnssecStatus> {
+    const keys = await this.http.request<GandiKey[]>({
+      path: `/livedns/domains/${domainName}/keys`,
+      ...opts,
+    });
+    const active = (keys ?? []).filter(k => !k.deleted);
+    const dsRecords = active.map(k => parseDsRecord(k.ds)).filter((d): d is DsRecord => d !== null);
+    return { enabled: active.length > 0, dsRecords };
+  }
+
+  /**
+   * Disable DNSSEC by deleting each LiveDNS key (Gandi has no single toggle —
+   * removing the keys removes the DS records at the registry).
+   */
+  override async disableDnssec(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    try {
+      const keys = await this.http.request<GandiKey[]>({
+        path: `/livedns/domains/${domainName}/keys`,
+        ...opts,
+      });
+      for (const k of keys ?? []) {
+        if (k.deleted || !k.id) continue;
+        await this.http.request({
+          method: 'DELETE',
+          path: `/livedns/domains/${domainName}/keys/${encodeURIComponent(k.id)}`,
+          ...opts,
+        });
+      }
+      return { success: true, message: 'DNSSEC disabled successfully' };
+    } catch (error) {
+      return { success: false, message: toRegistrarError(error).message };
+    }
+  }
+
+  /**
+   * Read email forwarding via GET /email/forwards/{domain}. A Gandi forward has a
+   * `source` (local part) and multiple `destinations`; we expand each destination
+   * into its own {alias, forwardTo} row.
+   */
+  override async getEmailForwarding(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<EmailForward[]> {
+    const forwards = await this.http.request<GandiForward[]>({
+      path: `/email/forwards/${domainName}`,
+      ...opts,
+    });
+    const out: EmailForward[] = [];
+    for (const f of forwards ?? []) {
+      for (const dest of f.destinations ?? []) {
+        if (f.source && dest) out.push({ alias: f.source, forwardTo: dest });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Replace email forwarding (full replace; empty clears). Gandi has no bulk
+   * endpoint, so diff against the current forwards: group desired rows by source,
+   * DELETE sources no longer wanted, PUT changed sources, POST new ones.
+   */
+  override async setEmailForwarding(
+    domainName: string,
+    forwards: EmailForward[],
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    try {
+      const desired = new Map<string, string[]>();
+      for (const f of forwards) {
+        const list = desired.get(f.alias) ?? [];
+        list.push(f.forwardTo);
+        desired.set(f.alias, list);
+      }
+      const current = await this.http.request<GandiForward[]>({
+        path: `/email/forwards/${domainName}`,
+        ...opts,
+      });
+      const currentSources = new Set(
+        (current ?? []).map(f => f.source).filter((s): s is string => !!s)
+      );
+
+      for (const source of currentSources) {
+        if (!desired.has(source)) {
+          await this.http.request({
+            method: 'DELETE',
+            path: `/email/forwards/${domainName}/${encodeURIComponent(source)}`,
+            ...opts,
+          });
+        }
+      }
+      for (const [source, destinations] of desired) {
+        if (currentSources.has(source)) {
+          await this.http.request({
+            method: 'PUT',
+            path: `/email/forwards/${domainName}/${encodeURIComponent(source)}`,
+            body: { destinations },
+            ...opts,
+          });
+        } else {
+          await this.http.request({
+            method: 'POST',
+            path: `/email/forwards/${domainName}`,
+            body: { source, destinations },
+            ...opts,
+          });
+        }
+      }
+      return { success: true, message: 'Email forwarding updated successfully' };
+    } catch (error) {
+      return { success: false, message: toRegistrarError(error).message };
+    }
+  }
+
   private async mutate(
     req: { method: string; path: string; body?: unknown },
     successMessage: string,
@@ -445,4 +598,22 @@ function pickPrice(price: GandiPrice | undefined): number | undefined {
   if (!price) return undefined;
   const value = price.price_after_taxes ?? price.price_before_taxes;
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+// parse a DS resource-record line into its components. Gandi's `ds` field looks
+// like "example.com. 3600 IN DS 50651 13 2 01CC01EE...". Returns null if it
+// doesn't contain a DS record (e.g. a key with no published DS).
+function parseDsRecord(ds: string | undefined): DsRecord | null {
+  if (!ds) return null;
+  const tokens = ds.trim().split(/\s+/);
+  const i = tokens.findIndex(t => t.toUpperCase() === 'DS');
+  const parts = i >= 0 ? tokens.slice(i + 1) : tokens;
+  if (parts.length < 4) return null;
+  const [keyTag, algorithm, digestType, ...digest] = parts;
+  return {
+    keyTag: Number(keyTag) || 0,
+    algorithm: Number(algorithm) || 0,
+    digestType: Number(digestType) || 0,
+    digest: digest.join(''),
+  };
 }
