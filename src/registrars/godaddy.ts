@@ -168,8 +168,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     // query string, so it is embedded in the path directly. `includes=nameServers`
     // folds nameservers into this list call (they are otherwise omitted). GoDaddy
     // paginates via `marker` = the last domain name seen; we stop at `limit`.
-    const statusGroups =
-      'statusGroups=VISIBLE&statusGroups=RENEWABLE&statusGroups=REDEMPTION';
+    const statusGroups = 'statusGroups=VISIBLE&statusGroups=RENEWABLE&statusGroups=REDEMPTION';
     const domains: Domain[] = [];
     let marker: string | undefined;
     while (domains.length < limit) {
