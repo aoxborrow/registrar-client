@@ -176,13 +176,250 @@ describe('Cloudflare provider', () => {
     expect(contacts.registrant?.address2).toBeUndefined();
   });
 
-  it('getPricing throws NotImplementedError (at-cost, no pricing API)', async () => {
+  it('setPrivacy confirms the domain then PUTs the privacy flag', async () => {
     const cf = cloudflare();
-    await expect(cf.getPricing('com')).rejects.toBeInstanceOf(NotImplementedError);
+    const calls = stubHttp(cf, req =>
+      req.method === 'PUT'
+        ? { success: true, result: { name: 'example.com' } }
+        : { success: true, result: [{ name: 'example.com' }] }
+    );
+    const res = await cf.setPrivacy('example.com', false);
+    expect(res.success).toBe(true);
+    // first a name-scoped confirmation GET, then the PUT carrying { privacy: false }
+    expect(calls[0]).toMatchObject({
+      path: '/accounts/acct-1/registrar/domains',
+      query: { name: 'example.com' },
+    });
+    expect(calls[1]).toMatchObject({
+      method: 'PUT',
+      path: '/accounts/acct-1/registrar/domains/example.com',
+      body: { privacy: false },
+    });
   });
 
-  it('checkAvailability throws NotImplementedError (no availability API)', async () => {
+  it('setDnsRecords deletes existing records then creates the given set (Zones API)', async () => {
     const cf = cloudflare();
-    await expect(cf.checkAvailability(['example.com'])).rejects.toBeInstanceOf(NotImplementedError);
+    const calls = stubHttp(cf, req => {
+      if (req.path === '/zones')
+        return { success: true, result: [{ id: 'zone-1', name: 'example.com' }] };
+      if (req.path === '/zones/zone-1/dns_records' && (req.method ?? 'GET') === 'GET') {
+        return {
+          success: true,
+          result: [
+            { id: 'rec-a', type: 'A', name: 'example.com', content: '9.9.9.9' },
+            { id: 'rec-b', type: 'TXT', name: 'example.com', content: 'old' },
+          ],
+        };
+      }
+      return { success: true, result: {} }; // DELETE + POST
+    });
+
+    const res = await cf.setDnsRecords('example.com', [
+      { type: 'A', name: 'www.example.com', value: '203.0.113.7', ttl: 300 },
+      { type: 'MX', name: 'example.com', value: 'mail.example.net', priority: 10 },
+      { type: 'NS', name: 'example.com', value: 'ns.example.com' }, // apex NS -> skipped
+    ]);
+    expect(res.success).toBe(true);
+
+    const deletes = calls.filter(c => c.method === 'DELETE').map(c => c.path);
+    expect(deletes).toEqual(['/zones/zone-1/dns_records/rec-a', '/zones/zone-1/dns_records/rec-b']);
+
+    const posts = calls.filter(c => c.method === 'POST').map(c => c.body);
+    // apex NS is Cloudflare-managed and skipped; A + MX are created with FQDN names
+    expect(posts).toEqual([
+      { type: 'A', name: 'www.example.com', content: '203.0.113.7', ttl: 300 },
+      { type: 'MX', name: 'example.com', content: 'mail.example.net', priority: 10 },
+    ]);
+  });
+
+  it('setDnsRecords surfaces a delete failure (e.g. Email Routing managed record)', async () => {
+    const cf = cloudflare();
+    stubHttp(cf, req => {
+      if (req.path === '/zones')
+        return { success: true, result: [{ id: 'zone-1', name: 'example.com' }] };
+      if ((req.method ?? 'GET') === 'GET') {
+        return {
+          success: true,
+          result: [{ id: 'rec-mx', type: 'MX', name: 'example.com', content: 'x' }],
+        };
+      }
+      return {
+        success: false,
+        errors: [{ code: 1046, message: 'This record is managed by Email Routing.' }],
+      };
+    });
+    const res = await cf.setDnsRecords('example.com', [
+      { type: 'A', name: 'example.com', value: '1.1.1.1' },
+    ]);
+    expect(res.success).toBe(false);
+    expect(res.message).toMatch(/Email Routing/);
+  });
+
+  it('checkAvailability POSTs domain-check and maps registrable + pricing', async () => {
+    const cf = cloudflare();
+    const calls = stubHttp(cf, () => ({
+      success: true,
+      result: {
+        domains: [
+          {
+            name: 'available.click',
+            registrable: true,
+            tier: 'standard',
+            pricing: { currency: 'USD', registration_cost: '10.20', renewal_cost: '10.20' },
+          },
+          { name: 'premium.xyz', registrable: false, tier: 'premium', reason: 'domain_premium' },
+        ],
+      },
+    }));
+    const res = await cf.checkAvailability(['available.click', 'premium.xyz']);
+    expect(calls[0]).toMatchObject({
+      method: 'POST',
+      path: '/accounts/acct-1/registrar/domain-check',
+      body: { domains: ['available.click', 'premium.xyz'] },
+    });
+    expect(res).toEqual([
+      {
+        domainName: 'available.click',
+        available: true,
+        premium: false,
+        price: 10.2,
+        currency: 'USD',
+      },
+      { domainName: 'premium.xyz', available: false, premium: true },
+    ]);
+  });
+
+  it('checkAvailability batches names in groups of 20', async () => {
+    const cf = cloudflare();
+    const names = Array.from({ length: 25 }, (_, i) => `d${i}.click`);
+    const calls = stubHttp(cf, req => ({
+      success: true,
+      result: {
+        domains: (req.body as { domains: string[] }).domains.map(name => ({
+          name,
+          registrable: true,
+        })),
+      },
+    }));
+    const res = await cf.checkAvailability(names);
+    expect(calls).toHaveLength(2); // 20 + 5
+    expect((calls[0].body as { domains: string[] }).domains).toHaveLength(20);
+    expect((calls[1].body as { domains: string[] }).domains).toHaveLength(5);
+    expect(res).toHaveLength(25);
+  });
+
+  it('getPricing derives a probe domain for a bare TLD and maps pricing', async () => {
+    const cf = cloudflare();
+    const calls = stubHttp(cf, () => ({
+      success: true,
+      result: {
+        domains: [
+          {
+            name: 'registrar-client-pricing-probe.click',
+            registrable: true,
+            tier: 'standard',
+            pricing: { currency: 'USD', registration_cost: '10.20', renewal_cost: '9.10' },
+          },
+        ],
+      },
+    }));
+    const pricing = await cf.getPricing('.click');
+    expect((calls[0].body as { domains: string[] }).domains).toEqual([
+      'registrar-client-pricing-probe.click',
+    ]);
+    expect(pricing).toEqual({ tld: 'click', currency: 'USD', registration: 10.2, renewal: 9.1 });
+  });
+
+  it('getPricing throws when the API returns no pricing (e.g. premium)', async () => {
+    const cf = cloudflare();
+    stubHttp(cf, () => ({
+      success: true,
+      result: { domains: [{ name: 'premium.xyz', registrable: false, reason: 'domain_premium' }] },
+    }));
+    await expect(cf.getPricing('premium.xyz')).rejects.toThrow(/domain_premium/);
+  });
+
+  it('registerDomain POSTs the registration and reports success when completed', async () => {
+    const cf = cloudflare();
+    const calls = stubHttp(cf, () => ({
+      success: true,
+      result: { domain_name: 'new.click', state: 'succeeded', completed: true },
+    }));
+    const res = await cf.registerDomain('new.click', {
+      contacts: {},
+      autoRenew: true,
+      privacy: true,
+    });
+    expect(res).toMatchObject({ success: true });
+    expect(calls[0]).toMatchObject({
+      method: 'POST',
+      path: '/accounts/acct-1/registrar/registrations',
+      body: { domain_name: 'new.click', auto_renew: true, privacy_mode: 'redaction' },
+    });
+  });
+
+  it('registerDomain maps a custom registrant into Cloudflare postal_info', async () => {
+    const cf = cloudflare();
+    const calls = stubHttp(cf, () => ({
+      success: true,
+      result: { state: 'succeeded', completed: true },
+    }));
+    await cf.registerDomain('new.click', {
+      contacts: {
+        registrant: {
+          firstName: 'Ada',
+          lastName: 'Lovelace',
+          organization: 'Example Inc',
+          email: 'ada@example.com',
+          phone: '+1.5555555555',
+          address1: '123 Main St',
+          city: 'Austin',
+          state: 'TX',
+          postalCode: '78701',
+          country: 'US',
+        },
+      },
+    });
+    expect((calls[0].body as { contacts: unknown }).contacts).toEqual({
+      registrant: {
+        email: 'ada@example.com',
+        phone: '+1.5555555555',
+        postal_info: {
+          name: 'Ada Lovelace',
+          organization: 'Example Inc',
+          address: {
+            street: '123 Main St',
+            city: 'Austin',
+            state: 'TX',
+            postal_code: '78701',
+            country_code: 'US',
+          },
+        },
+      },
+    });
+  });
+
+  it('registerDomain surfaces an API failure', async () => {
+    const cf = cloudflare();
+    stubHttp(cf, () => ({
+      success: false,
+      errors: [{ message: 'extension_not_supported_via_api' }],
+    }));
+    const res = await cf.registerDomain('bad.link', { contacts: {} });
+    expect(res).toMatchObject({ success: false });
+    expect(res.message).toMatch(/extension_not_supported/);
+  });
+
+  // Cloudflare has no post-registration update endpoint; these fields are settable
+  // only at registration, so the methods reject rather than hit a doomed PUT.
+  it('post-registration updates reject with NotImplementedError (no API endpoint)', async () => {
+    const cf = cloudflare();
+    await expect(cf.setAutoRenew('example.com', false)).rejects.toBeInstanceOf(NotImplementedError);
+    await expect(cf.lockDomain('example.com')).rejects.toBeInstanceOf(NotImplementedError);
+    await expect(cf.unlockDomain('example.com')).rejects.toBeInstanceOf(NotImplementedError);
+    await expect(cf.updateNameservers('example.com', ['a.ns', 'b.ns'])).rejects.toBeInstanceOf(
+      NotImplementedError
+    );
+    await expect(cf.renewDomain('example.com')).rejects.toBeInstanceOf(NotImplementedError);
   });
 });

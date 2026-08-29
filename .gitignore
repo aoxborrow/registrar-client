@@ -53,3 +53,6 @@ tsconfig.tsbuildinfo
 
 # namecheap live harness (gitignored)
 .nclive/
+
+# cloudflare live harness (gitignored)
+.cflive/

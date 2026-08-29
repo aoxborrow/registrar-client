@@ -1,6 +1,58 @@
 # Cloudflare — Registrar API Research
 
-> Researched: 2026-08-26 · Docs: https://developers.cloudflare.com/registrar/, https://developers.cloudflare.com/registrar/registrar-api/, https://developers.cloudflare.com/api/resources/registrar/
+> Researched: 2026-08-26 · **Live-verified: 2026-08-29** · Docs: https://developers.cloudflare.com/registrar/, https://developers.cloudflare.com/registrar/registrar-api/, https://developers.cloudflare.com/api/resources/registrar/
+
+## Live verification (2026-08-29)
+
+Tested against the real Cloudflare account (no sandbox exists). The `~`/`✗` marks in
+the research table below predate this and are partly superseded by these findings.
+
+**Implemented + verified working:**
+
+- **Reads** — `testConnection`, `listDomains`, `getDomain`, `getNameservers`,
+  `getDnsRecords`, `getContacts` all work (nameservers/DNS resolve the domain to a
+  Zones API zone first).
+- **`checkAvailability`** — `POST /registrar/domain-check` (batches of 20). This is
+  the **authoritative** availability source; `domain-search` (GET) is discovery-only
+  and over-reports (it listed a premium numeric `.xyz` as registrable at $0.85 while
+  `domain-check` returned `registrable:false, reason:"domain_premium"`).
+- **`getPricing`** — derived from `domain-check` pricing. A full domain gives an exact
+  quote; a bare TLD is probed with a neutral standard label. Transfers omitted (no API).
+- **`registerDomain`** — `POST /registrar/registrations` (beta). **Live-registered
+  `namebot.dev`** ($12.20, standard `.dev`) — 201, `state:succeeded`, then `getDomain`
+  confirmed active with `autoRenew:true, privacy:true`. `auto_renew`/`privacy_mode`/
+  custom registrant contact are honored **at registration**. Premium names and
+  unsupported extensions (`reason:"extension_not_supported_via_api"`) are rejected by
+  the availability check, so registration is gated behind `checkAvailability`.
+- **`setPrivacy`** — legacy `PUT .../registrar/domains/{name}` with `privacy` still
+  works and persists (toggled `true→false→true`, reversible).
+- **`setDnsRecords`** — Zones API replace-all (delete existing, recreate). **Verified on
+  the clean `namebot.dev` zone**: set A/TXT/MX, read-back matched, restored to empty.
+
+**Not available via the API (confirmed, both `.uk` and gTLD `.dev`):**
+
+- **`setAutoRenew`, `lockDomain`, `unlockDomain`** → the legacy `PUT` edit endpoint
+  returns **422 "You are not allowed to perform this action"** for `auto_renew` and
+  `locked`, on **both** a `.uk` and the gTLD `.dev` — so this is **API-wide, not
+  TLD-specific**. The new `registrations` resource has **no update endpoint** (docs:
+  "these core Registrar functions will be added in future versions"). These fields can
+  only be set **at registration**. → now `NotImplementedError` with a clear message.
+- **`updateNameservers`** → 403 "Name server update not allowed"; Cloudflare Registrar
+  nameserver changes require contacting support. → `NotImplementedError`.
+- **`renewDomain`** → renewals are not in the API yet. → `NotImplementedError`.
+- **`updateContacts`, `transferIn`** → not yet in the API. → `NotImplementedError`.
+
+**Token note:** the account token authenticates registrar **reads and writes** — both
+privacy and DNS writes succeed. The earlier "token is read-only / needs a
+Domain-Registration:Edit token" theory was **wrong**: the 422s are Cloudflare gating
+those operations at the API, not a token-scope problem. (`GET /user/tokens/verify`
+returns "Invalid API Token" for an account-scoped token — expected, not a sign of a bad
+token.)
+
+**Gotcha — Email Routing locks DNS:** on a zone with Cloudflare Email Routing enabled,
+the managed MX/DKIM/SPF records return **error 1046** ("This record is managed by Email
+Routing") on delete, so a `setDnsRecords` replace-all fails until Email Routing is
+disabled. `setDnsRecords` surfaces this cleanly and leaves the zone untouched.
 
 ## Overview
 
