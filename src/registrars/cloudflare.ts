@@ -26,13 +26,15 @@ interface CfEnvelope<T> {
 
 // a domain object from the Cloudflare Registrar API
 interface CfDomain {
-  id: string;
   name: string;
-  status?: string;
-  created_at?: string;
+  // registrar domains report lifecycle under last_known_status (e.g.
+  // "registrationActive") — there is no plain `status` field
+  last_known_status?: string;
+  registered_at?: string;
   expires_at?: string;
   auto_renew?: boolean;
   locked?: boolean;
+  privacy?: boolean;
   name_servers?: string[];
 }
 
@@ -134,7 +136,7 @@ export class CloudflareRegistrar extends BaseRegistrar {
     const { search, ...reqOpts } = opts ?? {};
     const domains: Domain[] = [];
     const perPage = 200; // Cloudflare API maximum page size
-    let page = 1;
+    let page = 0; // the Registrar list endpoint is 0-indexed (result_info.page starts at 0)
     let hasMore = true;
 
     while (hasMore) {
@@ -159,13 +161,13 @@ export class CloudflareRegistrar extends BaseRegistrar {
     return createDomain({
       domainName: d.name,
       registrar: this.name,
-      status: d.status,
-      createdDate: d.created_at,
+      status: d.last_known_status,
+      createdDate: d.registered_at,
       expirationDate: d.expires_at,
       renewalDate: d.expires_at,
       autoRenew: d.auto_renew ?? false,
       locked: d.locked ?? false,
-      privacy: true, // Cloudflare includes WHOIS privacy by default
+      privacy: d.privacy ?? true, // Cloudflare includes WHOIS privacy by default
       nameservers: d.name_servers ?? [],
     });
   }
@@ -293,7 +295,7 @@ export class CloudflareRegistrar extends BaseRegistrar {
     return this.patchDomain(domainName, { locked: false }, opts);
   }
 
-  // look up a domain by name to obtain its Cloudflare id
+  // confirm a domain exists in the account (registrar domains are keyed by name)
   private async findDomain(domainName: string, opts?: RequestOptions): Promise<CfDomain | null> {
     const res = await this.http.request<CfEnvelope<CfDomain[]>>({
       path: this.accountPath,
@@ -303,7 +305,7 @@ export class CloudflareRegistrar extends BaseRegistrar {
     return res.result?.find(d => d.name === domainName) ?? null;
   }
 
-  // resolve the domain id then PUT the given fields
+  // confirm the domain exists then PUT the given fields (registrar API is name-keyed)
   private async patchDomain(
     domainName: string,
     body: Record<string, unknown>,
@@ -315,7 +317,7 @@ export class CloudflareRegistrar extends BaseRegistrar {
 
       const res = await this.http.request<CfEnvelope<CfDomain>>({
         method: 'PUT',
-        path: `${this.accountPath}/${domain.id}`,
+        path: `${this.accountPath}/${encodeURIComponent(domainName)}`,
         body,
         ...opts,
       });
