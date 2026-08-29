@@ -7,11 +7,22 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
 
 ## Needs live testing (built + unit-tested, not executed)
 
-- [ ] `registerDomain` / `renewDomain` / `transferIn` on **NameSilo, GoDaddy**
-      (and NameBright register/renew) — paid/irreversible; built to documented
+- [ ] `registerDomain` / `renewDomain` / `transferIn` on **NameSilo** (and
+      NameBright register/renew) — paid/irreversible; built to documented
       shapes, never run. (Dynadot, Gandi register+renew, Porkbun, and Namecheap
       register+renew are sandbox-verified; Namecheap and Gandi `transferIn` need an
       external domain + auth code, not reproducible in the sandbox.)
+- [ ] **GoDaddy** register/renew/transfer — v3 register (quote→execute) is paid
+      with **no v3 sandbox** (OTE is v1-only). The v1 purchase path is correct
+      (`POST /v1/domains/purchase/validate` returns 200 for our body) but OTE
+      returns `500 ERROR_UNKNOWN` on the actual purchase: OTE purchases require an
+      **API Reseller account** (a paid tier) with a Good as Gold balance, created
+      via the Reseller Control Center (reseller.godaddy.com → Settings → API Keys
+      → Test). A plain developer key can read/validate but not purchase. Blocked
+      until/unless a reseller account is set up; the client code is already
+      validated for this path.
+- [ ] **GoDaddy** `updateNameservers` (v3 PUT bare-array) — built + unit-tested;
+      not run live (would repoint a real domain's NS). Verify with a reversible swap.
 - [ ] `updateContacts` on **NameSilo, GoDaddy** — can trigger registrant-change
       verification / 60-day locks; reviewed only. (Dynadot, Gandi, and Namecheap
       are sandbox-verified.)
@@ -20,7 +31,7 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
 - [ ] **Extended features on GoDaddy / NameSilo** (authCode, DNSSEC
       read/disable, email + domain forwarding) — built from docs only; add sandbox
       creds to `.env.testing` and verify. (Dynadot, Gandi, and Porkbun are
-      sandbox-verified; GoDaddy OTE forwarding is reportedly flaky — check on a real domain.
+      sandbox-verified; GoDaddy forwarding is v1-only — check on a real domain.
       Spaceship `getAuthCode` is now live-verified — see confirmed quirks below.)
 - [ ] **NameBright** `updateNameservers` — coded from the documented endpoints; no
       safe way to test NS replacement on the live account, so unverified.
@@ -37,6 +48,14 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
   delay; `registerDomain` requires the ISO 3166-2 `owner.state` (`US-CA`, not
   `CA`); web forwarding is subdomain-only (no apex) and `protocol: https` 500s in
   the sandbox. See `docs/registrars/gandi.md`.
+- **GoDaddy** is hybrid v3/v1 (v3 in prod with a PAT, v1 for management + all of
+  OTE, which has no v3). Live-confirmed: v3 availability wraps results in `items`
+  (not `domains`), prices are integer minor units (`value/100`), standard names
+  report `inventory:"REGISTRY"`, `pageSize` caps at 200 (domains) / 100 (dns),
+  DNS is per-record (no bulk PUT — `setDnsRecords` diffs), and the v3 zones
+  endpoint 404s for domains on external nameservers. A PAT authenticates v1 too
+  (GET 200 / PATCH 204); v1 PATCH is eventually-consistent (read-after-write lag).
+  See `docs/registrars/godaddy.md`.
 - **Namecheap** `setAutoRenew` uses the undocumented-but-live `domains.setAutoRenew`
   (DomainName + IsAutoRenew; reads its inner `IsSuccess`). `getDomain`'s `locked`
   reads the dedicated `getRegistrarLock` command — getList's per-row `IsLocked`

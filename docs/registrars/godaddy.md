@@ -6,6 +6,52 @@
 
 GoDaddy exposes domain search, registration, DNS, contact, privacy, forwarding, and transfer management through a REST API spanning three concurrent version namespaces (v1 account-scoped, v2 v1+async operations, v3 quote-execute discovery/registration). Base URL is `https://api.godaddy.com`; docs also reference a separate OTE (test) environment at `https://api.ote-godaddy.com` for the classic/v1-v2 API surface, though GoDaddy's newest (2026) developer-platform docs describe production as the only environment for the new v3 API ("no local dev server — all requests go to production"), so OTE availability may now be limited to the legacy v1/v2 surface — treat this as ambiguous and verify per-version at implementation time.
 
+## Implementation (2026-08-29): hybrid v3-first / v1-fallback
+
+The provider is a **hybrid** and resolves the OTE/v3 ambiguity above with live
+probes:
+
+- **v3 is discovery + registration + DNS + nameservers only** (14 operations
+  total). It has **no** endpoints for renew, transfer, auto-renew toggle,
+  lock/unlock, privacy, or contact updates — those live only in v1/v2. The v3
+  `Domain` record exposes `autoRenew`/`privacy`/`transferLock` read-only,
+  settable only at registration.
+- **OTE serves v1/v2 only — not v3.** `GET https://api.ote-godaddy.com/v3/...`
+  → 404; `/v1/...` → 401. So v3 has no sandbox, and the only safe way to test
+  paid writes (register/renew/transfer) is the **v1 endpoints on OTE**.
+- **v3 requires a PAT** (`Authorization: Bearer`); sso-key is rejected on v3 and
+  deprecated by GoDaddy in 2026 on v1/v2. A PAT also works on v1 (verified: v1
+  GET 200, PATCH 204).
+
+**Routing** (`useV3` in `src/registrars/godaddy.ts`): v3 is used only in
+production **with a PAT**. With an sso-key, or against OTE/sandbox, every call
+falls back to v1. Management ops are always v1. The base URL is the host root
+(`https://api.godaddy.com` / `https://api.ote-godaddy.com`) and each call is
+version-qualified (`/v3/domains/...` or `/v1/domains/...`).
+
+**Credentials**: `apiToken` (PAT) for production/v3, or `apiKey` + `apiSecret`
+(OTE Key/Secret) with `{ environment: 'sandbox' }` for OTE. The auth header is
+chosen automatically (Bearer if a token is present, else sso-key).
+
+**v3 shape notes** (verified live): bulk availability is `POST
+/v3/domains/check-availability` `{domains}` → `{items:[…]}` (not `domains`);
+prices are "Simple Money" integer **minor units** (`value/100`); standard names
+report `inventory:"REGISTRY"` (premium ⇒ matches `/PREMIUM/`); `pageSize` maxes
+at **200** for domain-names and **100** for dns-records; DNS is per-record
+POST/PUT/DELETE (no bulk PUT — `setDnsRecords` diffs); registration is async
+(202 → poll `/v3/domains/operations/{id}`); nameserver PUT body is a bare array.
+
+**Verified live**: v3 read surface (testConnection, listDomains, getDomain,
+checkAvailability incl. price conversion, getPricing, getDnsRecords) and v3
+`setDnsRecords` (reversible TXT round-trip on a GoDaddy-hosted zone). v1-via-PAT
+read + reversible auto-renew toggle. OTE v1 (testConnection, listDomains,
+checkAvailability). **Not run**: v3 register (paid, no v3 sandbox — only the
+quote step is free) and v1 register/renew/transfer on OTE. The v1 purchase body
+passes GoDaddy's own `POST /v1/domains/purchase/validate` (200), but OTE
+purchases require an **API Reseller account** (a paid tier) with Good as Gold —
+a plain developer key returns `500 ERROR_UNKNOWN` on purchase. See
+`docs/TODOS.md`.
+
 ## Authentication
 
 Two auth schemes coexist: the legacy `sso-key {API_KEY}:{API_SECRET}` header (used with v1/v2, noted as deprecating in 2026) and newer scoped Personal Access Tokens (PAT) sent as `Authorization: Bearer <PAT>` (required for v3, supported everywhere). PATs are generated from the developer dashboard, can carry granular scopes (e.g. `domains.domain:read`, `domains.dns:update`, `domains.transfer:execute`), can be set to expire, and can be revoked individually. Auth is account-scoped (acts on the domains owned by the authenticated GoDaddy account); v2 additionally paths requests under `/v2/customers/{customerId}/domains/...` for reseller/customer scoping. No IP allowlisting is documented. Rate limits apply per-credential (recent docs cite roughly 600 requests per ~23-minute window; legacy docs cited 60 req/min), returning `429` with a `Retry-After` header; `RateLimit-*` response headers report remaining quota.

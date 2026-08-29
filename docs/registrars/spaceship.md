@@ -60,7 +60,7 @@ Long-running operations (register, transfer, renew, restore) are asynchronous: t
 Verified against the production account with a `domains:transfer`-scoped key:
 
 - **`getAuthCode`** — works synchronously; returns the 16-char EPP code (confirmed on `dnslayer.com` and `post.link`).
-- **`lockDomain` / `unlockDomain`** — the `PUT .../transfer/lock` call is accepted (200), but the transfer lock is reported as the `clientTransferProhibited` EPP status (see `toDomain`), which **propagates with a delay**. An immediate `getDomain` read-back returns the *previous* state; poll `getDomain` until it settles rather than trusting a read right after the write (same behavior as GoDaddy). A lock→unlock→restore round-trip on `post.link` completed and settled back to its original locked state.
+- **`lockDomain` / `unlockDomain`** — the `PUT .../transfer/lock` call is accepted (200), but the transfer lock is reported as the `clientTransferProhibited` EPP status (see `toDomain`), which **propagates with a delay**. An immediate `getDomain` read-back returns the _previous_ state; poll `getDomain` until it settles rather than trusting a read right after the write (same behavior as GoDaddy). A lock→unlock→restore round-trip on `post.link` completed and settled back to its original locked state.
 
 ## Sources
 

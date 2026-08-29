@@ -120,39 +120,168 @@ interface GoDaddyAgreement {
 // GoDaddy reports availability prices in micro-units (1,000,000 = 1 unit of currency)
 const PRICE_MICRO_UNITS = 1_000_000;
 
+// --- v3 API shapes ---------------------------------------------------------
+// The v3 "Domain Lifecycle Management" API models money, domains, DNS, and
+// registration differently from v1. These interfaces cover only the fields we
+// read/write.
+
+// v3 "Simple Money": `value` is an integer in the currency's minor units
+// (cents for USD/EUR, whole units for zero-decimal currencies like JPY).
+interface GdV3Money {
+  currencyCode?: string;
+  value?: number;
+}
+
+interface GdV3TermPrice {
+  period?: number;
+  price?: GdV3Money;
+  renewalPrice?: GdV3Money;
+}
+
+interface GdV3Availability {
+  domain: string;
+  available?: boolean;
+  prices?: GdV3TermPrice[];
+  inventory?: string; // e.g. "STANDARD" | "PREMIUM"
+}
+
+interface GdV3Domain {
+  domain: string;
+  status?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  expiresAt?: string;
+  renewBy?: string;
+  autoRenew?: boolean;
+  privacy?: boolean;
+  transferLock?: boolean;
+  nameServers?: string[];
+}
+
+interface GdV3Link {
+  href: string;
+  rel?: string;
+}
+
+interface GdV3DomainCollection {
+  items?: GdV3Domain[];
+  links?: GdV3Link[];
+}
+
+// one DNS record in a v3 zone; `recordId` is server-assigned and required to
+// update/delete an individual record (v3 has no bulk replace).
+interface GdV3DnsRecord {
+  recordId?: string;
+  name: string;
+  type: string;
+  data: string;
+  ttl?: number;
+  priority?: number;
+  weight?: number;
+  port?: number;
+  service?: string;
+  protocol?: string;
+  flag?: number;
+  tag?: string;
+}
+
+interface GdV3DnsRecordPage {
+  items?: GdV3DnsRecord[];
+  totalPages?: number;
+  links?: GdV3Link[];
+}
+
+interface GdV3Fee {
+  type: string;
+  fee?: GdV3Money;
+}
+
+interface GdV3Agreement {
+  agreementType: string;
+  title?: string;
+}
+
+interface GdV3Quote {
+  quoteToken?: string;
+  requiredAgreements?: GdV3Agreement[];
+  fees?: GdV3Fee[];
+}
+
+interface GdV3Registration {
+  registrationId?: string;
+  operationId?: string;
+  status?: string;
+}
+
+interface GdV3Operation {
+  operationId?: string;
+  status?: string;
+  error?: { code?: string; message?: string };
+}
+
+// a v3 contact (register-time profile). Field names differ from v1's contact.
+interface GdV3Contact {
+  firstName?: string;
+  lastName?: string;
+  organization?: string;
+  email?: string;
+  phone?: string;
+  address?: {
+    line1?: string;
+    line2?: string;
+    city?: string;
+    state?: string;
+    postalCode?: string;
+    countryCode?: string;
+  };
+}
+
 /**
  * GoDaddy Registrar
- * API docs: https://developer.godaddy.com/doc/endpoint/domains
+ * API docs: https://developer.godaddy.com/en/docs/api-users/domains
  *
- * Credentials: create API keys under Account Settings > API Keys. Choose the
- * `production` or `ote` (test) environment to match the key you generated;
- * both the key and secret are required and sent as an `sso-key` header.
+ * GoDaddy runs two concurrent API surfaces and this provider is a hybrid:
  *
- * This provider targets GoDaddy's stable v1 Domains API.
+ *  - **v3** (Domain Lifecycle Management) — the modern surface, PAT/Bearer only.
+ *    Covers discovery (availability/suggestions), registration (quote → execute),
+ *    DNS records, nameservers, and list/get. It has **no** endpoints for the
+ *    post-registration management operations.
+ *  - **v1** — the legacy surface, accepts either a PAT or the deprecated
+ *    `sso-key` credential. It's the only place renew, transfer, auto-renew,
+ *    lock/unlock, privacy, and contact updates live, and the only surface OTE
+ *    (the test environment) exposes — OTE has no v3.
  *
- * `registerDomain` implements GoDaddy's legal-agreements + consent flow: it
- * fetches the agreement keys for the TLD, then POSTs a purchase with a `consent`
- * block whose `agreedBy` is the consenting party's IP (supplied per call via
- * `RegisterDomainInput.consent`). Callers omitting consent get a
- * `ConsentRequiredError`. It spends real money and has not been exercised
- * against a funded account, so treat it as documented-but-unverified.
+ * Routing (`useV3`): v3 is used only in production **with a PAT**. With an
+ * sso-key, or against OTE/sandbox (which has no v3), every call falls back to
+ * v1. The management operations above are always v1 regardless. This keeps the
+ * full contract working in OTE (all-v1) while preferring v3 in production.
  *
- * `transferIn` uses the same consent flow (agreements fetched with
- * `forTransfer=true`) plus the domain's auth code; like registration it spends
- * real money and is documented-but-unverified.
+ * Credentials: supply `apiToken` (a Personal Access Token) for production/v3, or
+ * `apiKey` + `apiSecret` (an OTE Key/Secret) for sandbox testing. The auth
+ * header is chosen automatically — `Bearer` when a token is present, else
+ * `sso-key`.
+ *
+ * `registerDomain` / `transferIn` spend real money. In v3, register uses the
+ * quote-then-execute flow (price-locked via `quoteToken`, agreements
+ * acknowledged in the consent block). In v1 (OTE), register uses the legacy
+ * purchase flow. Both require per-call `consent` with `agreedBy` = the
+ * consenting party's IP; callers omitting it get a `ConsentRequiredError`.
  */
 export class GoDaddyRegistrar extends BaseRegistrar {
   readonly name = 'godaddy';
 
   static readonly displayName = 'GoDaddy';
   static readonly helpText =
-    'Create API keys in your GoDaddy account under Account Settings > API Keys. ' +
-    'You can create production keys or OTE (test environment) keys. Save both the ' +
-    'API Key and Secret when generated. Pass { environment: "sandbox" } to target ' +
-    'the OTE test environment (use OTE keys with it).';
+    'Authenticate one of two ways. For production, create a Personal Access ' +
+    'Token (PAT) at https://developer.godaddy.com and pass it as `apiToken` — ' +
+    'this enables the modern v3 API. For sandbox testing, create OTE ' +
+    '(test environment) keys and pass `apiKey` + `apiSecret` with ' +
+    '{ environment: "sandbox" }; OTE only exposes the legacy v1 API. The ' +
+    'sso-key (API Key/Secret) scheme is deprecated by GoDaddy in 2026.';
   static readonly configFields: ConfigField[] = [
-    { name: 'apiKey', label: 'API Key', type: 'password', required: true },
-    { name: 'apiSecret', label: 'API Secret', type: 'password', required: true },
+    { name: 'apiToken', label: 'API Token (PAT)', type: 'password', required: false },
+    { name: 'apiKey', label: 'API Key', type: 'password', required: false },
+    { name: 'apiSecret', label: 'API Secret', type: 'password', required: false },
   ];
   // GoDaddy's OTE ("Operational Test Environment") is its sandbox
   static readonly supportsSandbox = true;
@@ -164,27 +293,52 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     Feature.SetDomainForwarding,
   ];
 
+  // true → prefer the v3 API (production + PAT). false → all calls use v1
+  // (sso-key auth, or OTE/sandbox where v3 does not exist).
+  private readonly useV3: boolean;
+
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
+    const authHeader = GoDaddyRegistrar.authHeader(credentials);
     super(
       credentials,
       {
         baseUrl: selectBaseUrl('GoDaddy', options?.environment, {
-          production: 'https://api.godaddy.com/v1',
-          sandbox: 'https://api.ote-godaddy.com/v1',
+          production: 'https://api.godaddy.com',
+          sandbox: 'https://api.ote-godaddy.com',
         }),
         headers: {
-          'Authorization': `sso-key ${credentials.apiKey}:${credentials.apiSecret}`,
+          'Authorization': authHeader,
           'Accept': 'application/json',
           'Content-Type': 'application/json',
         },
       },
       options
     );
+    // v3 requires a PAT and is not deployed to OTE, so only use it in production
+    // when a token was supplied.
+    this.useV3 = options?.environment !== 'sandbox' && !!credentials.apiToken;
+  }
+
+  // Choose the Authorization header: Bearer PAT if a token is supplied,
+  // otherwise the legacy sso-key. Missing credentials produce a header that the
+  // API rejects at request time (matching the other providers), rather than
+  // throwing at construction.
+  private static authHeader(credentials: RegistrarCredentials): string {
+    if (credentials.apiToken) return `Bearer ${credentials.apiToken}`;
+    return `sso-key ${credentials.apiKey ?? ''}:${credentials.apiSecret ?? ''}`;
   }
 
   override async testConnection(opts?: RequestOptions): Promise<ConnectionResult> {
     try {
-      await this.http.request<GoDaddyDomain[]>({ path: '/domains', ...opts });
+      if (this.useV3) {
+        await this.http.request<GdV3DomainCollection>({
+          path: '/v3/domains/domain-names',
+          query: { pageSize: 1 },
+          ...opts,
+        });
+      } else {
+        await this.http.request<GoDaddyDomain[]>({ path: '/v1/domains', ...opts });
+      }
       return { success: true, message: 'Connection successful' };
     } catch (error) {
       return { success: false, message: toRegistrarError(error).message };
@@ -193,12 +347,35 @@ export class GoDaddyRegistrar extends BaseRegistrar {
 
   override async listDomains(opts?: ListDomainsOptions): Promise<Domain[]> {
     const { search, ...reqOpts } = opts ?? {};
+    const domains = this.useV3
+      ? await this.listDomainsV3(reqOpts)
+      : await this.listDomainsV1(reqOpts);
+    return filterDomains(domains, search);
+  }
+
+  // v3: cursor-paginated collection; follow the rel="next" HATEOAS link.
+  private async listDomainsV3(reqOpts: RequestOptions): Promise<Domain[]> {
+    const domains: Domain[] = [];
+    let path = '/v3/domains/domain-names';
+    let query: Record<string, string | number> | undefined = { pageSize: 200 }; // v3 max
+    for (;;) {
+      const res = await this.http.request<GdV3DomainCollection>({ path, query, ...reqOpts });
+      for (const d of res.items ?? []) domains.push(this.toDomainV3(d));
+      const next = (res.links ?? []).find(l => l.rel === 'next')?.href;
+      if (!next || !res.items?.length) break;
+      path = next; // absolute URL; HttpClient passes it through as-is
+      query = undefined; // the next link already carries its cursor
+    }
+    return domains;
+  }
+
+  // v1: `marker`-paginated array (marker = last domain name seen).
+  private async listDomainsV1(reqOpts: RequestOptions): Promise<Domain[]> {
     // status filters exclude expired domains: visible (active), renewable
     // (expiring soon), redemption (grace period). statusGroups repeats in the
     // query string, so it is embedded in the path directly. `includes=nameServers`
-    // folds nameservers into this list call (they are otherwise omitted). GoDaddy
-    // paginates via `marker` = the last domain name seen (its page-size param is
-    // literally named `limit`, whose max is 1000).
+    // folds nameservers into this list call (they are otherwise omitted). Its
+    // page-size param is literally named `limit`, whose max is 1000.
     const statusGroups = 'statusGroups=VISIBLE&statusGroups=RENEWABLE&statusGroups=REDEMPTION';
     const perPage = 1000; // GoDaddy's maximum page size
     const domains: Domain[] = [];
@@ -206,7 +383,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     for (;;) {
       const markerParam = marker ? `&marker=${encodeURIComponent(marker)}` : '';
       const res = await this.http.request<GoDaddyDomain[]>({
-        path: `/domains?limit=${perPage}&includes=nameServers&${statusGroups}${markerParam}`,
+        path: `/v1/domains?limit=${perPage}&includes=nameServers&${statusGroups}${markerParam}`,
         ...reqOpts,
       });
       const list = res ?? [];
@@ -215,12 +392,19 @@ export class GoDaddyRegistrar extends BaseRegistrar {
       marker = list[list.length - 1]?.domain;
       if (!marker) break;
     }
-    return filterDomains(domains, search);
+    return domains;
   }
 
   override async getDomain(domainName: string, opts?: RequestOptions): Promise<Domain> {
+    if (this.useV3) {
+      const d = await this.http.request<GdV3Domain>({
+        path: `/v3/domains/domain-names/${encodeURIComponent(domainName)}`,
+        ...opts,
+      });
+      return this.toDomainV3(d);
+    }
     const d = await this.http.request<GoDaddyDomain>({
-      path: `/domains/${encodeURIComponent(domainName)}`,
+      path: `/v1/domains/${encodeURIComponent(domainName)}`,
       ...opts,
     });
     return this.toDomain(d);
@@ -235,11 +419,32 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     domainNames: string[],
     opts?: RequestOptions
   ): Promise<DomainAvailability[]> {
-    // bulk check: POST an array of domains. checkType=FULL consults the registry
-    // (slower but authoritative) rather than GoDaddy's cache.
+    if (this.useV3) {
+      // v3 bulk check: POST { domains: [...] }; the response wraps results in
+      // `items` and prices are multi-term.
+      const res = await this.http.request<{ items?: GdV3Availability[] }>({
+        method: 'POST',
+        path: '/v3/domains/check-availability',
+        body: { domains: domainNames },
+        ...opts,
+      });
+      return (res.items ?? []).map(d => {
+        const term = pickTerm(d.prices);
+        return {
+          domainName: d.domain,
+          available: d.available ?? false,
+          premium: isPremiumInventory(d.inventory),
+          price: moneyToMajor(term?.price),
+          currency: term?.price?.currencyCode,
+          period: term?.period,
+        };
+      });
+    }
+    // v1 bulk check: POST an array of domains. checkType=FULL consults the
+    // registry (slower but authoritative) rather than GoDaddy's cache.
     const res = await this.http.request<GoDaddyAvailabilityResponse>({
       method: 'POST',
-      path: '/domains/available?checkType=FULL',
+      path: '/v1/domains/available?checkType=FULL',
       body: domainNames,
       ...opts,
     });
@@ -267,8 +472,24 @@ export class GoDaddyRegistrar extends BaseRegistrar {
           'GoDaddy exposes pricing only per-domain via availability, not per-TLD'
       );
     }
-    const [result] = await this.checkAvailability([tldOrDomain], opts);
     const tld = tldOrDomain.slice(tldOrDomain.indexOf('.') + 1);
+    if (this.useV3) {
+      // v3 availability carries both registration and renewal price per term.
+      const res = await this.http.request<{ items?: GdV3Availability[] }>({
+        method: 'POST',
+        path: '/v3/domains/check-availability',
+        body: { domains: [tldOrDomain] },
+        ...opts,
+      });
+      const term = pickTerm(res.items?.[0]?.prices);
+      return {
+        tld,
+        currency: term?.price?.currencyCode ?? 'USD',
+        registration: moneyToMajor(term?.price),
+        renewal: moneyToMajor(term?.renewalPrice),
+      };
+    }
+    const [result] = await this.checkAvailability([tldOrDomain], opts);
     return {
       tld,
       currency: result?.currency ?? 'USD',
@@ -292,6 +513,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     if (!registrant) {
       throw new Error(`${this.name}: registration requires at least a registrant contact`);
     }
+    if (this.useV3) return this.registerDomainV3(domainName, input, registrant, opts);
     const tld = domainName.slice(domainName.indexOf('.') + 1);
     const privacy = input.privacy ?? false;
     const consent = await this.buildConsent(input.consent, tld, privacy, false, opts);
@@ -309,10 +531,109 @@ export class GoDaddyRegistrar extends BaseRegistrar {
       ...(input.nameservers ? { nameServers: input.nameservers } : {}),
     };
     return this.mutate(
-      { method: 'POST', path: '/domains/purchase', body },
+      { method: 'POST', path: '/v1/domains/purchase', body },
       `Domain ${domainName} registered successfully`,
       opts
     );
+  }
+
+  /**
+   * v3 registration: quote-then-execute. First POST a quote for the domain/term
+   * (price-locked via `quoteToken`, returns the agreements + fees to
+   * acknowledge), then POST the registration with the token, a consent block
+   * (acknowledging every required agreement + quoted fee), and the contact
+   * profile. Registration is async (202), so poll the returned operation to
+   * completion. Spends real money; there is no v3 sandbox, so this is
+   * documented-but-unverified against a live purchase.
+   */
+  private async registerDomainV3(
+    domainName: string,
+    input: RegisterDomainInput,
+    registrant: Contact,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    if (!input.consent) {
+      throw new ConsentRequiredError(
+        `${this.name}: registration requires \`consent\` (accepting the registration agreements)`
+      );
+    }
+    if (!input.consent.agreedBy) {
+      throw new ConsentRequiredError(
+        `${this.name}: consent.agreedBy is required and must be the consenting party's IP address`
+      );
+    }
+    const period = input.years ?? 1;
+    const quote = await this.http.request<GdV3Quote>({
+      method: 'POST',
+      path: '/v3/domains/registration-quotes',
+      body: { domain: domainName, period },
+      ...opts,
+    });
+    if (!quote.quoteToken) {
+      throw new Error(`${this.name}: registration quote did not return a quoteToken`);
+    }
+    const consent = {
+      agreementTypes: (quote.requiredAgreements ?? []).map(a => a.agreementType),
+      acknowledgedFees: quote.fees ?? [],
+      agreedAt: input.consent.agreedAt ?? new Date().toISOString(),
+      agreedBy: input.consent.agreedBy,
+    };
+    const contacts: Record<string, GdV3Contact> = {
+      registrant: toV3Contact(registrant),
+      admin: toV3Contact(input.contacts.admin ?? registrant),
+      tech: toV3Contact(input.contacts.tech ?? registrant),
+      billing: toV3Contact(input.contacts.billing ?? registrant),
+    };
+    const body = {
+      domain: domainName,
+      period,
+      quoteToken: quote.quoteToken,
+      consent,
+      profile: {
+        contacts,
+        autoRenew: input.autoRenew ?? false,
+        privacy: input.privacy ?? false,
+        ...(input.nameservers ? { nameServers: input.nameservers } : {}),
+      },
+    };
+    try {
+      const reg = await this.http.request<GdV3Registration>({
+        method: 'POST',
+        path: '/v3/domains/registrations',
+        body,
+        ...opts,
+      });
+      if (reg.operationId) await this.pollOperation(reg.operationId, opts);
+      return { success: true, message: `Domain ${domainName} registered successfully` };
+    } catch (error) {
+      return { success: false, message: toRegistrarError(error).message };
+    }
+  }
+
+  /**
+   * Poll a v3 async operation until it leaves the pending states. GoDaddy
+   * reports COMPLETED / SUCCESS on success and FAILED / ERROR (with an `error`
+   * body) on failure; a failed operation throws.
+   */
+  private async pollOperation(
+    operationId: string,
+    opts?: RequestOptions,
+    attempts = 10,
+    delayMs = 1500
+  ): Promise<void> {
+    for (let i = 0; i < attempts; i++) {
+      const op = await this.http.request<GdV3Operation>({
+        path: `/v3/domains/operations/${encodeURIComponent(operationId)}`,
+        ...opts,
+      });
+      const status = (op.status ?? '').toUpperCase();
+      if (status === 'COMPLETED' || status === 'SUCCESS' || status === 'SUCCEEDED') return;
+      if (status === 'FAILED' || status === 'ERROR') {
+        throw new Error(op.error?.message ?? `operation ${operationId} failed`);
+      }
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+    // still pending after the budget — treat as accepted; the caller can re-check
   }
 
   /**
@@ -320,7 +641,8 @@ export class GoDaddyRegistrar extends BaseRegistrar {
    * smaller than a purchase — just the auth code + a `consent` block (fetched
    * with `forTransfer=true`, since transfer agreements can differ) + optional
    * period/renewAuto/privacy. No contacts: the existing registration's carry
-   * over.
+   * over. v3 has no transfer endpoint, so this is always the v1 flow (which is
+   * also what OTE exposes for testing).
    */
   override async transferIn(
     domainName: string,
@@ -339,7 +661,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     };
     if (input.years != null) body.period = input.years;
     return this.mutate(
-      { method: 'POST', path: `/domains/${encodeURIComponent(domainName)}/transfer`, body },
+      { method: 'POST', path: `/v1/domains/${encodeURIComponent(domainName)}/transfer`, body },
       `Domain ${domainName} transfer requested successfully`,
       opts
     );
@@ -372,7 +694,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     const query: Record<string, string | number | boolean> = { tlds: tld, privacy };
     if (forTransfer) query.forTransfer = true;
     const agreements = await this.http.request<GoDaddyAgreement[]>({
-      path: '/domains/agreements',
+      path: '/v1/domains/agreements',
       query,
       ...opts,
     });
@@ -395,7 +717,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     return this.mutate(
       {
         method: 'POST',
-        path: `/domains/${encodeURIComponent(domainName)}/renew`,
+        path: `/v1/domains/${encodeURIComponent(domainName)}/renew`,
         body: { period: years },
       },
       'Domain renewed successfully',
@@ -411,7 +733,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     return this.mutate(
       {
         method: 'PATCH',
-        path: `/domains/${encodeURIComponent(domainName)}`,
+        path: `/v1/domains/${encodeURIComponent(domainName)}`,
         body: { renewAuto: enabled },
       },
       `Auto-renew ${enabled ? 'enabled' : 'disabled'} successfully`,
@@ -427,10 +749,22 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     if (nameservers.length < 1 || nameservers.length > 13) {
       throw new Error('GoDaddy requires 1-13 nameservers');
     }
+    if (this.useV3) {
+      // v3 replaces nameservers with a dedicated PUT; the body is a bare array.
+      return this.mutate(
+        {
+          method: 'PUT',
+          path: `/v3/domains/domain-names/${encodeURIComponent(domainName)}/nameservers`,
+          body: nameservers,
+        },
+        'Nameservers updated successfully',
+        opts
+      );
+    }
     return this.mutate(
       {
         method: 'PATCH',
-        path: `/domains/${encodeURIComponent(domainName)}`,
+        path: `/v1/domains/${encodeURIComponent(domainName)}`,
         body: { nameServers: nameservers },
       },
       'Nameservers updated successfully',
@@ -442,7 +776,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     return this.mutate(
       {
         method: 'PATCH',
-        path: `/domains/${encodeURIComponent(domainName)}`,
+        path: `/v1/domains/${encodeURIComponent(domainName)}`,
         body: { locked: true },
       },
       'Domain locked successfully',
@@ -454,7 +788,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     return this.mutate(
       {
         method: 'PATCH',
-        path: `/domains/${encodeURIComponent(domainName)}`,
+        path: `/v1/domains/${encodeURIComponent(domainName)}`,
         body: { locked: false },
       },
       'Domain unlocked successfully',
@@ -479,15 +813,16 @@ export class GoDaddyRegistrar extends BaseRegistrar {
       );
     }
     return this.mutate(
-      { method: 'DELETE', path: `/domains/${encodeURIComponent(domainName)}/privacy` },
+      { method: 'DELETE', path: `/v1/domains/${encodeURIComponent(domainName)}/privacy` },
       'Privacy disabled successfully',
       opts
     );
   }
 
   override async getContacts(domainName: string, opts?: RequestOptions): Promise<ContactSet> {
+    // v3's domain record omits contacts, so read them from v1 in both modes.
     const d = await this.http.request<GoDaddyDomain>({
-      path: `/domains/${encodeURIComponent(domainName)}`,
+      path: `/v1/domains/${encodeURIComponent(domainName)}`,
       ...opts,
     });
     return {
@@ -513,15 +848,18 @@ export class GoDaddyRegistrar extends BaseRegistrar {
       throw new Error('GoDaddy updateContacts requires at least one contact');
     }
     return this.mutate(
-      { method: 'PATCH', path: `/domains/${encodeURIComponent(domainName)}/contacts`, body },
+      { method: 'PATCH', path: `/v1/domains/${encodeURIComponent(domainName)}/contacts`, body },
       'Contacts updated successfully',
       opts
     );
   }
 
   override async getDnsRecords(domainName: string, opts?: RequestOptions): Promise<DnsRecord[]> {
+    if (this.useV3) {
+      return (await this.getV3Records(domainName, opts)).map(fromV3Record);
+    }
     const records = await this.http.request<GoDaddyRecord[]>({
-      path: `/domains/${encodeURIComponent(domainName)}/records`,
+      path: `/v1/domains/${encodeURIComponent(domainName)}/records`,
       ...opts,
     });
     return (records ?? []).map(r => ({
@@ -536,15 +874,21 @@ export class GoDaddyRegistrar extends BaseRegistrar {
   }
 
   /**
-   * Replaces the entire record set (PUT semantics): any record not present in
-   * `records` is removed. GoDaddy requires a minimum TTL of 600 seconds, so
-   * records without an explicit TTL default to 3600.
+   * Replaces the entire record set (full-replace semantics): any record not
+   * present in `records` is removed. GoDaddy requires a minimum TTL of 600
+   * seconds, so records without an explicit TTL default to 3600.
+   *
+   * v1 does this in one bulk PUT. v3 has no bulk endpoint — only per-record
+   * POST/PUT/DELETE — so the v3 path diffs the desired set against the current
+   * one (keyed by type+name+value): delete records no longer wanted, add new
+   * ones, and PUT matched records whose TTL/priority/etc. changed.
    */
   override async setDnsRecords(
     domainName: string,
     records: DnsRecord[],
     opts?: RequestOptions
   ): Promise<OperationResult> {
+    if (this.useV3) return this.setDnsRecordsV3(domainName, records, opts);
     const body: GoDaddyRecord[] = records.map(r => {
       const record: GoDaddyRecord = {
         type: r.type.toUpperCase(),
@@ -558,10 +902,73 @@ export class GoDaddyRegistrar extends BaseRegistrar {
       return record;
     });
     return this.mutate(
-      { method: 'PUT', path: `/domains/${encodeURIComponent(domainName)}/records`, body },
+      { method: 'PUT', path: `/v1/domains/${encodeURIComponent(domainName)}/records`, body },
       'DNS records updated successfully',
       opts
     );
+  }
+
+  // Read every DNS record in a v3 zone, following pagination.
+  private async getV3Records(domainName: string, opts?: RequestOptions): Promise<GdV3DnsRecord[]> {
+    const zone = encodeURIComponent(domainName);
+    const records: GdV3DnsRecord[] = [];
+    let path: string | undefined = `/v3/domains/zones/${zone}/dns-records`;
+    let query: Record<string, string | number> | undefined = { pageSize: 100 }; // v3 max
+    while (path) {
+      const page: GdV3DnsRecordPage = await this.http.request<GdV3DnsRecordPage>({
+        path,
+        query,
+        ...opts,
+      });
+      for (const r of page.items ?? []) records.push(r);
+      const next = (page.links ?? []).find(l => l.rel === 'next')?.href;
+      path = next && page.items?.length ? next : undefined;
+      query = undefined;
+    }
+    return records;
+  }
+
+  private async setDnsRecordsV3(
+    domainName: string,
+    records: DnsRecord[],
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const zone = encodeURIComponent(domainName);
+    const base = `/v3/domains/zones/${zone}/dns-records`;
+    try {
+      const current = await this.getV3Records(domainName, opts);
+      const currentByKey = new Map(current.map(r => [dnsKeyV3(r), r]));
+      const desired = records.map(toV3Record);
+      const desiredKeys = new Set(desired.map(dnsKeyV3));
+
+      // delete records that are no longer desired
+      for (const r of current) {
+        if (!desiredKeys.has(dnsKeyV3(r)) && r.recordId) {
+          await this.http.request({
+            method: 'DELETE',
+            path: `${base}/${encodeURIComponent(r.recordId)}`,
+            ...opts,
+          });
+        }
+      }
+      // add new records; update matched records whose fields changed
+      for (const d of desired) {
+        const existing = currentByKey.get(dnsKeyV3(d));
+        if (!existing) {
+          await this.http.request({ method: 'POST', path: base, body: d, ...opts });
+        } else if (existing.recordId && dnsFieldsDiffer(existing, d)) {
+          await this.http.request({
+            method: 'PUT',
+            path: `${base}/${encodeURIComponent(existing.recordId)}`,
+            body: d,
+            ...opts,
+          });
+        }
+      }
+      return { success: true, message: 'DNS records updated successfully' };
+    } catch (error) {
+      return { success: false, message: toRegistrarError(error).message };
+    }
   }
 
   // --- extended capabilities ---------------------------------------------
@@ -579,7 +986,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     let forwards: GoDaddyForward[];
     try {
       forwards = await this.http.request<GoDaddyForward[]>({
-        path: `/domains/forwards/${encodeURIComponent(domainName)}`,
+        path: `/v1/domains/forwards/${encodeURIComponent(domainName)}`,
         query: { includeSubs: true },
         ...opts,
       });
@@ -614,7 +1021,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
           const fqdn = hostToFqdn(existing.host, domainName);
           await this.http.request({
             method: 'DELETE',
-            path: `/domains/forwards/${encodeURIComponent(fqdn)}`,
+            path: `/v1/domains/forwards/${encodeURIComponent(fqdn)}`,
             ...opts,
           });
         }
@@ -626,7 +1033,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
         if (f.type === 'frame') body.mask = { title: '', description: '', keywords: '' };
         await this.http.request({
           method: 'PUT',
-          path: `/domains/forwards/${encodeURIComponent(fqdn)}`,
+          path: `/v1/domains/forwards/${encodeURIComponent(fqdn)}`,
           body,
           ...opts,
         });
@@ -637,7 +1044,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     }
   }
 
-  // map a GoDaddy domain payload to the normalized Domain shape
+  // map a v1 GoDaddy domain payload to the normalized Domain shape
   private toDomain(d: GoDaddyDomain): Domain {
     return createDomain({
       domainName: d.domain,
@@ -648,6 +1055,24 @@ export class GoDaddyRegistrar extends BaseRegistrar {
       renewalDate: d.renewDeadline,
       autoRenew: d.renewAuto ?? false,
       locked: d.locked ?? false,
+      privacy: d.privacy ?? false,
+      nameservers: d.nameServers ?? [],
+    });
+  }
+
+  // map a v3 GoDaddy domain payload to the normalized Domain shape. v3 renames
+  // several fields (transferLock → locked, renewBy → renewalDate, expiresAt →
+  // expirationDate).
+  private toDomainV3(d: GdV3Domain): Domain {
+    return createDomain({
+      domainName: d.domain,
+      registrar: this.name,
+      status: d.status,
+      createdDate: d.createdAt,
+      expirationDate: d.expiresAt,
+      renewalDate: d.renewBy,
+      autoRenew: d.autoRenew ?? false,
+      locked: d.transferLock ?? false,
       privacy: d.privacy ?? false,
       nameservers: d.nameServers ?? [],
     });
@@ -716,4 +1141,91 @@ function fqdnToHost(fqdn: string, domain: string): string {
   if (fqdn === domain) return '@';
   const suffix = `.${domain}`;
   return fqdn.endsWith(suffix) ? fqdn.slice(0, -suffix.length) : fqdn;
+}
+
+// --- v3 helpers ------------------------------------------------------------
+
+// Pick the pricing term to report — prefer the 1-year term, else the first.
+function pickTerm(prices?: GdV3TermPrice[]): GdV3TermPrice | undefined {
+  if (!prices || prices.length === 0) return undefined;
+  return prices.find(p => p.period === 1) ?? prices[0];
+}
+
+// Classify a v3 availability `inventory` value. Standard registry names report
+// "REGISTRY" (or "STANDARD"); premium/aftermarket names report a PREMIUM-type
+// value. Undefined when the field is absent.
+function isPremiumInventory(inventory?: string): boolean | undefined {
+  if (inventory == null) return undefined;
+  return /PREMIUM/i.test(inventory);
+}
+
+// Convert v3 "Simple Money" (integer minor units) to major units. Assumes
+// 2-decimal currencies (USD/EUR/…); zero-decimal currencies like JPY would need
+// currency-aware scaling, but GoDaddy prices in USD by default.
+function moneyToMajor(m?: GdV3Money): number | undefined {
+  if (!m || m.value == null) return undefined;
+  return m.value / 100;
+}
+
+// map a v3 DNS record to the normalized DnsRecord shape
+function fromV3Record(r: GdV3DnsRecord): DnsRecord {
+  return {
+    type: r.type,
+    name: r.name,
+    value: r.data,
+    ttl: r.ttl,
+    priority: r.priority,
+    weight: r.weight,
+    port: r.port,
+  };
+}
+
+// map a normalized DnsRecord to a v3 record body. GoDaddy requires a minimum
+// TTL of 600s, so records without an explicit TTL default to 3600.
+function toV3Record(r: DnsRecord): GdV3DnsRecord {
+  const out: GdV3DnsRecord = {
+    type: r.type.toUpperCase(),
+    name: r.name || '@',
+    data: r.value,
+    ttl: r.ttl ?? 3600,
+  };
+  if (r.priority != null) out.priority = r.priority;
+  if (r.weight != null) out.weight = r.weight;
+  if (r.port != null) out.port = r.port;
+  return out;
+}
+
+// identity of a record for full-replace diffing: type + name + value
+function dnsKeyV3(r: GdV3DnsRecord): string {
+  return `${r.type.toUpperCase()} ${r.name || '@'} ${r.data}`;
+}
+
+// whether two records that share a key differ in a mutable field (TTL/priority/
+// weight/port), meaning the existing one should be PUT-updated
+function dnsFieldsDiffer(a: GdV3DnsRecord, b: GdV3DnsRecord): boolean {
+  return (
+    (a.ttl ?? 3600) !== (b.ttl ?? 3600) ||
+    (a.priority ?? null) !== (b.priority ?? null) ||
+    (a.weight ?? null) !== (b.weight ?? null) ||
+    (a.port ?? null) !== (b.port ?? null)
+  );
+}
+
+// map a normalized Contact to a v3 register-time contact
+function toV3Contact(c: Contact): GdV3Contact {
+  return {
+    firstName: c.firstName,
+    lastName: c.lastName,
+    organization: c.organization,
+    email: c.email,
+    phone: c.phone,
+    address: {
+      line1: c.address1,
+      line2: c.address2,
+      city: c.city,
+      state: c.state ?? '',
+      postalCode: c.postalCode,
+      countryCode: c.country,
+    },
+  };
 }
