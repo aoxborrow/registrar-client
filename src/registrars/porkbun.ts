@@ -4,8 +4,11 @@ import type {
   ConnectionResult,
   ContactSet,
   DnsRecord,
+  DnssecStatus,
   Domain,
   DomainAvailability,
+  DomainForward,
+  DomainForwardType,
   ListDomainsOptions,
   OperationResult,
   RegisterDomainInput,
@@ -73,6 +76,44 @@ interface PbPricingResponse extends PbResponse {
 interface PbBulkResponse extends PbResponse {
   results?: Record<string, { status?: string; message?: string }>;
 }
+
+// domain/getUrlForwarding — one URL-forward rule. `type` is
+// permanent/temporary/masked; `redirectType` is the matching 301/302.
+interface PbUrlForward {
+  id?: string;
+  subdomain?: string; // "" at the apex
+  location?: string; // destination URL
+  type?: string;
+  includePath?: string;
+  wildcard?: string;
+}
+interface PbUrlForwardResponse extends PbResponse {
+  forwards?: PbUrlForward[];
+}
+
+// dns/getDnssecRecords — DS records keyed by key tag (or null when none)
+interface PbDnssecRecord {
+  keyTag?: string | number;
+  alg?: string | number;
+  digestType?: string | number;
+  digest?: string;
+  maxSigLife?: string;
+}
+interface PbDnssecResponse extends PbResponse {
+  records?: Record<string, PbDnssecRecord> | null;
+}
+
+// map between our generic forward type and Porkbun's `type` value
+const FORWARD_TO_PB_TYPE: Record<DomainForwardType, string> = {
+  redirect: 'temporary', // 302
+  permanent: 'permanent', // 301
+  frame: 'masked', // cloaked/framed
+};
+const PB_TYPE_TO_FORWARD: Record<string, DomainForwardType> = {
+  temporary: 'redirect',
+  permanent: 'permanent',
+  masked: 'frame',
+};
 
 // Porkbun's contact shape: phone is split into a national number plus a numeric
 // country code, distinct from the library's single international `phone`.
@@ -154,9 +195,10 @@ export class PorkbunRegistrar extends BaseRegistrar {
   // sandbox key. Because only the key differs, the sandbox base URL equals
   // production — selecting `environment: 'sandbox'` just avoids throwing.
   static readonly supportsSandbox = true;
-  // JSON API. Beyond core: DNSSEC, glue records, URL (domain) forwarding, and
-  // signed webhooks. No auth-code retrieval; transfer lock and WHOIS-privacy
-  // toggles have no write endpoint (privacy is set only at registration).
+  // JSON API. Beyond core: DNSSEC read/disable and URL (domain) forwarding, both
+  // implemented and verified in the sandbox. No auth-code retrieval or email
+  // forwarding via the API; transfer lock and WHOIS-privacy toggles have no write
+  // endpoint (privacy is set only at registration).
   static readonly extendedFeatures: readonly RegistrarFeature[] = [
     Feature.GetDnssec,
     Feature.DisableDnssec,
@@ -544,6 +586,126 @@ export class PorkbunRegistrar extends BaseRegistrar {
       if (!isOk(create)) return statusResult(create);
     }
     return { success: true, message: 'DNS records updated successfully' };
+  }
+
+  // --- extended capabilities ---------------------------------------------
+
+  /**
+   * DNSSEC status via dns/getDnssecRecords, which returns DS records keyed by key
+   * tag (or `null` when there are none). A non-empty set means DNSSEC is enabled.
+   */
+  override async getDnssec(domainName: string, opts?: RequestOptions): Promise<DnssecStatus> {
+    const res = await this.call<PbDnssecResponse>(
+      `/dns/getDnssecRecords/${encodeURIComponent(domainName)}`,
+      {},
+      opts
+    );
+    if (!isOk(res)) throw new Error(res.message ?? 'API request failed');
+    const dsRecords = Object.values(res.records ?? {}).map(r => ({
+      keyTag: Number(r.keyTag) || 0,
+      algorithm: Number(r.alg) || 0,
+      digestType: Number(r.digestType) || 0,
+      digest: r.digest ?? '',
+    }));
+    return { enabled: dsRecords.length > 0, dsRecords };
+  }
+
+  /**
+   * Disable DNSSEC by removing every DS record. Porkbun has no single "off" call,
+   * so read the current records and delete each by its key tag.
+   */
+  override async disableDnssec(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    try {
+      const res = await this.call<PbDnssecResponse>(
+        `/dns/getDnssecRecords/${encodeURIComponent(domainName)}`,
+        {},
+        opts
+      );
+      if (!isOk(res)) return statusResult(res);
+      for (const keyTag of Object.keys(res.records ?? {})) {
+        const del = await this.call(
+          `/dns/deleteDnssecRecord/${encodeURIComponent(domainName)}/${encodeURIComponent(keyTag)}`,
+          {},
+          opts
+        );
+        if (!isOk(del)) return statusResult(del);
+      }
+      return { success: true, message: 'DNSSEC disabled successfully' };
+    } catch (error) {
+      return { success: false, message: toRegistrarError(error).message };
+    }
+  }
+
+  /**
+   * Read URL forwarding via domain/getUrlForwarding. Porkbun forwards per
+   * subdomain ("" = apex), so each rule maps to a DomainForward with `host` set
+   * to the subdomain (or "@" at the apex).
+   */
+  override async getDomainForwarding(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<DomainForward[]> {
+    const res = await this.call<PbUrlForwardResponse>(
+      `/domain/getUrlForwarding/${encodeURIComponent(domainName)}`,
+      {},
+      opts
+    );
+    if (!isOk(res)) throw new Error(res.message ?? 'API request failed');
+    return (res.forwards ?? []).map(f => ({
+      host: f.subdomain || '@',
+      url: f.location ?? '',
+      type: PB_TYPE_TO_FORWARD[(f.type ?? '').toLowerCase()] ?? 'permanent',
+    }));
+  }
+
+  /**
+   * Replace URL forwarding (full replace; an empty list clears it). Porkbun has
+   * no bulk set, so delete every existing forward by id, then add each desired
+   * one via domain/addUrlForward.
+   */
+  override async setDomainForwarding(
+    domainName: string,
+    forwards: DomainForward[],
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    try {
+      const enc = encodeURIComponent(domainName);
+      const existing = await this.call<PbUrlForwardResponse>(
+        `/domain/getUrlForwarding/${enc}`,
+        {},
+        opts
+      );
+      if (!isOk(existing)) return statusResult(existing);
+      for (const f of existing.forwards ?? []) {
+        if (f.id == null) continue;
+        const del = await this.call(
+          `/domain/deleteUrlForward/${enc}/${encodeURIComponent(f.id)}`,
+          {},
+          opts
+        );
+        if (!isOk(del)) return statusResult(del);
+      }
+      for (const f of forwards) {
+        const add = await this.call(
+          `/domain/addUrlForward/${enc}`,
+          {
+            subdomain: f.host === '@' ? '' : f.host,
+            location: f.url,
+            type: FORWARD_TO_PB_TYPE[f.type],
+            includePath: 'no',
+            wildcard: 'no',
+          },
+          opts
+        );
+        if (!isOk(add)) return statusResult(add);
+      }
+      return { success: true, message: 'Domain forwarding updated successfully' };
+    } catch (error) {
+      return { success: false, message: toRegistrarError(error).message };
+    }
   }
 }
 

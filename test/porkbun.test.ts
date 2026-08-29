@@ -371,4 +371,106 @@ describe('Porkbun provider', () => {
       prio: '5',
     });
   });
+
+  // --- extended capabilities ---
+
+  it('getDnssec maps the keyed records object to DS records', async () => {
+    const pb = porkbun();
+    stubHttp(pb, () => ({
+      status: SUCCESS,
+      records: {
+        '64087': { keyTag: '64087', alg: '13', digestType: '2', digest: 'ABCD' },
+      },
+    }));
+    expect(await pb.getDnssec('example.com')).toEqual({
+      enabled: true,
+      dsRecords: [{ keyTag: 64087, algorithm: 13, digestType: 2, digest: 'ABCD' }],
+    });
+  });
+
+  it('getDnssec reports disabled when records is null', async () => {
+    const pb = porkbun();
+    stubHttp(pb, () => ({ status: SUCCESS, records: null }));
+    expect(await pb.getDnssec('example.com')).toEqual({ enabled: false, dsRecords: [] });
+  });
+
+  it('disableDnssec deletes each DS record by key tag', async () => {
+    const pb = porkbun();
+    const calls = stubHttp(pb, req => {
+      if (req.path.includes('/getDnssecRecords/')) {
+        return { status: SUCCESS, records: { '111': { keyTag: '111' }, '222': { keyTag: '222' } } };
+      }
+      return { status: SUCCESS };
+    });
+    const res = await pb.disableDnssec('example.com');
+    expect(res.success).toBe(true);
+    const deletes = calls.filter(c => c.path.includes('/deleteDnssecRecord/'));
+    expect(deletes.map(c => c.path)).toEqual([
+      '/dns/deleteDnssecRecord/example.com/111',
+      '/dns/deleteDnssecRecord/example.com/222',
+    ]);
+  });
+
+  it('getDomainForwarding maps subdomain/type to host and forward type', async () => {
+    const pb = porkbun();
+    stubHttp(pb, () => ({
+      status: SUCCESS,
+      forwards: [
+        { id: '1', subdomain: '', location: 'https://a.com', type: 'permanent' },
+        { id: '2', subdomain: 'shop', location: 'https://b.com', type: 'temporary' },
+        { id: '3', subdomain: 'app', location: 'https://c.com', type: 'masked' },
+      ],
+    }));
+    expect(await pb.getDomainForwarding('example.com')).toEqual([
+      { host: '@', url: 'https://a.com', type: 'permanent' },
+      { host: 'shop', url: 'https://b.com', type: 'redirect' },
+      { host: 'app', url: 'https://c.com', type: 'frame' },
+    ]);
+  });
+
+  it('setDomainForwarding deletes existing forwards then adds the desired set', async () => {
+    const pb = porkbun();
+    const calls = stubHttp(pb, req => {
+      if (req.path.includes('/getUrlForwarding/')) {
+        return {
+          status: SUCCESS,
+          forwards: [{ id: '9', subdomain: '', location: 'https://old.com', type: 'permanent' }],
+        };
+      }
+      return { status: SUCCESS };
+    });
+    const res = await pb.setDomainForwarding('example.com', [
+      { host: '@', url: 'https://new.com', type: 'permanent' },
+      { host: 'www', url: 'https://new.com', type: 'frame' },
+    ]);
+    expect(res.success).toBe(true);
+    expect(calls.some(c => c.path === '/domain/deleteUrlForward/example.com/9')).toBe(true);
+    const adds = calls.filter(c => c.path === '/domain/addUrlForward/example.com');
+    expect(adds[0].body).toMatchObject({
+      subdomain: '',
+      location: 'https://new.com',
+      type: 'permanent',
+    });
+    expect(adds[1].body).toMatchObject({
+      subdomain: 'www',
+      location: 'https://new.com',
+      type: 'masked',
+    });
+  });
+
+  it('setDomainForwarding with an empty list clears all forwards', async () => {
+    const pb = porkbun();
+    const calls = stubHttp(pb, req => {
+      if (req.path.includes('/getUrlForwarding/')) {
+        return {
+          status: SUCCESS,
+          forwards: [{ id: '5', subdomain: '', location: 'x', type: 'permanent' }],
+        };
+      }
+      return { status: SUCCESS };
+    });
+    await pb.setDomainForwarding('example.com', []);
+    expect(calls.some(c => c.path === '/domain/deleteUrlForward/example.com/5')).toBe(true);
+    expect(calls.some(c => c.path === '/domain/addUrlForward/example.com')).toBe(false);
+  });
 });
