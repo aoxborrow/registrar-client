@@ -8,9 +8,11 @@ import type {
   DomainAvailability,
   ListDomainsOptions,
   OperationResult,
+  RegisterDomainInput,
   RegistrarOptions,
   RequestOptions,
   TldPricing,
+  TransferDomainInput,
 } from '../types';
 import { createDomain, filterDomains } from '../utils';
 import { toRegistrarError } from '../errors';
@@ -406,6 +408,147 @@ export class GandiRegistrar extends BaseRegistrar {
     );
   }
 
+  override async setAutoRenew(
+    domainName: string,
+    enabled: boolean,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    return this.mutate(
+      { method: 'PATCH', path: `/domain/domains/${domainName}/autorenew`, body: { enabled } },
+      `Auto-renew ${enabled ? 'enabled' : 'disabled'} successfully`,
+      opts
+    );
+  }
+
+  /**
+   * WHOIS privacy on Gandi is the per-contact `data_obfuscated` flag, toggled by
+   * PATCHing the domain's owner contact. (Not exercised live — every domain in
+   * the test account carries real registrant data.)
+   */
+  override async setPrivacy(
+    domainName: string,
+    enabled: boolean,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    return this.mutate(
+      {
+        method: 'PATCH',
+        path: `/domain/domains/${domainName}/contacts`,
+        body: { owner: { data_obfuscated: enabled } },
+      },
+      `WHOIS privacy ${enabled ? 'enabled' : 'disabled'} successfully`,
+      opts
+    );
+  }
+
+  /**
+   * Replaces the entire zone via LiveDNS (`PUT /livedns/domains/{d}/records`),
+   * which takes `items` as grouped rrsets. Flat records are regrouped by
+   * (name, type); MX/SRV values are re-encoded with their numeric prefixes — the
+   * exact inverse of `getDnsRecords`, so a get→set round-trip is lossless.
+   */
+  override async setDnsRecords(
+    domainName: string,
+    records: DnsRecord[],
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    return this.mutate(
+      {
+        method: 'PUT',
+        path: `/livedns/domains/${domainName}/records`,
+        body: { items: toGandiRrsets(records) },
+      },
+      'DNS records updated successfully',
+      opts
+    );
+  }
+
+  /**
+   * Updates contact roles by PATCHing the domain's contacts. Only supplied roles
+   * are sent; `registrant` maps to Gandi's `owner`, `billing` to `bill`. A
+   * registrant change can trigger registry verification — not exercised live.
+   */
+  override async updateContacts(
+    domainName: string,
+    contacts: ContactSet,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const body: GandiContacts = {};
+    if (contacts.registrant) body.owner = toGandiContact(contacts.registrant);
+    if (contacts.admin) body.admin = toGandiContact(contacts.admin);
+    if (contacts.tech) body.tech = toGandiContact(contacts.tech);
+    if (contacts.billing) body.bill = toGandiContact(contacts.billing);
+    if (Object.keys(body).length === 0) {
+      throw new Error(`${this.name}: updateContacts requires at least one contact role`);
+    }
+    return this.mutate(
+      { method: 'PATCH', path: `/domain/domains/${domainName}/contacts`, body },
+      'Contacts updated successfully',
+      opts
+    );
+  }
+
+  /**
+   * Registers a domain via `POST /domain/domains`. Requires a registrant (Gandi's
+   * `owner`); other roles fall back to it. `data_obfuscated` carries the privacy
+   * choice. Spends real money; not exercised against a live account.
+   */
+  override async registerDomain(
+    domainName: string,
+    input: RegisterDomainInput,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const registrant = input.contacts.registrant;
+    if (!registrant) {
+      throw new Error(`${this.name}: registration requires at least a registrant contact`);
+    }
+    const owner = toGandiContact(registrant);
+    if (input.privacy != null) owner.data_obfuscated = input.privacy;
+    const body: Record<string, unknown> = {
+      fqdn: domainName,
+      duration: input.years ?? 1,
+      owner,
+    };
+    if (input.contacts.admin) body.admin = toGandiContact(input.contacts.admin);
+    if (input.contacts.tech) body.tech = toGandiContact(input.contacts.tech);
+    if (input.contacts.billing) body.bill = toGandiContact(input.contacts.billing);
+    if (input.nameservers && input.nameservers.length > 0) body.nameservers = input.nameservers;
+    return this.mutate(
+      { method: 'POST', path: '/domain/domains', body },
+      `Domain ${domainName} registered successfully`,
+      opts
+    );
+  }
+
+  /**
+   * Transfers a domain in via `POST /domain/transferin/{d}` with the EPP auth code
+   * (`authinfo`) and the new owner. Spends real money; not exercised against a
+   * live account.
+   */
+  override async transferIn(
+    domainName: string,
+    input: TransferDomainInput,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const registrant = input.contacts?.registrant;
+    if (!registrant) {
+      throw new Error(`${this.name}: transfer requires a registrant contact (Gandi's owner)`);
+    }
+    const owner = toGandiContact(registrant);
+    if (input.privacy != null) owner.data_obfuscated = input.privacy;
+    const body: Record<string, unknown> = {
+      fqdn: domainName,
+      authinfo: input.authCode,
+      owner,
+    };
+    if (input.years != null) body.duration = input.years;
+    return this.mutate(
+      { method: 'POST', path: `/domain/transferin/${domainName}`, body },
+      `Domain ${domainName} transfer requested successfully`,
+      opts
+    );
+  }
+
   private async mutate(
     req: { method: string; path: string; body?: unknown },
     successMessage: string,
@@ -422,6 +565,53 @@ export class GandiRegistrar extends BaseRegistrar {
 
 // map a Gandi contact into the normalized Contact shape. Gandi has no distinct
 // second address line, so `address2` is left undefined.
+// map the normalized Contact to Gandi's contact shape (given/family/streetaddr/…).
+// `type` is Gandi's contact type: 1 (company) when an organization is set, else
+// 0 (individual).
+function toGandiContact(c: Contact): GandiContact & { type: number } {
+  const contact: GandiContact & { type: number } = {
+    given: c.firstName,
+    family: c.lastName,
+    email: c.email,
+    phone: c.phone,
+    streetaddr: c.address1,
+    city: c.city,
+    zip: c.postalCode,
+    country: c.country,
+    type: c.organization ? 1 : 0,
+  };
+  if (c.organization) contact.orgname = c.organization;
+  if (c.fax) contact.fax = c.fax;
+  if (c.state) contact.state = c.state;
+  return contact;
+}
+
+// regroup flat DnsRecords into Gandi LiveDNS rrsets (one per name+type, values
+// collected). MX/SRV values are re-encoded with their numeric prefixes — the
+// exact inverse of getDnsRecords — so a get→set round-trip reproduces the zone.
+function toGandiRrsets(records: DnsRecord[]): GandiRecord[] {
+  const groups = new Map<string, GandiRecord>();
+  for (const r of records) {
+    const type = r.type.toUpperCase();
+    const name = r.name || '@';
+    let value = r.value;
+    if (type === 'MX' && r.priority != null) {
+      value = `${r.priority} ${r.value}`;
+    } else if (type === 'SRV') {
+      value = `${r.priority ?? 0} ${r.weight ?? 0} ${r.port ?? 0} ${r.value}`;
+    }
+    const key = `${name} ${type}`;
+    let rrset = groups.get(key);
+    if (!rrset) {
+      rrset = { rrset_name: name, rrset_type: type, rrset_values: [] };
+      groups.set(key, rrset);
+    }
+    if (rrset.rrset_ttl == null && r.ttl != null) rrset.rrset_ttl = r.ttl;
+    rrset.rrset_values!.push(value);
+  }
+  return [...groups.values()];
+}
+
 function fromGandiContact(c: GandiContact | undefined): Contact | undefined {
   if (!c) return undefined;
   return {

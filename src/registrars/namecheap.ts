@@ -44,7 +44,7 @@ interface NcGetInfoResult {
   '@_Status'?: string;
   '@_DomainName'?: string;
   'DomainDetails'?: { CreatedDate?: string; ExpiredDate?: string };
-  'Whoisguard'?: { '@_Enabled'?: string };
+  'Whoisguard'?: { '@_Enabled'?: string; 'ID'?: string | number };
 }
 
 // namecheap.domains.check result element (attributes only)
@@ -167,9 +167,6 @@ const NC_CONTACT_ROLES = [
  * ## Not implemented (fall through to BaseRegistrar's NotImplementedError)
  * - `setAutoRenew` — Namecheap exposes no dedicated auto-renew command in the
  *   public API; it's a dashboard/account setting, so there's no path to wire up.
- * - `setPrivacy` — WhoisGuard is a separate entity: enabling needs its numeric
- *   `WhoisguardID` (from `whoisguard.getList`) plus a `ForwardedToEmail` this
- *   method's signature doesn't carry. Deferred pending a privacy-input redesign.
  *
  * `registerDomain`/`transferIn` are implemented and require per-call `consent`;
  * they spend real money and are documented-but-unverified. Registration sends the
@@ -510,6 +507,47 @@ export class NamecheapRegistrar extends BaseRegistrar {
     const res = await this.call(
       'namecheap.domains.setRegistrarLock',
       { DomainName: domainName, LockAction: 'UNLOCK' },
+      opts
+    );
+    return statusResult(res);
+  }
+
+  /**
+   * Toggles WhoisGuard (Namecheap's domain privacy), which is a separate entity
+   * keyed by a numeric `WhoisguardID` (read from getInfo). Enabling additionally
+   * needs a `ForwardedToEmail` — the address WhoisGuard-masked mail is relayed to
+   * — which is taken from the domain's registrant contact. Throws if the domain
+   * has no WhoisGuard allotted (e.g. TLDs that don't offer it).
+   */
+  override async setPrivacy(
+    domainName: string,
+    enabled: boolean,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const cr = await this.command('namecheap.domains.getInfo', { DomainName: domainName }, opts);
+    const id = cr.DomainGetInfoResult?.Whoisguard?.ID;
+    if (id == null || String(id) === '0') {
+      throw new Error(`${this.name}: ${domainName} has no WhoisGuard subscription to toggle`);
+    }
+    if (!enabled) {
+      const res = await this.call(
+        'namecheap.whoisguard.disable',
+        { WhoisguardID: String(id) },
+        opts
+      );
+      return statusResult(res);
+    }
+    // enabling requires a forwarding address — use the registrant's email
+    const contacts = await this.getContacts(domainName, opts);
+    const email = contacts.registrant?.email || contacts.admin?.email;
+    if (!email) {
+      throw new Error(
+        `${this.name}: cannot enable WhoisGuard without a registrant email to forward to`
+      );
+    }
+    const res = await this.call(
+      'namecheap.whoisguard.enable',
+      { WhoisguardID: String(id), ForwardedToEmail: email },
       opts
     );
     return statusResult(res);
