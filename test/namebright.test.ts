@@ -210,4 +210,164 @@ describe('NameBright provider', () => {
     stubHttp(nb, () => ({ access_token: 't', expires_in: 1800 }));
     await expect(nb.getPricing('com')).rejects.toThrow(/getPricing is not available/);
   });
+
+  // The live API returns PhoneCountry as a number and FaxCountry as null; the
+  // mapper must not assume strings (regression for a .trim() crash).
+  it('getContacts coerces a numeric PhoneCountry and null FaxCountry', async () => {
+    const nb = namebright();
+    stubHttp(nb, req => {
+      if (req.path.includes('auth/token')) return { access_token: 't', expires_in: 1800 };
+      return {
+        RegistrantContact: {
+          FirstName: 'Ada',
+          LastName: 'Lovelace',
+          Email: 'ada@example.com',
+          PhoneCountry: 1,
+          Phone: '4805551234',
+          FaxCountry: null,
+          Fax: null,
+        },
+      };
+    });
+    const contacts = await nb.getContacts('example.com');
+    expect(contacts.registrant?.phone).toBe('+1.4805551234');
+    expect(contacts.registrant?.fax).toBeUndefined();
+  });
+
+  // NameBright returns UnitPrice 0 for unavailable names; a bogus price:0 must
+  // not leak into the result.
+  it('checkAvailability omits a zero price for taken names', async () => {
+    const nb = namebright();
+    stubHttp(nb, req => {
+      if (req.path.includes('auth/token')) return { access_token: 't', expires_in: 1800 };
+      return { DomainName: 'taken.com', Status: 'NotAvailable', UnitPrice: 0 };
+    });
+    const [res] = await nb.checkAvailability(['taken.com']);
+    expect(res).toEqual({ domainName: 'taken.com', available: false });
+    expect(res.price).toBeUndefined();
+    expect(res.currency).toBeUndefined();
+  });
+
+  // Lock/unlock/auto-renew/privacy all share PUT account/domains/{domain}, which
+  // takes the full AccountDomain body — so the provider GETs the current record
+  // and merges the single change, leaving the other flags intact.
+  it('setAutoRenew read-merges: GET then PUT with only AutoRenew changed', async () => {
+    const nb = namebright();
+    const calls = stubHttp(nb, req => {
+      if (req.path.includes('auth/token')) return { access_token: 't', expires_in: 1800 };
+      if (req.method === 'PUT') return {};
+      // current record: locked + privacy on, auto-renew on
+      return {
+        DomainName: 'example.com',
+        Status: 'active',
+        ExpirationDate: '2027-01-01',
+        Locked: true,
+        AutoRenew: true,
+        WhoIsPrivacy: true,
+        Category: 'DropCatch',
+        UpgradedDomain: false,
+        AuthCode: 'secret',
+      };
+    });
+    const res = await nb.setAutoRenew('example.com', false);
+    expect(res).toEqual({ success: true, message: 'Auto-renew disabled successfully' });
+
+    const put = calls.find(c => c.method === 'PUT');
+    expect(put?.path).toBe('account/domains/example.com');
+    // the change is applied while the other flags are preserved...
+    expect(put?.body).toMatchObject({
+      DomainName: 'example.com',
+      Locked: true,
+      AutoRenew: false,
+      WhoIsPrivacy: true,
+    });
+    // ...and AuthCode is deliberately not round-tripped
+    expect((put?.body as Record<string, unknown>).AuthCode).toBeUndefined();
+  });
+
+  it('lockDomain / unlockDomain PUT the Locked flag', async () => {
+    for (const [fn, locked, msg] of [
+      ['lock', true, 'Domain locked successfully'],
+      ['unlock', false, 'Domain unlocked successfully'],
+    ] as const) {
+      const nb = namebright();
+      const calls = stubHttp(nb, req => {
+        if (req.path.includes('auth/token')) return { access_token: 't', expires_in: 1800 };
+        if (req.method === 'PUT') return {};
+        return { DomainName: 'example.com', Locked: !locked, AutoRenew: true, WhoIsPrivacy: false };
+      });
+      const res =
+        fn === 'lock' ? await nb.lockDomain('example.com') : await nb.unlockDomain('example.com');
+      expect(res).toEqual({ success: true, message: msg });
+      const put = calls.find(c => c.method === 'PUT');
+      expect(put?.body).toMatchObject({ Locked: locked, AutoRenew: true, WhoIsPrivacy: false });
+    }
+  });
+
+  it('setPrivacy PUTs the WhoIsPrivacy flag', async () => {
+    const nb = namebright();
+    const calls = stubHttp(nb, req => {
+      if (req.path.includes('auth/token')) return { access_token: 't', expires_in: 1800 };
+      if (req.method === 'PUT') return {};
+      return { DomainName: 'example.com', Locked: true, AutoRenew: true, WhoIsPrivacy: false };
+    });
+    const res = await nb.setPrivacy('example.com', true);
+    expect(res.message).toBe('WHOIS privacy enabled successfully');
+    expect(calls.find(c => c.method === 'PUT')?.body).toMatchObject({
+      WhoIsPrivacy: true,
+      Locked: true,
+    });
+  });
+
+  it('setDnsRecords diffs: deletes removed records and posts new ones, leaving matches', async () => {
+    const nb = namebright();
+    const calls = stubHttp(nb, req => {
+      if (req.path.includes('auth/token')) return { access_token: 't', expires_in: 1800 };
+      if (req.path.endsWith('/hostrecords/all')) {
+        return {
+          ARecords: [
+            { Subdomain: '@', IPV4Address: '1.2.3.4', RecordId: 11 },
+            { Subdomain: 'old', IPV4Address: '9.9.9.9', RecordId: 22 },
+          ],
+          TXTRecords: [{ Subdomain: '@', TextRecord: 'keep', RecordId: 33 }],
+        };
+      }
+      return {};
+    });
+
+    // desired = keep A@ (unchanged) + keep TXT (unchanged) + add A new; drop A old
+    const res = await nb.setDnsRecords('example.com', [
+      { type: 'A', name: '@', value: '1.2.3.4' },
+      { type: 'TXT', name: '@', value: 'keep' },
+      { type: 'A', name: 'new', value: '5.6.7.8' },
+    ]);
+    expect(res).toEqual({ success: true, message: 'DNS records updated successfully' });
+
+    // only the removed record (A old, id 22) is deleted
+    const deletes = calls.filter(c => c.method === 'DELETE');
+    expect(deletes.map(c => c.path)).toEqual(['account/domains/example.com/hostrecords/a/22']);
+
+    // only the genuinely-new record is posted (unchanged A@ and TXT are skipped)
+    const posts = calls.filter(c => c.method === 'POST' && c.path.includes('/hostrecords/'));
+    expect(posts).toHaveLength(1);
+    expect(posts[0].path).toBe('account/domains/example.com/hostrecords/a');
+    expect(posts[0].body).toEqual({ Subdomain: 'new', IPV4Address: '5.6.7.8' });
+  });
+
+  it('updateNameservers removes all then PUTs each server', async () => {
+    const nb = namebright();
+    const calls = stubHttp(nb, req => {
+      if (req.path.includes('auth/token')) return { access_token: 't', expires_in: 1800 };
+      return {};
+    });
+    const res = await nb.updateNameservers('example.com', ['ns1.example.net', 'ns2.example.net']);
+    expect(res).toEqual({ success: true, message: 'Nameservers updated successfully' });
+
+    const writes = calls.filter(c => c.method === 'DELETE' || c.method === 'PUT');
+    expect(writes.map(c => `${c.method} ${c.path}`)).toEqual([
+      'DELETE account/domains/example.com/nameservers',
+      'PUT account/domains/example.com/nameservers/ns1.example.net',
+      'PUT account/domains/example.com/nameservers/ns2.example.net',
+    ]);
+  });
 });

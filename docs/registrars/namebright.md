@@ -1,6 +1,53 @@
 # NameBright — API Research
 
-> Researched: 2026-08-26 · Docs: https://api.namebright.com/rest/Help · https://api.namebright.com/auth/help · https://github.com/NameBright/DomainApiClientExamples
+> Researched: 2026-08-26 · **Live-verified: 2026-08-28** · Docs: https://api.namebright.com/rest/Help · https://api.namebright.com/auth/help · https://github.com/NameBright/DomainApiClientExamples
+
+## Live verification (2026-08-28)
+
+Confirmed against a real production account (API access enabled). This resolves
+the "unconfirmed" caveats scattered through the research notes below.
+
+**Reads** — all working: `testConnection` (`GET /account`), `listDomains`
+(paged via `page` + `domainsPerPage`, max 100), `getDomain`, `getNameservers`,
+`getContacts`, `getDnsRecords`, `checkAvailability`. Notes:
+
+- `GET /account/domains/{domain}` returns the `AccountDomain` shape
+  (`DomainName`, `Status`, `ExpirationDate`, `Locked`, `AutoRenew`,
+  `WhoIsPrivacy`, `Category`, `UpgradedDomain`, `AuthCode`) — **no**
+  registration/creation date on any read endpoint, so `createdDate` is always
+  null.
+- Contacts: `PhoneCountry` comes back as a **number** and an empty
+  `FaxCountry` as **null** (not strings) — the mapper must coerce.
+- `checkAvailability` returns `UnitPrice: 0` for unavailable names; treat a
+  zero price as "no price", not a real $0.
+
+**Writes** (verified reversibly on a domain whose DNS is served elsewhere):
+
+- **Lock / unlock / auto-renew / WHOIS privacy** all go through the shared
+  `PUT /account/domains/{domain}` with an `AccountDomain` JSON body. Fields:
+  `Locked`, `AutoRenew`, `WhoIsPrivacy` (booleans). This is a **full-object
+  PUT** — sending a bare `{ "Locked": true }` resets the other flags, so
+  read-merge the current record first (and drop `AuthCode` from the round-trip).
+- **DNS host records**: `POST /account/domains/{domain}/hostrecords/{type}`
+  (`a`, `aaaa`, `cname`, `mx`, `txt`, `srv`) to create; `DELETE
+.../hostrecords/{type}/{RecordId}` to remove. The read endpoint returns a
+  numeric `RecordId` per record (needed for deletes). Confirmed bodies: A
+  `{Subdomain, IPV4Address}`, TXT `{Subdomain, TextRecord}` (other types follow
+  the read shapes). Quirks:
+  - The POST **response body is unreliable** (it echoes an unrelated record) —
+    ignore it; re-read the zone to confirm.
+  - Deleting a record and immediately re-POSTing an **identical** one returns
+    `400 "Duplicate host record"`. So `setDnsRecords` applies a **diff** (delete
+    only removed records, post only new ones) instead of a blind delete-all +
+    recreate.
+  - A TXT value containing **non-ASCII** characters (e.g. an em-dash) makes the
+    endpoint return `500 NullReferenceException`. Stick to ASCII.
+- **Nameservers**: `DELETE /account/domains/{domain}/nameservers` (clear all) +
+  `PUT .../nameservers/{nameServer}` (add one, no body) are implemented but
+  **not** live-verified — no safe way to test NS replacement on a live domain.
+
+`renewDomain` / `registerDomain` / `transferIn` are left unimplemented (they
+incur charges).
 
 ## Overview
 
