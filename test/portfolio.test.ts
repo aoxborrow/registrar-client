@@ -38,14 +38,10 @@ describe('listPortfolio', () => {
     expect(errors[0].error).toBeInstanceOf(Error);
   });
 
-  it('forwards list options (limit) to each source', async () => {
+  it('forwards list options (search) to each source', async () => {
     const gd = createRegistrar('godaddy', { apiKey: 'k', apiSecret: 's' });
-    let seenPath = '';
-    stubHttp(gd, req => {
-      seenPath = req.path;
-      return [{ domain: 'a.com' }];
-    });
-    await listPortfolio([gd], { limit: 7 });
-    expect(seenPath).toContain('limit=7');
+    stubHttp(gd, () => [{ domain: 'foo.com' }, { domain: 'bar.com' }]);
+    const { domains } = await listPortfolio([gd], { search: 'foo' });
+    expect(domains.map(d => d.domainName)).toEqual(['foo.com']);
   });
 });

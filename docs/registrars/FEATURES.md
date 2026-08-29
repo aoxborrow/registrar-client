@@ -244,15 +244,16 @@ Both spend real money and are documented-but-unverified against funded accounts.
 Known gap: Namecheap registration doesn't yet send per-TLD extended attributes
 (`.us`, `.eu`, …), so those TLDs aren't registrable there.
 
-### Listing, limits & portfolios
+### Listing, paging & portfolios
 
-`listDomains` takes `{ limit, search }` (on top of the usual request options).
-`limit` defaults to **1000**: each provider requests capped page sizes and stops
-paginating once it has that many, so large accounts (10k+) don't pull every page
-by default; the cap is also enforced client-side via a shared `applyListOptions`
-helper. `search` is a domain-name substring filter — server-side where the API
-supports it (**Namecheap** `SearchTerm`, **Gandi** `fqdn` wildcard) and
-client-side otherwise.
+`listDomains` returns the **full account**, paginating internally at each
+provider's maximum page size — the fewest requests each API allows (GoDaddy/Gandi
+1000, Cloudflare 200, Spaceship/Namecheap/NameSilo/NameBright 100; Porkbun's fixed
+1000-domain chunks paged by `start` offset; Dynadot returns everything in one
+call). Page size isn't a caller-facing option — the library owns pagination. The
+only list option is `search`, a domain-name substring filter, applied server-side
+where the API supports it (**Namecheap** `SearchTerm`, **Gandi** `fqdn` wildcard)
+and client-side otherwise (via the shared `filterDomains` helper).
 
 **Nameservers in the single list call:** folded in for **GoDaddy** (added
 `includes=nameServers` to the list query), **Gandi** (now reads the correct
@@ -271,7 +272,7 @@ domain.
 many providers with `Promise.allSettled`, returning `{ domains, errors }` — a
 flat domain list (each already tagged with its `.registrar`) plus per-registrar
 error isolation, so one provider failing never sinks the combined view. `opts`
-(including `limit`) applies to each source independently.
+(including `search`) is passed to each source.
 
 ### Still open (future work)
 

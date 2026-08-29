@@ -9,8 +9,3 @@ export const DEFAULT_OPTIONS: RegistrarClientOptions = {
 
 // package identifier used in the default User-Agent header
 export const USER_AGENT = '@aoxborrow/registrar-client';
-
-// default cap on how many domains `listDomains` returns (and, where the API
-// allows, fetches) when no explicit `limit` is given. Keeps large accounts
-// (10k+ domains) from pulling every page by default.
-export const DEFAULT_LIST_LIMIT = 1000;

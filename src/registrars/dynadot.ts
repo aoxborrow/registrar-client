@@ -12,8 +12,7 @@ import type {
   TldPricing,
   TransferDomainInput,
 } from '../types';
-import { applyListOptions, createDomain, requireConsent } from '../utils';
-import { DEFAULT_LIST_LIMIT } from '../constants';
+import { createDomain, filterDomains, requireConsent } from '../utils';
 import { NotFoundError, NotImplementedError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
@@ -176,20 +175,15 @@ export class DynadotRegistrar extends BaseRegistrar {
   }
 
   override async listDomains(opts?: ListDomainsOptions): Promise<Domain[]> {
-    const { limit = DEFAULT_LIST_LIMIT, search, ...reqOpts } = opts ?? {};
-    // `count_per_page`/`page_index` are documented for list_domain but not
-    // verified against a live account (the command has historically returned the
-    // whole account in one response), so we also enforce the cap client-side.
-    // list_domain already returns nameservers inline (NameServerSettings).
-    const content = await this.read(
-      { command: 'list_domain', count_per_page: limit, page_index: 0 },
-      reqOpts
-    );
+    // list_domain returns the whole account in one response and already includes
+    // nameservers inline (NameServerSettings).
+    const { search, ...reqOpts } = opts ?? {};
+    const content = await this.read({ command: 'list_domain' }, reqOpts);
     // ListDomainInfoContent > DomainInfoList > DomainInfo (array)
     const list = asRecord(content.DomainInfoList);
     const infos = asArray<DynadotDomainInfo>(list.DomainInfo);
     const domains = infos.map(info => this.toDomain(info));
-    return applyListOptions(domains, { limit, search });
+    return filterDomains(domains, search);
   }
 
   override async getDomain(domainName: string, opts?: RequestOptions): Promise<Domain> {
