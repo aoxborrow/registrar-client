@@ -4,6 +4,8 @@ import type {
   Contact,
   ContactSet,
   DnsRecord,
+  DomainForward,
+  DomainForwardType,
   Domain,
   DomainAvailability,
   ListDomainsOptions,
@@ -16,7 +18,12 @@ import type {
   TransferDomainInput,
 } from '../types';
 import { createDomain, filterDomains } from '../utils';
-import { ConsentRequiredError, NotImplementedError, toRegistrarError } from '../errors';
+import {
+  ConsentRequiredError,
+  NotFoundError,
+  NotImplementedError,
+  toRegistrarError,
+} from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
@@ -82,6 +89,27 @@ interface GoDaddyRecord {
   port?: number;
 }
 
+// GoDaddy models forwarding as a per-fqdn resource under /v1/domains/forwards.
+// `type` is REDIRECT_PERMANENT (301) / REDIRECT_TEMPORARY (302) / MASKED (frame);
+// `mask` is only meaningful for MASKED.
+interface GoDaddyForward {
+  fqdn?: string;
+  type?: string;
+  url?: string;
+  mask?: { title?: string; description?: string; keywords?: string };
+}
+
+const GD_FORWARD_TYPE: Record<DomainForwardType, string> = {
+  permanent: 'REDIRECT_PERMANENT',
+  redirect: 'REDIRECT_TEMPORARY',
+  frame: 'MASKED',
+};
+const GD_TYPE_TO_FORWARD: Record<string, DomainForwardType> = {
+  REDIRECT_PERMANENT: 'permanent',
+  REDIRECT_TEMPORARY: 'redirect',
+  MASKED: 'frame',
+};
+
 // a legal agreement GoDaddy requires consent to before registering a TLD
 interface GoDaddyAgreement {
   agreementKey: string;
@@ -131,7 +159,10 @@ export class GoDaddyRegistrar extends BaseRegistrar {
   // Beyond core, only domain forwarding. DNSSEC has no dedicated endpoint (DS
   // records go through the generic DNS API), there's no glue-record or email
   // API, and auth-code retrieval and push webhooks aren't confirmed via API.
-  static readonly extendedFeatures: readonly RegistrarFeature[] = [Feature.SetDomainForwarding];
+  static readonly extendedFeatures: readonly RegistrarFeature[] = [
+    Feature.GetDomainForwarding,
+    Feature.SetDomainForwarding,
+  ];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
     super(
@@ -533,6 +564,79 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     );
   }
 
+  // --- extended capabilities ---------------------------------------------
+
+  /**
+   * Read URL forwarding via GET /domains/forwards/{fqdn}?includeSubs=true.
+   * GoDaddy keys forwarding by fqdn (the domain or a subdomain), so each entry
+   * maps to a DomainForward whose `host` is relative to the apex ("@" = domain).
+   * A domain with no forwarding returns 404, which we treat as an empty list.
+   */
+  override async getDomainForwarding(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<DomainForward[]> {
+    let forwards: GoDaddyForward[];
+    try {
+      forwards = await this.http.request<GoDaddyForward[]>({
+        path: `/domains/forwards/${encodeURIComponent(domainName)}`,
+        query: { includeSubs: true },
+        ...opts,
+      });
+    } catch (error) {
+      if (error instanceof NotFoundError) return [];
+      throw error;
+    }
+    return (forwards ?? []).map(f => ({
+      host: fqdnToHost(f.fqdn ?? domainName, domainName),
+      url: f.url ?? '',
+      type: GD_TYPE_TO_FORWARD[(f.type ?? '').toUpperCase()] ?? 'permanent',
+    }));
+  }
+
+  /**
+   * Replace URL forwarding (full replace; an empty list clears it). GoDaddy has
+   * no bulk endpoint — forwarding is a per-fqdn PUT/DELETE — so we read the
+   * current forwards, DELETE any fqdn no longer wanted, then PUT each desired
+   * rule to /domains/forwards/{fqdn}.
+   */
+  override async setDomainForwarding(
+    domainName: string,
+    forwards: DomainForward[],
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    try {
+      const current = await this.getDomainForwarding(domainName, opts);
+      const desiredHosts = new Set(forwards.map(f => f.host || '@'));
+
+      for (const existing of current) {
+        if (!desiredHosts.has(existing.host)) {
+          const fqdn = hostToFqdn(existing.host, domainName);
+          await this.http.request({
+            method: 'DELETE',
+            path: `/domains/forwards/${encodeURIComponent(fqdn)}`,
+            ...opts,
+          });
+        }
+      }
+
+      for (const f of forwards) {
+        const fqdn = hostToFqdn(f.host || '@', domainName);
+        const body: GoDaddyForward = { type: GD_FORWARD_TYPE[f.type], url: f.url };
+        if (f.type === 'frame') body.mask = { title: '', description: '', keywords: '' };
+        await this.http.request({
+          method: 'PUT',
+          path: `/domains/forwards/${encodeURIComponent(fqdn)}`,
+          body,
+          ...opts,
+        });
+      }
+      return { success: true, message: 'Domain forwarding updated successfully' };
+    } catch (error) {
+      return { success: false, message: toRegistrarError(error).message };
+    }
+  }
+
   // map a GoDaddy domain payload to the normalized Domain shape
   private toDomain(d: GoDaddyDomain): Domain {
     return createDomain({
@@ -601,4 +705,15 @@ function toGoDaddyContact(c: Contact): GoDaddyContact {
       country: c.country,
     },
   };
+}
+
+// resolve a forwarding host relative to the apex into a full fqdn, and back.
+// "@" (or "") denotes the apex domain itself.
+function hostToFqdn(host: string, domain: string): string {
+  return !host || host === '@' ? domain : `${host}.${domain}`;
+}
+function fqdnToHost(fqdn: string, domain: string): string {
+  if (fqdn === domain) return '@';
+  const suffix = `.${domain}`;
+  return fqdn.endsWith(suffix) ? fqdn.slice(0, -suffix.length) : fqdn;
 }

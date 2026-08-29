@@ -347,4 +347,11 @@ describe('Spaceship provider', () => {
       body: { authCode: 'EPP123', autoRenew: false },
     });
   });
+
+  it('getAuthCode reads authCode from the transfer/auth-code endpoint', async () => {
+    const sp = spaceship();
+    const calls = stubHttp(sp, () => ({ authCode: 'EPP-XYZ', expires: '2100-01-01T00:00:00Z' }));
+    expect(await sp.getAuthCode('example.com')).toBe('EPP-XYZ');
+    expect(calls[0].path).toBe('/v1/domains/example.com/transfer/auth-code');
+  });
 });

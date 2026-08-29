@@ -9,6 +9,7 @@ import type {
   Domain,
   DomainAvailability,
   DomainForward,
+  DnssecStatus,
   EmailForward,
   ListDomainsOptions,
   OperationResult,
@@ -218,6 +219,18 @@ export abstract class BaseRegistrar implements Registrar {
     _opts?: RequestOptions
   ): Promise<OperationResult> {
     return this.notImplemented('setDomainForwarding');
+  }
+
+  getAuthCode(_domainName: string, _opts?: RequestOptions): Promise<string> {
+    return this.notImplemented('getAuthCode');
+  }
+
+  getDnssec(_domainName: string, _opts?: RequestOptions): Promise<DnssecStatus> {
+    return this.notImplemented('getDnssec');
+  }
+
+  disableDnssec(_domainName: string, _opts?: RequestOptions): Promise<OperationResult> {
+    return this.notImplemented('disableDnssec');
   }
 
   // shared rejection for a capability a provider hasn't wired up yet
