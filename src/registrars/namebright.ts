@@ -2,10 +2,12 @@ import type {
   ConfigField,
   ConnectionResult,
   Domain,
+  ListDomainsOptions,
   RegistrarOptions,
   RequestOptions,
 } from '../types';
-import { createDomain } from '../utils';
+import { applyListOptions, createDomain } from '../utils';
+import { DEFAULT_LIST_LIMIT } from '../constants';
 import { AuthenticationError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import type { RegistrarFeature } from '../features';
@@ -21,14 +23,25 @@ interface NbToken {
   expires_in?: number;
 }
 
-// a domain record from /account/domains (exact field casing unconfirmed — see note)
+// a domain record from GET account/domains. The list endpoint does not return
+// nameservers (those come from account/domains/{domain}/nameservers).
 interface NbDomain {
   DomainName?: string;
   domain?: string;
+  Status?: string;
   ExpirationDate?: string;
   RegistrationDate?: string;
   AutoRenew?: boolean;
   Locked?: boolean;
+  WhoIsPrivacy?: boolean;
+}
+
+// the paged wrapper GET account/domains returns
+interface NbDomainsPage {
+  ResultsTotal?: number;
+  CurrentPage?: number;
+  Domains?: NbDomain[];
+  domains?: NbDomain[];
 }
 
 /**
@@ -131,27 +144,43 @@ export class NameBrightRegistrar extends BaseRegistrar {
     }
   }
 
-  override async listDomains(opts?: RequestOptions): Promise<Domain[]> {
-    const data = await this.authed<unknown>({ path: 'account/domains' }, opts);
-    // the response may be a bare array or an object wrapping one; be lenient
-    const list = Array.isArray(data)
-      ? (data as NbDomain[])
-      : ((data as { Domains?: NbDomain[]; domains?: NbDomain[] })?.Domains ??
-        (data as { domains?: NbDomain[] })?.domains ??
-        []);
+  override async listDomains(opts?: ListDomainsOptions): Promise<Domain[]> {
+    // The list endpoint has no name filter, so `search` is applied client-side.
+    // Nameservers are not returned here (see NbDomain).
+    const { limit = DEFAULT_LIST_LIMIT, search, ...reqOpts } = opts ?? {};
+    const domains: Domain[] = [];
+    const perPage = Math.min(limit, 100); // domainsPerPage max is 100
+    let page = 1;
+    let hasMore = true;
 
-    return list.map(d =>
-      createDomain({
-        domainName: d.DomainName ?? d.domain,
-        registrar: this.name,
-        status: 'ok',
-        createdDate: d.RegistrationDate,
-        expirationDate: d.ExpirationDate,
-        renewalDate: d.ExpirationDate,
-        autoRenew: d.AutoRenew ?? false,
-        locked: d.Locked ?? false,
-        nameservers: [],
-      })
-    );
+    while (hasMore && domains.length < limit) {
+      const data = await this.authed<NbDomainsPage | NbDomain[]>(
+        { path: 'account/domains', query: { page, domainsPerPage: perPage } },
+        reqOpts
+      );
+      // the response may be a bare array or a paged object; be lenient
+      const list = Array.isArray(data) ? data : (data?.Domains ?? data?.domains ?? []);
+
+      for (const d of list) {
+        domains.push(
+          createDomain({
+            domainName: d.DomainName ?? d.domain,
+            registrar: this.name,
+            status: d.Status ?? 'ok',
+            createdDate: d.RegistrationDate,
+            expirationDate: d.ExpirationDate,
+            renewalDate: d.ExpirationDate,
+            autoRenew: d.AutoRenew ?? false,
+            locked: d.Locked ?? false,
+            privacy: d.WhoIsPrivacy ?? false,
+            nameservers: [],
+          })
+        );
+      }
+
+      hasMore = list.length === perPage;
+      page++;
+    }
+    return applyListOptions(domains, { limit, search });
   }
 }

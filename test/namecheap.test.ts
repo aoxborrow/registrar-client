@@ -110,6 +110,25 @@ describe('Namecheap provider', () => {
     });
   });
 
+  it('listDomains passes SearchTerm server-side and caps PageSize at limit', async () => {
+    const nc = namecheap();
+    const calls = stubXml(nc, () =>
+      ok(
+        `<DomainGetListResult>
+           <Domain ID="1" Name="example.com" Created="01/01/2020" Expires="01/01/2027"
+             AutoRenew="true" IsLocked="false" WhoisGuard="ENABLED"/>
+         </DomainGetListResult>`
+      )
+    );
+    const domains = await nc.listDomains({ search: 'exam', limit: 5 });
+    expect(calls[0].query).toMatchObject({ SearchTerm: 'exam', PageSize: '5', Page: '1' });
+    expect(domains[0]).toMatchObject({
+      domainName: 'example.com',
+      autoRenew: true,
+      privacy: true,
+    });
+  });
+
   it('getNameservers reads dns.getList', async () => {
     const nc = namecheap();
     const calls = stubXml(nc, () =>

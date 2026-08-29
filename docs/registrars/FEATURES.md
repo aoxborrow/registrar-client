@@ -244,6 +244,35 @@ Both spend real money and are documented-but-unverified against funded accounts.
 Known gap: Namecheap registration doesn't yet send per-TLD extended attributes
 (`.us`, `.eu`, …), so those TLDs aren't registrable there.
 
+### Listing, limits & portfolios
+
+`listDomains` takes `{ limit, search }` (on top of the usual request options).
+`limit` defaults to **1000**: each provider requests capped page sizes and stops
+paginating once it has that many, so large accounts (10k+) don't pull every page
+by default; the cap is also enforced client-side via a shared `applyListOptions`
+helper. `search` is a domain-name substring filter — server-side where the API
+supports it (**Namecheap** `SearchTerm`, **Gandi** `fqdn` wildcard) and
+client-side otherwise.
+
+**Nameservers in the single list call:** folded in for **GoDaddy** (added
+`includes=nameServers` to the list query), **Gandi** (now reads the correct
+`nameserver.hosts` field — previously it read a non-existent `nameservers`
+property and always came back empty), **Spaceship**, and **Dynadot** (inline
+`NameServerSettings`). The list endpoints of **Namecheap**, **Porkbun**,
+**NameSilo**, and **NameBright** don't return nameservers at all — they require a
+per-domain call — and **Cloudflare** exposes NS only via its Zones API, not the
+Registrar list. Two list bugs were fixed in passing: **NameBright** wasn't
+paginating (it returned only the API's default first page) and now walks
+`page`/`domainsPerPage`; **NameSilo** gained `getDomain`/`getNameservers` (via
+`getDomainInfo`) so its NS/status/lock/privacy/auto-renew are reachable per
+domain.
+
+**Cross-registrar portfolios:** `listPortfolio(sources, opts)` fans out over
+many providers with `Promise.allSettled`, returning `{ domains, errors }` — a
+flat domain list (each already tagged with its `.registrar`) plus per-registrar
+error isolation, so one provider failing never sinks the combined view. `opts`
+(including `limit`) applies to each source independently.
+
 ### Still open (future work)
 
 - **Wire up the remaining providers' core methods** — Gandi and the newer

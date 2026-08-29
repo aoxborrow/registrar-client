@@ -6,6 +6,7 @@ import type {
   DnsRecord,
   Domain,
   DomainAvailability,
+  ListDomainsOptions,
   OperationResult,
   RegisterDomainInput,
   RegistrarOptions,
@@ -13,7 +14,8 @@ import type {
   TldPricing,
   TransferDomainInput,
 } from '../types';
-import { createDomain, requireConsent } from '../utils';
+import { applyListOptions, createDomain, requireConsent } from '../utils';
+import { DEFAULT_LIST_LIMIT } from '../constants';
 import { toRegistrarError } from '../errors';
 import { ensureArray, parseXml } from '../xml';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
@@ -248,17 +250,24 @@ export class NamecheapRegistrar extends BaseRegistrar {
     }
   }
 
-  override async listDomains(opts?: RequestOptions): Promise<Domain[]> {
+  override async listDomains(opts?: ListDomainsOptions): Promise<Domain[]> {
+    const { limit = DEFAULT_LIST_LIMIT, search, ...reqOpts } = opts ?? {};
     const domains: Domain[] = [];
-    const pageSize = 100;
+    const pageSize = Math.min(limit, 100); // Namecheap PageSize max is 100
+    // `SearchTerm` filters by name substring server-side.
+    const searchTerm = search?.trim();
     let page = 1;
     let hasMore = true;
 
-    while (hasMore) {
+    while (hasMore && domains.length < limit) {
       const cr = await this.command(
         'namecheap.domains.getList',
-        { PageSize: String(pageSize), Page: String(page) },
-        opts
+        {
+          PageSize: String(pageSize),
+          Page: String(page),
+          ...(searchTerm ? { SearchTerm: searchTerm } : {}),
+        },
+        reqOpts
       );
 
       const elements = ensureArray(cr.DomainGetListResult?.Domain);
@@ -282,7 +291,7 @@ export class NamecheapRegistrar extends BaseRegistrar {
       hasMore = elements.length === pageSize;
       page++;
     }
-    return domains;
+    return applyListOptions(domains, { limit, search });
   }
 
   /**

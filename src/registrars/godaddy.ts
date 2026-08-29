@@ -6,6 +6,7 @@ import type {
   DnsRecord,
   Domain,
   DomainAvailability,
+  ListDomainsOptions,
   OperationResult,
   RegisterDomainInput,
   RegistrationConsent,
@@ -14,7 +15,8 @@ import type {
   TldPricing,
   TransferDomainInput,
 } from '../types';
-import { createDomain } from '../utils';
+import { applyListOptions, createDomain } from '../utils';
+import { DEFAULT_LIST_LIMIT } from '../constants';
 import { ConsentRequiredError, NotImplementedError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
@@ -159,15 +161,31 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     }
   }
 
-  override async listDomains(opts?: RequestOptions): Promise<Domain[]> {
+  override async listDomains(opts?: ListDomainsOptions): Promise<Domain[]> {
+    const { limit = DEFAULT_LIST_LIMIT, search, ...reqOpts } = opts ?? {};
     // status filters exclude expired domains: visible (active), renewable
     // (expiring soon), redemption (grace period). statusGroups repeats in the
-    // query string, so it is embedded in the path directly.
-    const res = await this.http.request<GoDaddyDomain[]>({
-      path: '/domains?limit=1000&statusGroups=VISIBLE&statusGroups=RENEWABLE&statusGroups=REDEMPTION',
-      ...opts,
-    });
-    return (res ?? []).map(d => this.toDomain(d));
+    // query string, so it is embedded in the path directly. `includes=nameServers`
+    // folds nameservers into this list call (they are otherwise omitted). GoDaddy
+    // paginates via `marker` = the last domain name seen; we stop at `limit`.
+    const statusGroups =
+      'statusGroups=VISIBLE&statusGroups=RENEWABLE&statusGroups=REDEMPTION';
+    const domains: Domain[] = [];
+    let marker: string | undefined;
+    while (domains.length < limit) {
+      const pageSize = Math.min(limit - domains.length, 1000); // GoDaddy limit max is 1000
+      const markerParam = marker ? `&marker=${encodeURIComponent(marker)}` : '';
+      const res = await this.http.request<GoDaddyDomain[]>({
+        path: `/domains?limit=${pageSize}&includes=nameServers&${statusGroups}${markerParam}`,
+        ...reqOpts,
+      });
+      const list = res ?? [];
+      for (const d of list) domains.push(this.toDomain(d));
+      if (list.length < pageSize) break;
+      marker = list[list.length - 1]?.domain;
+      if (!marker) break;
+    }
+    return applyListOptions(domains, { limit, search });
   }
 
   override async getDomain(domainName: string, opts?: RequestOptions): Promise<Domain> {

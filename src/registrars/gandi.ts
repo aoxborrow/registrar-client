@@ -2,22 +2,33 @@ import type {
   ConfigField,
   ConnectionResult,
   Domain,
+  ListDomainsOptions,
   OperationResult,
   RegistrarOptions,
   RequestOptions,
 } from '../types';
-import { createDomain } from '../utils';
+import { applyListOptions, createDomain } from '../utils';
+import { DEFAULT_LIST_LIMIT } from '../constants';
 import { toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
 
+// Shape of a domain in `GET /v5/domain/domains`. `status` is an array of EPP
+// statuses; `autorenew` may be a bare boolean or an object; nameservers arrive
+// as `nameserver.hosts` (a fallback `nameservers` array is tolerated too).
 interface GandiDomain {
   fqdn: string;
-  status?: string;
-  dates?: { created_at?: string; registry_ends_at?: string; updated_at?: string };
-  autorenew?: { enabled?: boolean };
+  status?: string | string[];
+  dates?: {
+    created_at?: string;
+    registry_created_at?: string;
+    registry_ends_at?: string;
+    updated_at?: string;
+  };
+  autorenew?: boolean | { enabled?: boolean };
   contacts?: { owner?: { extra_parameters?: { whois_privacy?: string } } };
+  nameserver?: { current?: string; hosts?: string[] };
   nameservers?: string[];
 }
 
@@ -80,40 +91,50 @@ export class GandiRegistrar extends BaseRegistrar {
     }
   }
 
-  override async listDomains(opts?: RequestOptions): Promise<Domain[]> {
+  override async listDomains(opts?: ListDomainsOptions): Promise<Domain[]> {
+    const { limit = DEFAULT_LIST_LIMIT, search, ...reqOpts } = opts ?? {};
     const domains: Domain[] = [];
-    const perPage = 1000; // Gandi API maximum page size
+    const perPage = Math.min(limit, 1000); // Gandi API maximum page size
+    // Gandi's `fqdn` filter is server-side and supports wildcards, so a plain
+    // substring search is wrapped in `*...*`.
+    const term = search?.trim();
+    const fqdn = term ? `*${term}*` : undefined;
     let page = 1;
 
     for (;;) {
       const list = await this.http.request<GandiDomain[]>({
         path: '/domain/domains',
-        query: { per_page: perPage, page },
-        ...opts,
+        query: { per_page: perPage, page, ...(fqdn ? { fqdn } : {}) },
+        ...reqOpts,
       });
       if (!list || list.length === 0) break;
 
-      for (const d of list) {
-        domains.push(
-          createDomain({
-            domainName: d.fqdn,
-            registrar: this.name,
-            status: d.status,
-            createdDate: d.dates?.created_at,
-            expirationDate: d.dates?.registry_ends_at,
-            renewalDate: d.dates?.updated_at,
-            autoRenew: d.autorenew?.enabled ?? false,
-            locked: d.status === 'locked',
-            privacy: d.contacts?.owner?.extra_parameters?.whois_privacy === 'enabled',
-            nameservers: d.nameservers ?? [],
-          })
-        );
-      }
+      for (const d of list) domains.push(this.toDomain(d));
 
-      if (list.length < perPage) break;
+      if (list.length < perPage || domains.length >= limit) break;
       page++;
     }
-    return domains;
+    return applyListOptions(domains, { limit, search });
+  }
+
+  // map Gandi's list/detail domain shape into a normalized Domain, tolerating
+  // the field variations documented on GandiDomain.
+  private toDomain(d: GandiDomain): Domain {
+    const statuses = Array.isArray(d.status) ? d.status : d.status ? [d.status] : [];
+    const autoRenew =
+      typeof d.autorenew === 'boolean' ? d.autorenew : (d.autorenew?.enabled ?? false);
+    return createDomain({
+      domainName: d.fqdn,
+      registrar: this.name,
+      status: statuses.join(','),
+      createdDate: d.dates?.created_at ?? d.dates?.registry_created_at,
+      expirationDate: d.dates?.registry_ends_at,
+      renewalDate: d.dates?.updated_at,
+      autoRenew,
+      locked: statuses.some(s => /transferprohibited|locked/i.test(s)),
+      privacy: d.contacts?.owner?.extra_parameters?.whois_privacy === 'enabled',
+      nameservers: d.nameserver?.hosts ?? d.nameservers ?? [],
+    });
   }
 
   override async renewDomain(

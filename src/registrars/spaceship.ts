@@ -6,6 +6,7 @@ import type {
   DnsRecord,
   Domain,
   DomainAvailability,
+  ListDomainsOptions,
   OperationResult,
   RegisterDomainInput,
   RegistrarOptions,
@@ -13,7 +14,8 @@ import type {
   TldPricing,
   TransferDomainInput,
 } from '../types';
-import { createDomain, requireConsent, sleep } from '../utils';
+import { applyListOptions, createDomain, requireConsent, sleep } from '../utils';
+import { DEFAULT_LIST_LIMIT } from '../constants';
 import { NotImplementedError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
@@ -180,25 +182,27 @@ export class SpaceshipRegistrar extends BaseRegistrar {
     }
   }
 
-  override async listDomains(opts?: RequestOptions): Promise<Domain[]> {
+  override async listDomains(opts?: ListDomainsOptions): Promise<Domain[]> {
+    // No server-side name filter on this endpoint, so `search` is client-side.
+    const { limit = DEFAULT_LIST_LIMIT, search, ...reqOpts } = opts ?? {};
     const domains: Domain[] = [];
-    const take = 100; // max items per request (1-100)
+    const take = Math.min(limit, 100); // max items per request (1-100)
     let skip = 0;
     let hasMore = true;
 
-    while (hasMore) {
+    while (hasMore && domains.length < limit) {
       const res = await this.http.request<SpaceshipPage<SpaceshipDomain>>({
         path: '/v1/domains',
         query: { take, skip },
-        ...opts,
+        ...reqOpts,
       });
       const list = res.items ?? [];
       for (const d of list) domains.push(this.toDomain(d));
       hasMore = list.length === take;
       skip += take;
-      if (hasMore) await sleep(200); // gentle rate limiting between pages
+      if (hasMore && domains.length < limit) await sleep(200); // gentle rate limiting between pages
     }
-    return domains;
+    return applyListOptions(domains, { limit, search });
   }
 
   override async getDomain(domainName: string, opts?: RequestOptions): Promise<Domain> {

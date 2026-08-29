@@ -17,6 +17,19 @@ export interface RegistrarClientOptions {
 // per-request options that can override client-level options
 export type RequestOptions = Partial<RegistrarClientOptions>;
 
+// options for `listDomains`. Extends `RequestOptions` so timeout/retries/signal
+// still flow through a single argument.
+export interface ListDomainsOptions extends RequestOptions {
+  // maximum number of domains to return. Defaults to `DEFAULT_LIST_LIMIT`
+  // (1000). Providers request efficiently (capped page sizes) and stop
+  // paginating once this many domains are collected.
+  limit?: number;
+  // case-insensitive substring to match against the domain name. Applied
+  // server-side where the API supports it (Namecheap `SearchTerm`, Gandi
+  // `fqdn`) and client-side otherwise.
+  search?: string;
+}
+
 // which API environment a provider targets. "sandbox" covers registrar test
 // environments (GoDaddy calls theirs "OTE") so integration tests never touch
 // real domains. Requesting "sandbox" on a provider without one throws.
@@ -236,8 +249,8 @@ export interface Registrar {
   // verify the configured credentials work
   testConnection(opts?: RequestOptions): Promise<ConnectionResult>;
 
-  // list all domains in the account
-  listDomains(opts?: RequestOptions): Promise<Domain[]>;
+  // list domains in the account (capped and optionally filtered via `opts`)
+  listDomains(opts?: ListDomainsOptions): Promise<Domain[]>;
 
   // fetch a single domain's details
   getDomain(domainName: string, opts?: RequestOptions): Promise<Domain>;

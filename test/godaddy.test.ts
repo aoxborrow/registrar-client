@@ -43,6 +43,42 @@ describe('GoDaddy provider', () => {
     ]);
   });
 
+  it('listDomains folds nameservers into one call via includes and maps them', async () => {
+    const gd = godaddy();
+    const calls = stubHttp(gd, () => [
+      {
+        domain: 'a.com',
+        expires: '2027-01-01T00:00:00Z',
+        renewAuto: true,
+        locked: true,
+        nameServers: ['ns1.example.net', 'ns2.example.net'],
+      },
+    ]);
+    const domains = await gd.listDomains();
+    expect(calls[0].path).toContain('includes=nameServers');
+    expect(domains[0]).toMatchObject({
+      domainName: 'a.com',
+      autoRenew: true,
+      locked: true,
+      nameservers: ['ns1.example.net', 'ns2.example.net'],
+    });
+  });
+
+  it('listDomains sends limit in the query, caps results, and filters by search', async () => {
+    const gd = godaddy();
+    const calls = stubHttp(gd, () => [
+      { domain: 'foo.com' },
+      { domain: 'bar.com' },
+      { domain: 'foobar.com' },
+    ]);
+    const capped = await gd.listDomains({ limit: 2 });
+    expect(calls[0].path).toContain('limit=2');
+    expect(capped).toHaveLength(2);
+
+    const matched = await gd.listDomains({ search: 'foo' });
+    expect(matched.map(d => d.domainName)).toEqual(['foo.com', 'foobar.com']);
+  });
+
   it('getContacts maps GoDaddy contact shape to the normalized Contact', async () => {
     const gd = godaddy();
     stubHttp(gd, () => ({

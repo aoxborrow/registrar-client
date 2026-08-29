@@ -2,11 +2,13 @@ import type {
   ConfigField,
   ConnectionResult,
   Domain,
+  ListDomainsOptions,
   OperationResult,
   RegistrarOptions,
   RequestOptions,
 } from '../types';
-import { createDomain } from '../utils';
+import { applyListOptions, createDomain } from '../utils';
+import { DEFAULT_LIST_LIMIT } from '../constants';
 import { toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
@@ -57,9 +59,14 @@ export class PorkbunRegistrar extends BaseRegistrar {
     { name: 'apiKey', label: 'API Key', type: 'password', required: true },
     { name: 'secretApiKey', label: 'Secret API Key', type: 'password', required: true },
   ];
-  // Porkbun offers test keys (pk1_sb_...) rather than a distinct sandbox host,
-  // so there is no separate base URL to target.
-  static readonly supportsSandbox = false;
+  // Porkbun's sandbox is the SAME base URL with a swapped key: a sandbox key is
+  // prefixed `pk1_sb_` and runs against an isolated test environment (no real
+  // registry actions, no DNS changes, no charges). Each sandbox starts with
+  // $1,000 of fake credit and every response includes `"sandbox": true`. Top up
+  // or reset a sandbox with `POST /sandbox/topup` / `POST /sandbox/reset` using a
+  // sandbox key. Because only the key differs, the sandbox base URL equals
+  // production — selecting `environment: 'sandbox'` just avoids throwing.
+  static readonly supportsSandbox = true;
   // JSON API. Beyond core: DNSSEC, glue records, URL (domain) forwarding, and
   // signed webhooks. No auth-code retrieval; transfer lock and WHOIS-privacy
   // toggles have no write endpoint (privacy is set only at registration).
@@ -77,6 +84,9 @@ export class PorkbunRegistrar extends BaseRegistrar {
       {
         baseUrl: selectBaseUrl('Porkbun', options?.environment, {
           production: 'https://api.porkbun.com/api/json/v3',
+          // sandbox shares the production URL; the `pk1_sb_` key selects the
+          // isolated test environment server-side.
+          sandbox: 'https://api.porkbun.com/api/json/v3',
         }),
       },
       options
@@ -112,14 +122,16 @@ export class PorkbunRegistrar extends BaseRegistrar {
     }
   }
 
-  override async listDomains(opts?: RequestOptions): Promise<Domain[]> {
+  override async listDomains(opts?: ListDomainsOptions): Promise<Domain[]> {
+    // listAll has no name filter, so `search` is applied client-side.
+    const { limit = DEFAULT_LIST_LIMIT, search, ...reqOpts } = opts ?? {};
     const domains: Domain[] = [];
     const pageSize = 1000; // Porkbun returns up to 1000 domains per call
     let start = 0;
     let hasMore = true;
 
-    while (hasMore) {
-      const res = await this.call('/domain/listAll', { start, includeLabels: 'no' }, opts);
+    while (hasMore && domains.length < limit) {
+      const res = await this.call('/domain/listAll', { start, includeLabels: 'no' }, reqOpts);
       if (!isOk(res)) {
         throw new Error(res.message ?? 'API request failed');
       }
@@ -145,7 +157,7 @@ export class PorkbunRegistrar extends BaseRegistrar {
       hasMore = list.length === pageSize;
       start += pageSize;
     }
-    return domains;
+    return applyListOptions(domains, { limit, search });
   }
 
   override async updateNameservers(
