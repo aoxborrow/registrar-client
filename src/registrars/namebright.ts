@@ -7,6 +7,7 @@ import type {
   Domain,
   DomainAvailability,
   ListDomainsOptions,
+  OperationResult,
   RegistrarOptions,
   RequestOptions,
   TldPricing,
@@ -71,10 +72,11 @@ interface NbContact {
   Region?: string;
   Country?: string;
   PostalCode?: string;
-  PhoneCountry?: string;
-  Phone?: string;
-  FaxCountry?: string;
-  Fax?: string;
+  // NameBright returns the country-code parts as numbers (e.g. 1), not strings
+  PhoneCountry?: string | number;
+  Phone?: string | number;
+  FaxCountry?: string | number;
+  Fax?: string | number;
 }
 
 // GET account/domains/{domain}/contacts/all. NameBright exposes registrant,
@@ -86,27 +88,34 @@ interface NbContactsResponse {
   TechnicalContact?: NbContact;
 }
 
-// the per-type DNS host records from GET account/domains/{domain}/hostrecords/all
+// the per-type DNS host records from GET account/domains/{domain}/hostrecords/all.
+// Each carries a numeric RecordId used to address it for deletion
+// (DELETE account/domains/{domain}/hostrecords/{type}/{RecordId}).
 interface NbARecord {
   Subdomain?: string;
   IPV4Address?: string;
+  RecordId?: number;
 }
 interface NbAAAARecord {
   Subdomain?: string;
   IPV6Address?: string;
+  RecordId?: number;
 }
 interface NbCNAMERecord {
   Subdomain?: string;
   RedirectDomain?: string;
+  RecordId?: number;
 }
 interface NbMXRecord {
   Subdomain?: string;
   MailServer?: string;
   Priority?: number;
+  RecordId?: number;
 }
 interface NbTXTRecord {
   Subdomain?: string;
   TextRecord?: string;
+  RecordId?: number;
 }
 interface NbSRVRecord {
   Service?: string;
@@ -115,6 +124,7 @@ interface NbSRVRecord {
   Weight?: number;
   Port?: number;
   Target?: string;
+  RecordId?: number;
 }
 
 interface NbHostRecords {
@@ -157,10 +167,20 @@ interface NbAvailability {
  * The read operations are implemented here (testConnection, listDomains,
  * getDomain, getNameservers, getContacts, getDnsRecords, checkAvailability).
  * `getPricing` throws NotImplementedError — NameBright has no per-TLD price table.
- * The write endpoints (renew, nameservers, lock/unlock — a shared
- * `PUT /account/domains/{domain}`) have request-body field names that could not
- * be confirmed from the public docs, so they are intentionally left as
- * NotImplementedError until verified against a live account.
+ *
+ * Write operations verified against a live account: lock/unlock, setAutoRenew,
+ * and setPrivacy all update the shared `PUT /account/domains/{domain}` endpoint
+ * (which takes the full AccountDomain body — we read-merge to avoid clobbering
+ * the other flags). setDnsRecords applies a desired-state diff via per-type
+ * POST/DELETE on `hostrecords/{type}[/{RecordId}]` (a blind delete-all +
+ * re-create trips NameBright's flaky "Duplicate host record" check).
+ *
+ * updateNameservers (DELETE-all + per-server PUT on `nameservers[/{ns}]`) is
+ * built from the documented endpoints but NOT live-verified — replacing the
+ * nameservers on a live domain has no safe test path.
+ *
+ * renewDomain / registerDomain / transferIn remain NotImplementedError — they
+ * incur charges and were out of scope for verification.
  */
 export class NameBrightRegistrar extends BaseRegistrar {
   readonly name = 'namebright';
@@ -320,36 +340,7 @@ export class NameBrightRegistrar extends BaseRegistrar {
       { path: `account/domains/${encodeURIComponent(domainName)}/hostrecords/all` },
       opts
     );
-    const records: DnsRecord[] = [];
-
-    for (const r of res.ARecords ?? []) {
-      records.push({ type: 'A', name: r.Subdomain ?? '@', value: r.IPV4Address ?? '' });
-    }
-    for (const r of res.AAAARecords ?? []) {
-      records.push({ type: 'AAAA', name: r.Subdomain ?? '@', value: r.IPV6Address ?? '' });
-    }
-    for (const r of res.CNAMERecords ?? []) {
-      records.push({ type: 'CNAME', name: r.Subdomain ?? '@', value: r.RedirectDomain ?? '' });
-    }
-    for (const r of res.MXRecords ?? []) {
-      const record: DnsRecord = { type: 'MX', name: r.Subdomain ?? '@', value: r.MailServer ?? '' };
-      if (r.Priority != null) record.priority = r.Priority;
-      records.push(record);
-    }
-    for (const r of res.TXTRecords ?? []) {
-      records.push({ type: 'TXT', name: r.Subdomain ?? '@', value: r.TextRecord ?? '' });
-    }
-    for (const r of res.SRVRecords ?? []) {
-      // NameBright splits SRV into service/protocol; recompose the standard
-      // "_service._protocol" name that our generic record carries.
-      const name = [r.Service, r.Protocol].filter(Boolean).join('.') || '@';
-      const record: DnsRecord = { type: 'SRV', name, value: r.Target ?? '' };
-      if (r.Priority != null) record.priority = r.Priority;
-      if (r.Weight != null) record.weight = r.Weight;
-      if (r.Port != null) record.port = r.Port;
-      records.push(record);
-    }
-    return records;
+    return flattenHostRecords(res).map(e => e.record);
   }
 
   /**
@@ -387,13 +378,157 @@ export class NameBrightRegistrar extends BaseRegistrar {
         domainName: res.DomainName ?? domainName,
         available: res.Status === 'AvailableForRegistration',
       };
-      if (typeof price === 'number' && Number.isFinite(price)) {
+      // NameBright returns UnitPrice 0 for unavailable names; only surface a
+      // meaningful (positive) registration price.
+      if (typeof price === 'number' && Number.isFinite(price) && price > 0) {
         result.price = price;
         result.currency = 'USD';
       }
       results.push(result);
     }
     return results;
+  }
+
+  // --- write operations ---------------------------------------------------
+
+  override lockDomain(domainName: string, opts?: RequestOptions): Promise<OperationResult> {
+    return this.setDomainFlag(domainName, { Locked: true }, 'Domain locked successfully', opts);
+  }
+
+  override unlockDomain(domainName: string, opts?: RequestOptions): Promise<OperationResult> {
+    return this.setDomainFlag(domainName, { Locked: false }, 'Domain unlocked successfully', opts);
+  }
+
+  override setAutoRenew(
+    domainName: string,
+    enabled: boolean,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    return this.setDomainFlag(
+      domainName,
+      { AutoRenew: enabled },
+      `Auto-renew ${enabled ? 'enabled' : 'disabled'} successfully`,
+      opts
+    );
+  }
+
+  override setPrivacy(
+    domainName: string,
+    enabled: boolean,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    return this.setDomainFlag(
+      domainName,
+      { WhoIsPrivacy: enabled },
+      `WHOIS privacy ${enabled ? 'enabled' : 'disabled'} successfully`,
+      opts
+    );
+  }
+
+  /**
+   * Update one of the boolean domain flags (Locked / AutoRenew / WhoIsPrivacy)
+   * via the shared PUT account/domains/{domain}. That endpoint takes the full
+   * AccountDomain body, so we first GET the current record and merge the change
+   * over it — sending a bare `{ Locked: true }` would otherwise reset the other
+   * flags to their defaults. We deliberately drop AuthCode from the round-trip.
+   */
+  private async setDomainFlag(
+    domainName: string,
+    change: Partial<Pick<NbDomain, 'Locked' | 'AutoRenew' | 'WhoIsPrivacy'>>,
+    successMessage: string,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    try {
+      const path = `account/domains/${encodeURIComponent(domainName)}`;
+      const current = await this.authed<NbDomain & { Category?: string; UpgradedDomain?: boolean }>(
+        { path },
+        opts
+      );
+      const body = {
+        DomainName: current.DomainName,
+        Status: current.Status,
+        ExpirationDate: current.ExpirationDate,
+        Locked: current.Locked ?? false,
+        AutoRenew: current.AutoRenew ?? false,
+        WhoIsPrivacy: current.WhoIsPrivacy ?? false,
+        Category: current.Category,
+        UpgradedDomain: current.UpgradedDomain,
+        ...change,
+      };
+      await this.authed({ method: 'PUT', path, body }, opts);
+      return { success: true, message: successMessage };
+    } catch (error) {
+      return { success: false, message: toRegistrarError(error).message };
+    }
+  }
+
+  /**
+   * Replace the domain's nameservers. NameBright has no bulk set: remove all
+   * existing servers, then PUT each new one (the server is a path segment, with
+   * no request body).
+   *
+   * NOTE: built from the documented endpoints but not live-verified — there is
+   * no safe way to test nameserver replacement against a live production domain.
+   */
+  override async updateNameservers(
+    domainName: string,
+    nameservers: string[],
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    try {
+      const base = `account/domains/${encodeURIComponent(domainName)}/nameservers`;
+      await this.authed({ method: 'DELETE', path: base }, opts);
+      for (const ns of nameservers) {
+        await this.authed({ method: 'PUT', path: `${base}/${encodeURIComponent(ns)}` }, opts);
+      }
+      return { success: true, message: 'Nameservers updated successfully' };
+    } catch (error) {
+      return { success: false, message: toRegistrarError(error).message };
+    }
+  }
+
+  /**
+   * Replace the domain's DNS host records with `records` (desired-state
+   * semantics). NameBright manages records individually — per-type POST to
+   * create, DELETE by RecordId to remove — with no bulk set, so we diff against
+   * the current records: delete the ones no longer wanted and create the ones
+   * that are new, leaving unchanged records in place. (A blind delete-all +
+   * re-create trips NameBright's flaky "Duplicate host record" check when a
+   * record is deleted and immediately re-posted, so the diff both avoids that
+   * and skips needless churn.) NameBright supports no per-record TTL, so `ttl`
+   * is ignored.
+   */
+  override async setDnsRecords(
+    domainName: string,
+    records: DnsRecord[],
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    try {
+      const base = `account/domains/${encodeURIComponent(domainName)}/hostrecords`;
+      const current = flattenHostRecords(
+        await this.authed<NbHostRecords>({ path: `${base}/all` }, opts)
+      );
+
+      const desiredKeys = new Set(records.map(dnsRecordKey));
+      const currentKeys = new Set(current.map(e => dnsRecordKey(e.record)));
+
+      // delete records that are present now but not desired
+      for (const e of current) {
+        if (e.recordId != null && !desiredKeys.has(dnsRecordKey(e.record))) {
+          await this.authed({ method: 'DELETE', path: `${base}/${e.segment}/${e.recordId}` }, opts);
+        }
+      }
+      // create desired records that aren't already present
+      for (const r of records) {
+        if (!currentKeys.has(dnsRecordKey(r))) {
+          const { segment, body } = toNbHostRecord(r);
+          await this.authed({ method: 'POST', path: `${base}/${segment}`, body }, opts);
+        }
+      }
+      return { success: true, message: 'DNS records updated successfully' };
+    } catch (error) {
+      return { success: false, message: toRegistrarError(error).message };
+    }
   }
 
   // map a NameBright domain object (from list or single-domain endpoints) to the
@@ -434,11 +569,128 @@ function fromNbContact(c: NbContact | undefined): Contact | undefined {
   };
 }
 
+// flatten NameBright's per-type host-record groups into generic DnsRecords,
+// preserving each record's endpoint segment and RecordId so callers can address
+// it for deletion. Order is stable (A, AAAA, CNAME, MX, TXT, SRV).
+interface FlatHostRecord {
+  record: DnsRecord;
+  segment: string;
+  recordId?: number;
+}
+function flattenHostRecords(res: NbHostRecords): FlatHostRecord[] {
+  const out: FlatHostRecord[] = [];
+  for (const r of res.ARecords ?? []) {
+    out.push({
+      record: { type: 'A', name: r.Subdomain ?? '@', value: r.IPV4Address ?? '' },
+      segment: 'a',
+      recordId: r.RecordId,
+    });
+  }
+  for (const r of res.AAAARecords ?? []) {
+    out.push({
+      record: { type: 'AAAA', name: r.Subdomain ?? '@', value: r.IPV6Address ?? '' },
+      segment: 'aaaa',
+      recordId: r.RecordId,
+    });
+  }
+  for (const r of res.CNAMERecords ?? []) {
+    out.push({
+      record: { type: 'CNAME', name: r.Subdomain ?? '@', value: r.RedirectDomain ?? '' },
+      segment: 'cname',
+      recordId: r.RecordId,
+    });
+  }
+  for (const r of res.MXRecords ?? []) {
+    const record: DnsRecord = { type: 'MX', name: r.Subdomain ?? '@', value: r.MailServer ?? '' };
+    if (r.Priority != null) record.priority = r.Priority;
+    out.push({ record, segment: 'mx', recordId: r.RecordId });
+  }
+  for (const r of res.TXTRecords ?? []) {
+    out.push({
+      record: { type: 'TXT', name: r.Subdomain ?? '@', value: r.TextRecord ?? '' },
+      segment: 'txt',
+      recordId: r.RecordId,
+    });
+  }
+  for (const r of res.SRVRecords ?? []) {
+    // NameBright splits SRV into service/protocol; recompose the standard
+    // "_service._protocol" name that our generic record carries.
+    const name = [r.Service, r.Protocol].filter(Boolean).join('.') || '@';
+    const record: DnsRecord = { type: 'SRV', name, value: r.Target ?? '' };
+    if (r.Priority != null) record.priority = r.Priority;
+    if (r.Weight != null) record.weight = r.Weight;
+    if (r.Port != null) record.port = r.Port;
+    out.push({ record, segment: 'srv', recordId: r.RecordId });
+  }
+  return out;
+}
+
+// canonical identity of a DNS record for diffing (ignores TTL, which NameBright
+// doesn't store). Two records with the same key are considered equal.
+function dnsRecordKey(r: DnsRecord): string {
+  return [
+    r.type.toUpperCase(),
+    r.name || '@',
+    r.value,
+    r.priority ?? '',
+    r.weight ?? '',
+    r.port ?? '',
+  ].join('|');
+}
+
+// map a generic DnsRecord to NameBright's per-type POST endpoint segment and
+// request body. The record's `name` is the subdomain ("@" for the apex); TTL is
+// unsupported by NameBright and ignored. Throws on record types NameBright's
+// host-record API does not expose.
+function toNbHostRecord(r: DnsRecord): { segment: string; body: Record<string, unknown> } {
+  const type = r.type.toUpperCase();
+  const subdomain = r.name || '@';
+  switch (type) {
+    case 'A':
+      return { segment: 'a', body: { Subdomain: subdomain, IPV4Address: r.value } };
+    case 'AAAA':
+      return { segment: 'aaaa', body: { Subdomain: subdomain, IPV6Address: r.value } };
+    case 'CNAME':
+      return { segment: 'cname', body: { Subdomain: subdomain, RedirectDomain: r.value } };
+    case 'MX':
+      return {
+        segment: 'mx',
+        body: { Subdomain: subdomain, MailServer: r.value, Priority: r.priority ?? 10 },
+      };
+    case 'TXT':
+      return { segment: 'txt', body: { Subdomain: subdomain, TextRecord: r.value } };
+    case 'SRV': {
+      // our generic name carries "_service._protocol"; NameBright splits them.
+      const [service, protocol] = r.name.split('.');
+      return {
+        segment: 'srv',
+        body: {
+          Service: service,
+          Protocol: protocol,
+          Priority: r.priority ?? 0,
+          Weight: r.weight ?? 0,
+          Port: r.port ?? 0,
+          Target: r.value,
+        },
+      };
+    }
+    default:
+      throw new Error(`NameBright: unsupported DNS record type "${r.type}"`);
+  }
+}
+
 // combine a country-code part and a local number into "+<cc>.<number>" form,
 // leaving an already-complete number untouched when no country code is given.
-function joinPhone(countryCode: string | undefined, number: string | undefined): string {
-  const num = (number ?? '').trim();
-  const cc = (countryCode ?? '').trim().replace(/^\+/, '');
+// NameBright returns PhoneCountry/FaxCountry as numbers (e.g. 1), so coerce to
+// string before trimming.
+function joinPhone(
+  countryCode: string | number | undefined,
+  number: string | number | undefined
+): string {
+  const num = String(number ?? '').trim();
+  const cc = String(countryCode ?? '')
+    .trim()
+    .replace(/^\+/, '');
   if (!cc) return num;
   if (!num) return cc ? `+${cc}` : '';
   return `+${cc}.${num}`;

@@ -29,7 +29,7 @@ npm install @aoxborrow/registrar-client
 | `dynadot`    | Dynadot    | API key                    | —       | key sent in query string (API design)  |
 | `gandi`      | Gandi.net  | API key                    | ✓       | `api.sandbox.gandi.net`                |
 | `godaddy`    | GoDaddy    | key + secret               | ✓       | sandbox = OTE test environment         |
-| `namebright` | NameBright | client ID + secret         | —       | OAuth2 bearer; reads only for now      |
+| `namebright` | NameBright | client ID + secret         | —       | OAuth2 bearer; production-only         |
 | `namecheap`  | Namecheap  | username + key + client IP | ✓       | XML API; IP allowlisting required      |
 | `namesilo`   | NameSilo   | API key                    | ✓       | JSON API; key sent in query string     |
 | `porkbun`    | Porkbun    | key + secret               | —       | JSON API; per-domain API-access opt-in |
