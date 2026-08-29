@@ -1,5 +1,6 @@
-import type { Domain, DomainInput, RegistrationConsent } from './types';
+import type { Domain, DomainInput, ListDomainsOptions, RegistrationConsent } from './types';
 import { ConsentRequiredError } from './errors';
+import { DEFAULT_LIST_LIMIT } from './constants';
 
 // sleep helper for retry backoff
 export function sleep(ms: number): Promise<void> {
@@ -20,6 +21,22 @@ export function requireConsent(
     );
   }
   return consent;
+}
+
+// apply `ListDomainsOptions` to an already-fetched list: a case-insensitive
+// substring filter on the domain name, then a hard cap at `limit` (default
+// `DEFAULT_LIST_LIMIT`). Providers that filter server-side still call this — the
+// substring re-filter is a harmless no-op there, and it enforces the cap.
+export function applyListOptions(
+  domains: Domain[],
+  opts?: Pick<ListDomainsOptions, 'limit' | 'search'>
+): Domain[] {
+  const search = opts?.search?.trim().toLowerCase();
+  const filtered = search
+    ? domains.filter(d => d.domainName.toLowerCase().includes(search))
+    : domains;
+  const limit = opts?.limit ?? DEFAULT_LIST_LIMIT;
+  return filtered.length > limit ? filtered.slice(0, limit) : filtered;
 }
 
 // normalize a domain name: trim, lowercase, strip a single trailing dot

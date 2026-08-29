@@ -41,6 +41,12 @@ export const SANDBOX_TARGETS: SandboxTarget[] = [
     required: { apiKey: 'NAMESILO_API_KEY' },
     environmentVar: 'NAMESILO_ENVIRONMENT',
   },
+  {
+    name: 'porkbun',
+    // sandbox key is prefixed pk1_sb_ and uses the same base URL as production
+    required: { apiKey: 'PORKBUN_API_KEY', secretApiKey: 'PORKBUN_SECRET_API_KEY' },
+    environmentVar: 'PORKBUN_ENVIRONMENT',
+  },
 ];
 
 // Resolve the environment for a target from its env var. Defaults to production
