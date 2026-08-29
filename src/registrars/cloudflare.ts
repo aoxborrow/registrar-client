@@ -1,6 +1,7 @@
 import type {
   ConfigField,
   ConnectionResult,
+  Contact,
   ContactSet,
   DnsRecord,
   Domain,
@@ -26,14 +27,39 @@ interface CfEnvelope<T> {
 
 // a domain object from the Cloudflare Registrar API
 interface CfDomain {
-  id: string;
   name: string;
-  status?: string;
-  created_at?: string;
+  // registrar domains report lifecycle under last_known_status (e.g.
+  // "registrationActive") — there is no plain `status` field
+  last_known_status?: string;
+  registered_at?: string;
   expires_at?: string;
   auto_renew?: boolean;
   locked?: boolean;
+  privacy?: boolean;
   name_servers?: string[];
+  // WHOIS contacts, keyed by role, on the registrar domain payload
+  contacts?: {
+    registrant?: CfContact;
+    administrator?: CfContact;
+    technical?: CfContact;
+    billing?: CfContact;
+  };
+}
+
+// a WHOIS contact as the Cloudflare Registrar API returns it
+interface CfContact {
+  first_name?: string;
+  last_name?: string;
+  organization?: string;
+  email?: string;
+  phone?: string;
+  fax?: string;
+  address?: string;
+  address2?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+  country?: string;
 }
 
 // a zone object from the Cloudflare Zones API. Nameservers and DNS records live
@@ -134,7 +160,7 @@ export class CloudflareRegistrar extends BaseRegistrar {
     const { search, ...reqOpts } = opts ?? {};
     const domains: Domain[] = [];
     const perPage = 200; // Cloudflare API maximum page size
-    let page = 1;
+    let page = 0; // the Registrar list endpoint is 0-indexed (result_info.page starts at 0)
     let hasMore = true;
 
     while (hasMore) {
@@ -159,13 +185,13 @@ export class CloudflareRegistrar extends BaseRegistrar {
     return createDomain({
       domainName: d.name,
       registrar: this.name,
-      status: d.status,
-      createdDate: d.created_at,
+      status: d.last_known_status,
+      createdDate: d.registered_at,
       expirationDate: d.expires_at,
       renewalDate: d.expires_at,
       autoRenew: d.auto_renew ?? false,
       locked: d.locked ?? false,
-      privacy: true, // Cloudflare includes WHOIS privacy by default
+      privacy: d.privacy ?? true, // Cloudflare includes WHOIS privacy by default
       nameservers: d.name_servers ?? [],
     });
   }
@@ -220,13 +246,26 @@ export class CloudflareRegistrar extends BaseRegistrar {
     return (res.result ?? []).map(toDnsRecord);
   }
 
-  override getContacts(_domainName: string, _opts?: RequestOptions): Promise<ContactSet> {
-    return Promise.reject(
-      new NotImplementedError(
-        `${this.name}: getContacts is not available — the Cloudflare Registrar API does not ` +
-          'expose editable WHOIS contact details'
-      )
-    );
+  /**
+   * WHOIS contacts come inline on the registrar domain payload, keyed by role
+   * (registrant / administrator / technical / billing). GET the domain and map
+   * each present role to the normalized ContactSet.
+   */
+  override async getContacts(domainName: string, opts?: RequestOptions): Promise<ContactSet> {
+    const res = await this.http.request<CfEnvelope<CfDomain>>({
+      path: `${this.accountPath}/${encodeURIComponent(domainName)}`,
+      ...opts,
+    });
+    if (!res.success || !res.result) {
+      throw new Error(res.errors?.[0]?.message ?? `Domain ${domainName} not found`);
+    }
+    const c = res.result.contacts ?? {};
+    const contacts: ContactSet = {};
+    if (c.registrant) contacts.registrant = toContact(c.registrant);
+    if (c.administrator) contacts.admin = toContact(c.administrator);
+    if (c.technical) contacts.tech = toContact(c.technical);
+    if (c.billing) contacts.billing = toContact(c.billing);
+    return contacts;
   }
 
   override getPricing(_tldOrDomain: string, _opts?: RequestOptions): Promise<TldPricing> {
@@ -293,7 +332,7 @@ export class CloudflareRegistrar extends BaseRegistrar {
     return this.patchDomain(domainName, { locked: false }, opts);
   }
 
-  // look up a domain by name to obtain its Cloudflare id
+  // confirm a domain exists in the account (registrar domains are keyed by name)
   private async findDomain(domainName: string, opts?: RequestOptions): Promise<CfDomain | null> {
     const res = await this.http.request<CfEnvelope<CfDomain[]>>({
       path: this.accountPath,
@@ -303,7 +342,7 @@ export class CloudflareRegistrar extends BaseRegistrar {
     return res.result?.find(d => d.name === domainName) ?? null;
   }
 
-  // resolve the domain id then PUT the given fields
+  // confirm the domain exists then PUT the given fields (registrar API is name-keyed)
   private async patchDomain(
     domainName: string,
     body: Record<string, unknown>,
@@ -315,7 +354,7 @@ export class CloudflareRegistrar extends BaseRegistrar {
 
       const res = await this.http.request<CfEnvelope<CfDomain>>({
         method: 'PUT',
-        path: `${this.accountPath}/${domain.id}`,
+        path: `${this.accountPath}/${encodeURIComponent(domainName)}`,
         body,
         ...opts,
       });
@@ -343,4 +382,24 @@ function toDnsRecord(r: CfDnsRecord): DnsRecord {
     if (r.data?.port != null) record.port = r.data.port;
   }
   return record;
+}
+
+// map a Cloudflare WHOIS contact to the normalized Contact shape. Optional
+// fields are set only when non-empty (Cloudflare returns "" for absent values).
+function toContact(c: CfContact): Contact {
+  const contact: Contact = {
+    firstName: c.first_name ?? '',
+    lastName: c.last_name ?? '',
+    email: c.email ?? '',
+    phone: c.phone ?? '',
+    address1: c.address ?? '',
+    city: c.city ?? '',
+    postalCode: c.zip ?? '',
+    country: c.country ?? '',
+  };
+  if (c.organization) contact.organization = c.organization;
+  if (c.fax) contact.fax = c.fax;
+  if (c.address2) contact.address2 = c.address2;
+  if (c.state) contact.state = c.state;
+  return contact;
 }

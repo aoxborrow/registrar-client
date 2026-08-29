@@ -497,8 +497,9 @@ function isYes(v: unknown): boolean {
   return s === 'yes' || s === '1' || s === 'true';
 }
 
-// getDomainInfo returns nameservers as `{ nameserver: [...] }`, where each entry
-// may be a plain host string or an object carrying the host in `#text`.
+// getDomainInfo returns nameservers as an array of `{ nameserver: "HOST",
+// position: N }`. Some other endpoints wrap them as `{ nameserver: [...] }` or
+// carry the host in `#text`, so all forms are handled defensively.
 function extractNsHosts(ns: unknown): string[] {
   if (!ns) return [];
   const raw =
@@ -507,13 +508,15 @@ function extractNsHosts(ns: unknown): string[] {
       : ns;
   const list = Array.isArray(raw) ? raw : [raw];
   return list
-    .map(item =>
-      typeof item === 'string'
-        ? item
-        : item && typeof item === 'object' && '#text' in item
-          ? String((item as { '#text': unknown })['#text'])
-          : String(item)
-    )
+    .map(item => {
+      if (typeof item === 'string') return item;
+      if (item && typeof item === 'object') {
+        const o = item as Record<string, unknown>;
+        if (typeof o.nameserver === 'string') return o.nameserver; // { nameserver: "HOST", position }
+        if (typeof o['#text'] === 'string') return o['#text'];
+      }
+      return '';
+    })
     .filter(Boolean);
 }
 
