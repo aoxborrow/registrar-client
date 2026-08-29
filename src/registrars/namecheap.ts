@@ -17,7 +17,7 @@ import type {
   TldPricing,
   TransferDomainInput,
 } from '../types';
-import { createDomain, filterDomains, requireConsent } from '../utils';
+import { createDomain, filterDomains, normalizeDomain, requireConsent } from '../utils';
 import { toRegistrarError } from '../errors';
 import { ensureArray, parseXml } from '../xml';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
@@ -313,8 +313,10 @@ export class NamecheapRegistrar extends BaseRegistrar {
   /**
    * getInfo carries status, dates, and WhoisGuard state but not nameservers, so
    * `nameservers` comes back empty here — use `getNameservers` (dns.getList) for
-   * those. Lock state isn't in getInfo either; it's conveyed via the domain
-   * `Status` ("Locked"), which is coarser than the transfer-lock flag.
+   * those. The registrar transfer-lock flag isn't in getInfo either (its `Status`
+   * reflects the domain lifecycle, e.g. "Ok"/"Expired", not the transfer lock),
+   * so `locked` is read from the authoritative `IsLocked` flag via getList — the
+   * same source `listDomains` uses, keeping the two consistent.
    */
   override async getDomain(domainName: string, opts?: RequestOptions): Promise<Domain> {
     const cr = await this.command('namecheap.domains.getInfo', { DomainName: domainName }, opts);
@@ -327,10 +329,29 @@ export class NamecheapRegistrar extends BaseRegistrar {
       createdDate: info.DomainDetails?.CreatedDate,
       expirationDate: info.DomainDetails?.ExpiredDate,
       renewalDate: info.DomainDetails?.ExpiredDate,
-      locked: status.toLowerCase() === 'locked',
+      locked: await this.getRegistrarLock(domainName, opts),
       privacy: (info.Whoisguard?.['@_Enabled'] ?? '').toLowerCase() === 'true',
       nameservers: [],
     });
+  }
+
+  /**
+   * Reads the registrar transfer-lock flag (`IsLocked`) for a single domain from
+   * getList — getInfo doesn't expose it. getList's `SearchTerm` filters by name
+   * substring, so this searches by the SLD and exact-matches the full name.
+   */
+  private async getRegistrarLock(domainName: string, opts?: RequestOptions): Promise<boolean> {
+    const target = normalizeDomain(domainName);
+    const sld = target.split('.')[0];
+    const cr = await this.command(
+      'namecheap.domains.getList',
+      { PageSize: '100', SearchTerm: sld },
+      opts
+    );
+    const match = ensureArray(cr.DomainGetListResult?.Domain).find(
+      d => (d['@_Name'] ?? '').toLowerCase() === target
+    );
+    return match?.['@_IsLocked'] === 'true';
   }
 
   /**

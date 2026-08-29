@@ -255,12 +255,44 @@ describe('Spaceship provider', () => {
       items: [{ type: 'A', name: '@', address: '1.2.3.4', ttl: 3600 }],
     });
     const del = calls.find(c => c.method === 'DELETE');
-    // A@ is kept (still present); TXT/old is stale -> deleted
-    expect(del?.body).toEqual([{ type: 'TXT', name: 'old' }]);
+    // A@ is kept (still present); TXT/old is stale -> deleted. The delete body
+    // carries the FULL record (Spaceship requires the value field) with only the
+    // read-only `group` metadata stripped.
+    expect(del?.body).toEqual([{ type: 'TXT', name: 'old', value: 'x', ttl: 3600 }]);
 
     await expect(
       sp.setDnsRecords('example.com', [{ type: 'SRV', name: '@', value: 'x' }])
     ).rejects.toThrow(/not supported/);
+  });
+
+  it('setDnsRecords with an empty set skips the (empty-rejecting) PUT and deletes every custom record', async () => {
+    const sp = spaceship();
+    const calls = stubHttp(sp, req => {
+      if (
+        (req.method === undefined || req.method === 'GET') &&
+        String(req.path).includes('/dns/')
+      ) {
+        return {
+          total: 2,
+          items: [
+            { type: 'A', name: '@', address: '9.9.9.9', ttl: 3600, group: { type: 'custom' } },
+            { type: 'TXT', name: 'x', value: 'v', ttl: 60, group: { type: 'custom' } },
+          ],
+        };
+      }
+      return '';
+    });
+
+    const res = await sp.setDnsRecords('example.com', []);
+    expect(res.success).toBe(true);
+    // no PUT is issued for an empty set (Spaceship 422s on empty `items`)
+    expect(calls.some(c => c.method === 'PUT')).toBe(false);
+    // every custom record is deleted, each with its value field, group stripped
+    const del = calls.find(c => c.method === 'DELETE');
+    expect(del?.body).toEqual([
+      { type: 'A', name: '@', address: '9.9.9.9', ttl: 3600 },
+      { type: 'TXT', name: 'x', value: 'v', ttl: 60 },
+    ]);
   });
 
   it('registerDomain saves contacts then POSTs with ids + privacy level, requires consent', async () => {

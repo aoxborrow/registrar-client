@@ -479,21 +479,27 @@ export class SpaceshipRegistrar extends BaseRegistrar {
     try {
       const existing = await this.fetchRecords(domainName, opts);
 
-      await this.http.request({
-        method: 'PUT',
-        path: `/v1/dns/records/${encodeURIComponent(domainName)}`,
-        body: { force: true, items },
-        ...opts,
-      });
+      // The upsert endpoint rejects an empty `items` array (422), so skip it when
+      // there's nothing to add/replace — clearing a zone is then handled entirely
+      // by the stale-delete pass below.
+      if (items.length > 0) {
+        await this.http.request({
+          method: 'PUT',
+          path: `/v1/dns/records/${encodeURIComponent(domainName)}`,
+          body: { force: true, items },
+          ...opts,
+        });
+      }
 
-      // delete custom records whose (type, name) no longer appears in the new set
+      // delete custom records whose (type, name) no longer appears in the new
+      // set. Spaceship's delete endpoint matches on the full record, so it needs
+      // each record's value field (address/cname/value/exchange/…) — send the
+      // existing records with only the read-only `group` metadata stripped.
       const keep = new Set(items.map(r => recordKey(r.type, r.name)));
-      const stale = dedupeByKey(
-        existing
-          .filter(r => (r.group?.type ?? 'custom') === 'custom')
-          .filter(r => !keep.has(recordKey(r.type, r.name)))
-          .map(r => ({ type: (r.type ?? '').toUpperCase(), name: r.name ?? '@' }))
-      );
+      const stale = existing
+        .filter(r => (r.group?.type ?? 'custom') === 'custom')
+        .filter(r => !keep.has(recordKey(r.type, r.name)))
+        .map(({ group: _group, ...rr }) => rr);
       if (stale.length > 0) {
         await this.http.request({
           method: 'DELETE',
@@ -682,21 +688,7 @@ function toSpaceshipRecord(r: DnsRecord): SpaceshipRecord {
 
 // a stable key for a (type, name) pair, for set membership
 function recordKey(type: string | undefined, name: string | undefined): string {
-  return `${(type ?? '').toUpperCase()} ${name ?? '@'}`;
-}
-
-// dedupe delete items so a repeated (type, name) is only sent once
-function dedupeByKey(items: { type: string; name: string }[]): { type: string; name: string }[] {
-  const seen = new Set<string>();
-  const out: { type: string; name: string }[] = [];
-  for (const item of items) {
-    const key = recordKey(item.type, item.name);
-    if (!seen.has(key)) {
-      seen.add(key);
-      out.push(item);
-    }
-  }
-  return out;
+  return `${(type ?? '').toUpperCase()}\x00${name ?? '@'}`;
 }
 
 // --- contact mapping between Spaceship's shape and the normalized Contact ---
