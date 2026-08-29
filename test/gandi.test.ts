@@ -184,7 +184,7 @@ describe('Gandi provider', () => {
       ],
     }));
     const pricing = await g.getPricing('example.com');
-    expect(calls[0].path).toContain('/domain/pricing?');
+    expect(calls[0].path).toContain('/billing/price/domain?');
     expect(calls[0].path).toContain('name=example.com');
     expect(calls[0].path).toContain('processes=create');
     expect(calls[0].path).toContain('processes=renew');

@@ -30,7 +30,11 @@ describe('NameSilo provider', () => {
         locked: 'Yes',
         private: 'No',
         auto_renew: 'Yes',
-        nameservers: { nameserver: ['ns1.dnsowl.com', 'ns2.dnsowl.com'] },
+        // real getDomainInfo JSON shape: array of { nameserver, position }
+        nameservers: [
+          { nameserver: 'ns1.dnsowl.com', position: 1 },
+          { nameserver: 'ns2.dnsowl.com', position: 2 },
+        ],
       },
     }));
     const d = await ns.getDomain('example.com');
@@ -49,7 +53,13 @@ describe('NameSilo provider', () => {
   it('getNameservers delegates to getDomainInfo', async () => {
     const ns = namesilo();
     stubHttp(ns, () => ({
-      reply: { code: 300, nameservers: { nameserver: ['a.ns', 'b.ns'] } },
+      reply: {
+        code: 300,
+        nameservers: [
+          { nameserver: 'a.ns', position: 1 },
+          { nameserver: 'b.ns', position: 2 },
+        ],
+      },
     }));
     expect(await ns.getNameservers('example.com')).toEqual(['a.ns', 'b.ns']);
   });

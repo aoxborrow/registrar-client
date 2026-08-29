@@ -20,32 +20,47 @@ function cloudflare() {
 }
 
 describe('Cloudflare provider', () => {
+  // the real registrar domain shape: status is under last_known_status, the
+  // creation date under registered_at, and there is no `id` (name is the key)
+  const registrarDomain = {
+    name: 'example.com',
+    last_known_status: 'registrationActive',
+    registered_at: '2020-01-01T00:00:00Z',
+    expires_at: '2027-01-01T00:00:00Z',
+    auto_renew: true,
+    locked: true,
+    privacy: true,
+    name_servers: ['ns1.cloudflare.com', 'ns2.cloudflare.com'],
+  };
+
   it('getDomain GETs the registrar domain and maps the envelope result', async () => {
     const cf = cloudflare();
-    const calls = stubHttp(cf, () => ({
-      success: true,
-      result: {
-        id: 'dom-1',
-        name: 'example.com',
-        status: 'active',
-        created_at: '2020-01-01T00:00:00Z',
-        expires_at: '2027-01-01T00:00:00Z',
-        auto_renew: true,
-        locked: true,
-        name_servers: ['ns1.cloudflare.com', 'ns2.cloudflare.com'],
-      },
-    }));
+    const calls = stubHttp(cf, () => ({ success: true, result: registrarDomain }));
     const d = await cf.getDomain('example.com');
     expect(calls[0].path).toBe('/accounts/acct-1/registrar/domains/example.com');
     expect(d).toMatchObject({
       domainName: 'example.com',
-      status: 'active',
+      status: 'registrationactive',
       autoRenew: true,
       locked: true,
-      privacy: true, // Cloudflare includes WHOIS privacy by default
+      privacy: true,
       nameservers: ['ns1.cloudflare.com', 'ns2.cloudflare.com'],
     });
+    expect(d.createdDate?.toISOString()).toBe('2020-01-01T00:00:00.000Z');
     expect(d.expirationDate?.toISOString()).toBe('2027-01-01T00:00:00.000Z');
+  });
+
+  it('listDomains paginates from page 0 (the registrar endpoint is 0-indexed)', async () => {
+    const cf = cloudflare();
+    const calls = stubHttp(cf, req => {
+      // page 0 carries the one domain; a page-1 request would (wrongly) start at 1
+      return Number(req.query?.page) === 0
+        ? { success: true, result: [registrarDomain] }
+        : { success: true, result: [] };
+    });
+    const domains = await cf.listDomains();
+    expect(calls[0].query).toMatchObject({ page: 0, per_page: 200 });
+    expect(domains.map(d => d.domainName)).toEqual(['example.com']);
   });
 
   it('getDomain throws when the API reports failure', async () => {
@@ -117,9 +132,48 @@ describe('Cloudflare provider', () => {
     ]);
   });
 
-  it('getContacts throws NotImplementedError (no WHOIS contact API)', async () => {
+  it('getContacts maps inline registrar contacts by role', async () => {
     const cf = cloudflare();
-    await expect(cf.getContacts('example.com')).rejects.toBeInstanceOf(NotImplementedError);
+    const contact = {
+      first_name: 'Ada',
+      last_name: 'Lovelace',
+      organization: 'Analytical Engines',
+      email: 'ada@example.com',
+      phone: '+1.5551234567',
+      fax: '',
+      address: '1 Byron Way',
+      address2: '',
+      city: 'London',
+      state: 'LDN',
+      zip: 'EC1',
+      country: 'GB',
+    };
+    const calls = stubHttp(cf, () => ({
+      success: true,
+      result: {
+        name: 'example.com',
+        contacts: { registrant: contact, administrator: contact, technical: contact },
+      },
+    }));
+    const contacts = await cf.getContacts('example.com');
+    expect(calls[0].path).toBe('/accounts/acct-1/registrar/domains/example.com');
+    expect(contacts.registrant).toMatchObject({
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      organization: 'Analytical Engines',
+      address1: '1 Byron Way',
+      city: 'London',
+      state: 'LDN',
+      postalCode: 'EC1',
+      country: 'GB',
+    });
+    // Cloudflare's role keys map to admin/tech; billing is absent here
+    expect(contacts.admin?.firstName).toBe('Ada');
+    expect(contacts.tech?.firstName).toBe('Ada');
+    expect(contacts.billing).toBeUndefined();
+    // empty strings ("" fax/address2) are dropped, not surfaced
+    expect(contacts.registrant?.fax).toBeUndefined();
+    expect(contacts.registrant?.address2).toBeUndefined();
   });
 
   it('getPricing throws NotImplementedError (at-cost, no pricing API)', async () => {
