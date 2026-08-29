@@ -46,8 +46,11 @@ checkAvailability incl. price conversion, getPricing, getDnsRecords) and v3
 `setDnsRecords` (reversible TXT round-trip on a GoDaddy-hosted zone). v1-via-PAT
 read + reversible auto-renew toggle. OTE v1 (testConnection, listDomains,
 checkAvailability). **Not run**: v3 register (paid, no v3 sandbox — only the
-quote step is free) and v1 register/renew/transfer on OTE (the OTE account has
-0 domains). See `docs/TODOS.md`.
+quote step is free) and v1 register/renew/transfer on OTE. The v1 purchase body
+passes GoDaddy's own `POST /v1/domains/purchase/validate` (200), but OTE
+purchases require an **API Reseller account** (a paid tier) with Good as Gold —
+a plain developer key returns `500 ERROR_UNKNOWN` on purchase. See
+`docs/TODOS.md`.
 
 ## Authentication
 

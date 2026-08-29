@@ -15,9 +15,12 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
 - [ ] **GoDaddy** register/renew/transfer — v3 register (quote→execute) is paid
       with **no v3 sandbox** (OTE is v1-only). The v1 purchase path is correct
       (`POST /v1/domains/purchase/validate` returns 200 for our body) but OTE
-      itself returns `500 ERROR_UNKNOWN` on the actual purchase — the OTE shopper
-      account has no payment method / test funds. Add a payment method in the OTE
-      dashboard to unblock v1 register/renew/transfer testing on OTE.
+      returns `500 ERROR_UNKNOWN` on the actual purchase: OTE purchases require an
+      **API Reseller account** (a paid tier) with a Good as Gold balance, created
+      via the Reseller Control Center (reseller.godaddy.com → Settings → API Keys
+      → Test). A plain developer key can read/validate but not purchase. Blocked
+      until/unless a reseller account is set up; the client code is already
+      validated for this path.
 - [ ] **GoDaddy** `updateNameservers` (v3 PUT bare-array) — built + unit-tested;
       not run live (would repoint a real domain's NS). Verify with a reversible swap.
 - [ ] `updateContacts` on **NameSilo, GoDaddy, Namecheap** — can trigger
