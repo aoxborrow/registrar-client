@@ -62,24 +62,37 @@ describe('Namecheap provider', () => {
     expect(results).toHaveLength(120);
   });
 
-  it('getDomain reads getInfo: status, dates, WhoisGuard privacy', async () => {
+  it('getDomain reads getInfo for status/dates/privacy and the IsLocked flag from getList', async () => {
     const nc = namecheap();
-    stubXml(nc, () =>
-      ok(
-        `<DomainGetInfoResult Status="Locked" DomainName="example.com">
+    // Status is "Ok" while the domain IS transfer-locked — proving `locked` comes
+    // from getList's IsLocked flag, not from the coarse getInfo Status string.
+    const calls = stubXml(nc, req => {
+      const command = String(req.query?.Command ?? '');
+      if (command === 'namecheap.domains.getList') {
+        return ok(
+          `<DomainGetListResult>
+             <Domain ID="1" Name="example.com" IsLocked="true" AutoRenew="false" WhoisGuard="ENABLED" Expires="09/05/2027"/>
+           </DomainGetListResult>`
+        );
+      }
+      return ok(
+        `<DomainGetInfoResult Status="Ok" DomainName="example.com">
            <DomainDetails><CreatedDate>09/05/2016</CreatedDate><ExpiredDate>09/05/2027</ExpiredDate></DomainDetails>
            <Whoisguard Enabled="True"><ID>123</ID></Whoisguard>
          </DomainGetInfoResult>`
-      )
-    );
+      );
+    });
     const domain = await nc.getDomain('example.com');
     expect(domain).toMatchObject({
       domainName: 'example.com',
-      status: 'locked',
+      status: 'ok',
       locked: true,
       privacy: true,
     });
     expect(domain.expirationDate?.getFullYear()).toBe(2027);
+    // it consulted getList (SearchTerm = SLD) for the lock flag
+    const listCall = calls.find(c => c.query?.Command === 'namecheap.domains.getList');
+    expect(listCall?.query).toMatchObject({ SearchTerm: 'example' });
   });
 
   it('getPricing reads 1-year register/renew/transfer from users.getPricing', async () => {
