@@ -6,6 +6,9 @@ import type {
   DnsRecord,
   Domain,
   DomainAvailability,
+  DomainForward,
+  DomainForwardType,
+  EmailForward,
   ListDomainsOptions,
   OperationResult,
   RegisterDomainInput,
@@ -68,6 +71,13 @@ interface NcContactEl {
   EmailAddress?: string;
 }
 
+// a <Forward mailbox="alias">destination</Forward> in
+// namecheap.domains.dns.getEmailForwarding
+interface NcForwardEl {
+  '@_mailbox'?: string;
+  '#text'?: string;
+}
+
 // a host record in namecheap.domains.dns.getHosts (attributes only)
 interface NcHostEl {
   '@_Name'?: string;
@@ -108,6 +118,10 @@ interface NcCommandResponse {
   };
   // the docs show <Host>, but the live API has historically returned <host>
   DomainDNSGetHostsResult?: { Host?: NcHostEl | NcHostEl[]; host?: NcHostEl | NcHostEl[] };
+  DomainDNSGetEmailForwardingResult?: {
+    '@_Domain'?: string;
+    'Forward'?: NcForwardEl | NcForwardEl[];
+  };
   DomainContactsResult?: {
     Registrant?: NcContactEl;
     Admin?: NcContactEl;
@@ -178,12 +192,15 @@ export class NamecheapRegistrar extends BaseRegistrar {
   // Namecheap runs a sandbox at api.sandbox.namecheap.com (separate account at
   // sandbox.namecheap.com with its own API key)
   static readonly supportsSandbox = true;
-  // XML API. Beyond core, email forwarding (alias-only) and domain forwarding
-  // (URL/FRAME pseudo-records). No DNSSEC or webhooks; auth-code retrieval and
-  // glue records are dashboard-gated / unconfirmed, so they're left undeclared
-  // until verified against a live account.
+  // XML API. Beyond core, read+write alias-style email forwarding (via the
+  // dedicated dns.getEmailForwarding/setEmailForwarding commands) and URL/domain
+  // forwarding (URL/URL301/FRAME host records, read+written through the host set).
+  // No DNSSEC or webhooks; auth-code retrieval and glue records are dashboard-
+  // gated / unconfirmed, so they're left undeclared until verified live.
   static readonly extendedFeatures: readonly RegistrarFeature[] = [
+    Feature.GetEmailForwarding,
     Feature.SetEmailForwarding,
+    Feature.GetDomainForwarding,
     Feature.SetDomainForwarding,
   ];
 
@@ -586,6 +603,104 @@ export class NamecheapRegistrar extends BaseRegistrar {
     const res = await this.call('namecheap.domains.dns.setHosts', params, opts);
     return statusResult(res);
   }
+
+  // --- extended: email forwarding ---
+
+  override async getEmailForwarding(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<EmailForward[]> {
+    const cr = await this.command(
+      'namecheap.domains.dns.getEmailForwarding',
+      { DomainName: domainName },
+      opts
+    );
+    return ensureArray(cr.DomainDNSGetEmailForwardingResult?.Forward)
+      .map(f => ({
+        alias: (f['@_mailbox'] ?? '').toString(),
+        forwardTo: (f['#text'] ?? '').toString().trim(),
+      }))
+      .filter(f => f.alias && f.forwardTo);
+  }
+
+  /**
+   * Full-replace via dns.setEmailForwarding: mailbox/forward params are 1-indexed
+   * and any alias not sent is removed, so an empty `forwards` clears all
+   * forwarding. Requires the domain to use Namecheap's DNS.
+   */
+  override async setEmailForwarding(
+    domainName: string,
+    forwards: EmailForward[],
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const params: Record<string, string> = { DomainName: domainName };
+    forwards.forEach((f, idx) => {
+      const n = idx + 1; // Namecheap forwarding params are 1-based
+      params[`MailBox${n}`] = f.alias;
+      params[`ForwardTo${n}`] = f.forwardTo;
+    });
+    const res = await this.call('namecheap.domains.dns.setEmailForwarding', params, opts);
+    return statusResult(res);
+  }
+
+  // --- extended: domain (URL) forwarding ---
+
+  /**
+   * Namecheap has no dedicated domain-forwarding endpoint; URL forwarding lives in
+   * the host-record set as URL/URL301/FRAME records, so this reads the hosts and
+   * returns just the forwarding ones.
+   */
+  override async getDomainForwarding(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<DomainForward[]> {
+    const records = await this.getDnsRecords(domainName, opts);
+    return records
+      .filter(r => isUrlRecordType(r.type))
+      .map(r => ({
+        host: r.name || '@',
+        url: r.value,
+        type: NC_URL_TYPE_TO_FORWARD[r.type.toUpperCase()],
+      }));
+  }
+
+  /**
+   * Because URL forwarding is stored in the host set and dns.setHosts is a full
+   * replace, this preserves every non-forwarding record and swaps in the new
+   * URL-family records — so an empty `forwards` clears URL forwarding while
+   * leaving the rest of the zone intact.
+   */
+  override async setDomainForwarding(
+    domainName: string,
+    forwards: DomainForward[],
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const existing = await this.getDnsRecords(domainName, opts);
+    const kept = existing.filter(r => !isUrlRecordType(r.type));
+    const urlRecords: DnsRecord[] = forwards.map(f => ({
+      type: NC_FORWARD_TO_URL_TYPE[f.type] ?? 'URL',
+      name: f.host || '@',
+      value: f.url,
+    }));
+    return this.setDnsRecords(domainName, [...kept, ...urlRecords], opts);
+  }
+}
+
+// Namecheap URL host-record types <-> the normalized DomainForward.type
+const NC_URL_TYPE_TO_FORWARD: Record<string, DomainForwardType> = {
+  URL: 'redirect',
+  URL301: 'permanent',
+  FRAME: 'frame',
+};
+const NC_FORWARD_TO_URL_TYPE: Record<DomainForwardType, string> = {
+  redirect: 'URL',
+  permanent: 'URL301',
+  frame: 'FRAME',
+};
+
+// whether a host-record type is one of Namecheap's URL-forwarding pseudo-records
+function isUrlRecordType(type: string): boolean {
+  return type.toUpperCase() in NC_URL_TYPE_TO_FORWARD;
 }
 
 // whether the response's root Status attribute is "OK"

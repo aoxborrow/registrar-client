@@ -227,6 +227,38 @@ export interface RegisterDomainInput {
 // credentials for a registrar, as a flat string map keyed by `ConfigField.name`
 export type RegistrarCredentials = Record<string, string>;
 
+// --- extended-feature payloads ---
+
+// An alias-style email forward: mail sent to `alias`@domain is redirected to
+// `forwardTo`. This is redirect-only forwarding — no real mailbox is provisioned
+// (see the ProvisionMailbox feature for that).
+export interface EmailForward {
+  // the local part of the source address at the domain, e.g. "hello" for
+  // hello@example.com. Where the registrar supports it, "@" or "*" denotes a
+  // catch-all.
+  alias: string;
+  // the destination address mail is forwarded to
+  forwardTo: string;
+}
+
+// The redirect style for a DomainForward:
+//   - "redirect"  temporary (302) redirect; the destination URL shows in the bar
+//   - "permanent" permanent (301) redirect; the destination URL shows in the bar
+//   - "frame"     masked/framed redirect; the source URL stays in the bar
+export type DomainForwardType = 'redirect' | 'permanent' | 'frame';
+
+// A URL/domain forwarding rule: requests to `host` at the domain are redirected
+// to `url`.
+export interface DomainForward {
+  // the source host at the domain, relative to the apex; "@" denotes the apex,
+  // "www" the www subdomain, etc.
+  host: string;
+  // the destination URL requests are forwarded to
+  url: string;
+  // the redirect style
+  type: DomainForwardType;
+}
+
 // The core interface every registrar implementation fulfils. `BaseRegistrar`
 // (src/registrar.ts) provides the shared plumbing and `NotImplementedError`
 // defaults; concrete providers under src/registrars/ extend it.
@@ -319,6 +351,35 @@ export interface Registrar {
   setDnsRecords(
     domainName: string,
     records: DnsRecord[],
+    opts?: RequestOptions
+  ): Promise<OperationResult>;
+
+  // --- extended capabilities ---
+  //
+  // Opt-in operations beyond the core contract. A provider genuinely supports one
+  // only if it declares the matching Feature (see `features`/`supports`); every
+  // other provider inherits BaseRegistrar's default, which rejects with
+  // NotImplementedError. Callers should gate on `supports(...)` before use.
+
+  // read the alias-style email forwarding rules for a domain
+  getEmailForwarding(domainName: string, opts?: RequestOptions): Promise<EmailForward[]>;
+
+  // replace the alias-style email forwarding rules for a domain (full replace: any
+  // rule not included is removed; an empty array clears all forwarding)
+  setEmailForwarding(
+    domainName: string,
+    forwards: EmailForward[],
+    opts?: RequestOptions
+  ): Promise<OperationResult>;
+
+  // read the URL/domain forwarding rules for a domain
+  getDomainForwarding(domainName: string, opts?: RequestOptions): Promise<DomainForward[]>;
+
+  // replace the URL/domain forwarding rules for a domain (full replace: any rule
+  // not included is removed; an empty array clears all forwarding)
+  setDomainForwarding(
+    domainName: string,
+    forwards: DomainForward[],
     opts?: RequestOptions
   ): Promise<OperationResult>;
 }

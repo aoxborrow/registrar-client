@@ -281,5 +281,14 @@ describe('BaseRegistrar defaults', () => {
     await expect(cf.registerDomain('example.com', { contacts: {} })).rejects.toBeInstanceOf(
       NotImplementedError
     );
+    // extended methods default to NotImplementedError too, unless a provider declares them
+    await expect(cf.getEmailForwarding('example.com')).rejects.toBeInstanceOf(NotImplementedError);
+    await expect(cf.setEmailForwarding('example.com', [])).rejects.toBeInstanceOf(
+      NotImplementedError
+    );
+    await expect(cf.getDomainForwarding('example.com')).rejects.toBeInstanceOf(NotImplementedError);
+    await expect(cf.setDomainForwarding('example.com', [])).rejects.toBeInstanceOf(
+      NotImplementedError
+    );
   });
 });
