@@ -141,8 +141,10 @@ enabling DNSSEC is out of scope for this library for now.
 **Implementation status:** every declared extended feature above is now
 implemented on its provider(s). **Dynadot**, **Gandi**, and **Porkbun** are
 verified end-to-end in their sandboxes; **Namecheap** forwarding predates this
-work; the rest (**GoDaddy**, **NameSilo**, **Spaceship**) are implemented from
-verified endpoint docs but not live-verified (no sandbox credentials available).
+work; **Spaceship**'s only extended feature (`GetAuthCode`) is live-verified
+against the production account (2026-08-29, `domains:transfer`-scoped key); the
+rest (**GoDaddy**, **NameSilo**) are implemented from verified endpoint docs but
+not live-verified (no sandbox credentials available).
 Two provider-specific limitations worth noting: **NameSilo** dropped
 `GetAuthCode` (its `retrieveAuthCode` emails the code to the registrant rather
 than returning it) and reads only the apex URL forward (no forwarding-list
