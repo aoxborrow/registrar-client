@@ -15,8 +15,7 @@ import type {
   TldPricing,
   TransferDomainInput,
 } from '../types';
-import { applyListOptions, createDomain } from '../utils';
-import { DEFAULT_LIST_LIMIT } from '../constants';
+import { createDomain, filterDomains } from '../utils';
 import { ConsentRequiredError, NotImplementedError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
@@ -162,29 +161,30 @@ export class GoDaddyRegistrar extends BaseRegistrar {
   }
 
   override async listDomains(opts?: ListDomainsOptions): Promise<Domain[]> {
-    const { limit = DEFAULT_LIST_LIMIT, search, ...reqOpts } = opts ?? {};
+    const { search, ...reqOpts } = opts ?? {};
     // status filters exclude expired domains: visible (active), renewable
     // (expiring soon), redemption (grace period). statusGroups repeats in the
     // query string, so it is embedded in the path directly. `includes=nameServers`
     // folds nameservers into this list call (they are otherwise omitted). GoDaddy
-    // paginates via `marker` = the last domain name seen; we stop at `limit`.
+    // paginates via `marker` = the last domain name seen (its page-size param is
+    // literally named `limit`, whose max is 1000).
     const statusGroups = 'statusGroups=VISIBLE&statusGroups=RENEWABLE&statusGroups=REDEMPTION';
+    const perPage = 1000; // GoDaddy's maximum page size
     const domains: Domain[] = [];
     let marker: string | undefined;
-    while (domains.length < limit) {
-      const pageSize = Math.min(limit - domains.length, 1000); // GoDaddy limit max is 1000
+    for (;;) {
       const markerParam = marker ? `&marker=${encodeURIComponent(marker)}` : '';
       const res = await this.http.request<GoDaddyDomain[]>({
-        path: `/domains?limit=${pageSize}&includes=nameServers&${statusGroups}${markerParam}`,
+        path: `/domains?limit=${perPage}&includes=nameServers&${statusGroups}${markerParam}`,
         ...reqOpts,
       });
       const list = res ?? [];
       for (const d of list) domains.push(this.toDomain(d));
-      if (list.length < pageSize) break;
+      if (list.length < perPage) break;
       marker = list[list.length - 1]?.domain;
       if (!marker) break;
     }
-    return applyListOptions(domains, { limit, search });
+    return filterDomains(domains, search);
   }
 
   override async getDomain(domainName: string, opts?: RequestOptions): Promise<Domain> {

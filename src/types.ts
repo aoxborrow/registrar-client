@@ -18,12 +18,9 @@ export interface RegistrarClientOptions {
 export type RequestOptions = Partial<RegistrarClientOptions>;
 
 // options for `listDomains`. Extends `RequestOptions` so timeout/retries/signal
-// still flow through a single argument.
+// still flow through a single argument. `listDomains` always returns the full
+// account, paginating internally at each provider's maximum page size.
 export interface ListDomainsOptions extends RequestOptions {
-  // maximum number of domains to return. Defaults to `DEFAULT_LIST_LIMIT`
-  // (1000). Providers request efficiently (capped page sizes) and stop
-  // paginating once this many domains are collected.
-  limit?: number;
   // case-insensitive substring to match against the domain name. Applied
   // server-side where the API supports it (Namecheap `SearchTerm`, Gandi
   // `fqdn`) and client-side otherwise.

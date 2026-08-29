@@ -33,13 +33,12 @@ function sourceName(source: DomainSource): string {
  * List domains across many registrars at once. Queries every source in parallel
  * and collects results with per-registrar error isolation.
  *
- * `opts` (including `limit` and `search`) is applied to EACH source
- * independently — e.g. `limit: 1000` caps each registrar at 1000, not the whole
- * portfolio. Order of the returned `domains` follows the order of `sources`.
+ * `opts` (including `search`) is passed to EACH source. Every source returns its
+ * full account; order of the returned `domains` follows the order of `sources`.
  *
  *   const { domains, errors } = await listPortfolio(
  *     [godaddyClient, namecheapClient, gandiClient],
- *     { limit: 500 }
+ *     { search: 'acme' }
  *   );
  */
 export async function listPortfolio(
