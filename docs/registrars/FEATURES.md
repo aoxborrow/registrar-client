@@ -129,10 +129,10 @@ routes DNS through another API of that vendor, not that it's unsupported.
 | `SetDnssec`           | DY, GA, NS, PB     | not exposed via API by every registrar; GD only via DS records |
 | `GetGlueRecords`      | DY, GA, NS, PB, SP | read glue / host records                                       |
 | `SetGlueRecords`      | DY, GA, NS, PB, SP | write glue / host records                                      |
-| `GetEmailForwarding`  | —                  | read counterpart of `SetEmailForwarding` (planned)             |
+| `GetEmailForwarding`  | NC                 | read counterpart of `SetEmailForwarding`                       |
 | `SetEmailForwarding`  | DY, GA, NC, NS     | alias redirect only — **distinct from a mailbox**              |
 | `ProvisionMailbox`    | GA                 | real hosted mailboxes                                          |
-| `GetDomainForwarding` | —                  | read counterpart of `SetDomainForwarding` (planned)            |
+| `GetDomainForwarding` | NC                 | read counterpart of `SetDomainForwarding`                      |
 | `SetDomainForwarding` | DY, GD, NC, NS, PB | some model it as `URL`/`URL301`/`FRAME` DNS records            |
 | `SubscribeWebhooks`   | DY, PB             | account-level events; most providers are poll-only             |
 | `ListOnMarketplace`   | DY, SP             | aftermarket / marketplace listing                              |
