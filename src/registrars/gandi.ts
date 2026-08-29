@@ -86,7 +86,7 @@ interface GandiPrice {
   discount?: boolean;
 }
 
-// a product in `GET /v5/domain/pricing` and `GET /v5/domain/check`. Each product
+// a product in `GET /v5/billing/price/domain` and `GET /v5/domain/check`. Each product
 // carries the `process` (create/renew/transfer) its `prices` apply to; `check`
 // products also carry availability `status`.
 interface GandiProduct {
@@ -107,19 +107,21 @@ interface GandiPricingResponse {
  * Gandi.net Registrar
  * API docs: https://api.gandi.net/docs/
  *
- * Credentials: generate an API key under Account Settings > Security >
- * "Produce a new API key". The key must have domain management permissions.
- * It is sent as an `Apikey` Authorization header.
+ * Credentials: generate a Personal Access Token (PAT) under Account Settings >
+ * Security. The token must have domain management permissions. It is sent as a
+ * `Bearer` Authorization header. (Gandi's legacy `Apikey` scheme is deprecated
+ * and now returns 403.)
  */
 export class GandiRegistrar extends BaseRegistrar {
   readonly name = 'gandi';
 
   static readonly displayName = 'Gandi.net';
   static readonly helpText =
-    'Generate an API key in your Gandi account under Account Settings > Security > ' +
-    '"Produce a new API key". The key needs permission to manage domains.';
+    'Generate a Personal Access Token (PAT) in your Gandi account under Account ' +
+    'Settings > Security. The token needs permission to manage domains. (Gandi has ' +
+    'deprecated the legacy API Key; use a PAT.)';
   static readonly configFields: ConfigField[] = [
-    { name: 'apiKey', label: 'API Key', type: 'password', required: true },
+    { name: 'apiKey', label: 'Personal Access Token', type: 'password', required: true },
   ];
   // Gandi's v5 API offers a sandbox at api.sandbox.gandi.net (separate account)
   static readonly supportsSandbox = true;
@@ -145,7 +147,7 @@ export class GandiRegistrar extends BaseRegistrar {
           sandbox: 'https://api.sandbox.gandi.net/v5',
         }),
         headers: {
-          'Authorization': `Apikey ${credentials.apiKey}`,
+          'Authorization': `Bearer ${credentials.apiKey}`,
           'Content-Type': 'application/json',
         },
       },
@@ -287,7 +289,7 @@ export class GandiRegistrar extends BaseRegistrar {
   }
 
   /**
-   * Per-TLD pricing via `GET /v5/domain/pricing`. `processes` is a repeatable
+   * Per-TLD pricing via `GET /v5/billing/price/domain`. `processes` is a repeatable
    * query param and each returned product is tagged with the `process` its prices
    * cover, so a single call fetches register/renew/transfer. A bare TLD is turned
    * into a sample fqdn (`example.<tld>`) since the endpoint keys off a domain
@@ -307,7 +309,7 @@ export class GandiRegistrar extends BaseRegistrar {
     }
 
     const resp = await this.http.request<GandiPricingResponse>({
-      path: `/domain/pricing?${params.toString()}`,
+      path: `/billing/price/domain?${params.toString()}`,
       ...opts,
     });
     const products = resp.products ?? [];
