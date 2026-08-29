@@ -4,7 +4,9 @@
 
 ## Overview
 
-Dynadot offers two parallel APIs: a legacy request/response API3 (XML or JSON over simple query-string calls to `api.dynadot.com/api3.xml`/`.json`) and a newer RESTful API (`api.dynadot.com/restful/v1`) with resource-oriented endpoints and HMAC request signing. Both cover domain search/registration, transfer, DNS, contacts, forwarding, and aftermarket operations (120+ actions total). A full sandbox environment mirrors both APIs at `api-sandbox.dynadot.com`.
+Dynadot offers two parallel APIs: a legacy request/response API3 (XML or JSON over simple query-string calls to `api.dynadot.com/api3.xml`/`.json`) and a newer RESTful API (`api.dynadot.com/restful/v2`) with resource-oriented endpoints and HMAC request signing. Both cover domain search/registration, transfer, DNS, contacts, forwarding, and aftermarket operations (120+ actions total). A full sandbox environment mirrors both APIs at `api-sandbox.dynadot.com`.
+
+> **Implementation:** this client targets the **RESTful v2 API**. Signing is confirmed live: `X-Signature` is the Base64 HMAC-SHA256 (keyed by the API secret) of `apiKey \n pathAndQuery \n "" \n body`, where the empty third field is the optional `X-Request-Id` (signed empty, header not sent). Errors are returned as HTTP 200 with an envelope `code` other than 200; only auth/signature failures are real HTTP 4xx. All read methods are verified against a live account; write bodies are inferred and not yet live-verified.
 
 ## Authentication
 
