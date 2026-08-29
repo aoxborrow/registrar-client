@@ -1,6 +1,7 @@
 import type {
   ConfigField,
   ConnectionResult,
+  Contact,
   ContactSet,
   DnsRecord,
   Domain,
@@ -36,6 +37,29 @@ interface CfDomain {
   locked?: boolean;
   privacy?: boolean;
   name_servers?: string[];
+  // WHOIS contacts, keyed by role, on the registrar domain payload
+  contacts?: {
+    registrant?: CfContact;
+    administrator?: CfContact;
+    technical?: CfContact;
+    billing?: CfContact;
+  };
+}
+
+// a WHOIS contact as the Cloudflare Registrar API returns it
+interface CfContact {
+  first_name?: string;
+  last_name?: string;
+  organization?: string;
+  email?: string;
+  phone?: string;
+  fax?: string;
+  address?: string;
+  address2?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+  country?: string;
 }
 
 // a zone object from the Cloudflare Zones API. Nameservers and DNS records live
@@ -222,13 +246,26 @@ export class CloudflareRegistrar extends BaseRegistrar {
     return (res.result ?? []).map(toDnsRecord);
   }
 
-  override getContacts(_domainName: string, _opts?: RequestOptions): Promise<ContactSet> {
-    return Promise.reject(
-      new NotImplementedError(
-        `${this.name}: getContacts is not available — the Cloudflare Registrar API does not ` +
-          'expose editable WHOIS contact details'
-      )
-    );
+  /**
+   * WHOIS contacts come inline on the registrar domain payload, keyed by role
+   * (registrant / administrator / technical / billing). GET the domain and map
+   * each present role to the normalized ContactSet.
+   */
+  override async getContacts(domainName: string, opts?: RequestOptions): Promise<ContactSet> {
+    const res = await this.http.request<CfEnvelope<CfDomain>>({
+      path: `${this.accountPath}/${encodeURIComponent(domainName)}`,
+      ...opts,
+    });
+    if (!res.success || !res.result) {
+      throw new Error(res.errors?.[0]?.message ?? `Domain ${domainName} not found`);
+    }
+    const c = res.result.contacts ?? {};
+    const contacts: ContactSet = {};
+    if (c.registrant) contacts.registrant = toContact(c.registrant);
+    if (c.administrator) contacts.admin = toContact(c.administrator);
+    if (c.technical) contacts.tech = toContact(c.technical);
+    if (c.billing) contacts.billing = toContact(c.billing);
+    return contacts;
   }
 
   override getPricing(_tldOrDomain: string, _opts?: RequestOptions): Promise<TldPricing> {
@@ -345,4 +382,24 @@ function toDnsRecord(r: CfDnsRecord): DnsRecord {
     if (r.data?.port != null) record.port = r.data.port;
   }
   return record;
+}
+
+// map a Cloudflare WHOIS contact to the normalized Contact shape. Optional
+// fields are set only when non-empty (Cloudflare returns "" for absent values).
+function toContact(c: CfContact): Contact {
+  const contact: Contact = {
+    firstName: c.first_name ?? '',
+    lastName: c.last_name ?? '',
+    email: c.email ?? '',
+    phone: c.phone ?? '',
+    address1: c.address ?? '',
+    city: c.city ?? '',
+    postalCode: c.zip ?? '',
+    country: c.country ?? '',
+  };
+  if (c.organization) contact.organization = c.organization;
+  if (c.fax) contact.fax = c.fax;
+  if (c.address2) contact.address2 = c.address2;
+  if (c.state) contact.state = c.state;
+  return contact;
 }
