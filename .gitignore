@@ -50,3 +50,6 @@ tsconfig.tsbuildinfo
 
 # gandi live harness (gitignored)
 .gdlive/
+
+# namecheap live harness (gitignored)
+.nclive/
