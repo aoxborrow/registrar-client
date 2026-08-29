@@ -269,9 +269,117 @@ describe('Dynadot provider', () => {
     });
   });
 
-  it('leaves contacts throwing NotImplementedError', async () => {
+  it('getContacts resolves per-role ContactIds via get_contact and splits the name', async () => {
     const dy = dynadot();
-    await expect(dy.getContacts('example.com')).rejects.toBeInstanceOf(NotImplementedError);
+    // registrant + admin share id 100; tech uses id 200; billing has no
+    // dedicated contact (id 0 -> account default whois, left unset).
+    const contacts: Record<string, unknown> = {
+      '100': {
+        ContactId: '100',
+        Name: 'John Q Doe',
+        Organization: 'Example Corp',
+        Email: 'john@example.com',
+        PhoneCc: '1',
+        PhoneNum: '4805551234',
+        FaxCc: '1',
+        FaxNum: '4805559999',
+        Address1: '123 Main St',
+        Address2: 'Suite 100',
+        City: 'Phoenix',
+        State: 'AZ',
+        ZipCode: '85001',
+        Country: 'US',
+      },
+      '200': {
+        ContactId: '200',
+        Name: 'Jane',
+        Email: 'jane@example.com',
+        PhoneNum: '2025550000',
+        Address1: '5 Tech Way',
+        City: 'Denver',
+        State: 'CO',
+        ZipCode: '80202',
+        Country: 'US',
+      },
+    };
+
+    const calls = stubHttp(dy, req => {
+      if (req.query?.command === 'domain_info') {
+        return {
+          DomainInfoResponse: {
+            DomainInfoHeader: { ResponseCode: '0' },
+            DomainInfoContent: {
+              DomainInfo: {
+                Name: 'example.com',
+                Whois: {
+                  Registrant: { ContactId: '100' },
+                  Admin: { ContactId: '100' },
+                  Technical: { ContactId: '200' },
+                  Billing: { ContactId: '0' },
+                },
+              },
+            },
+          },
+        };
+      }
+      // get_contact
+      const id = String(req.query?.contact_id ?? '');
+      return {
+        GetContactResponse: {
+          GetContactHeader: { ResponseCode: '0' },
+          GetContactContent: { Contact: contacts[id] },
+        },
+      };
+    });
+
+    const set = await dy.getContacts('example.com');
+
+    expect(set.registrant).toEqual({
+      firstName: 'John',
+      lastName: 'Q Doe',
+      organization: 'Example Corp',
+      email: 'john@example.com',
+      phone: '+1.4805551234',
+      fax: '+1.4805559999',
+      address1: '123 Main St',
+      address2: 'Suite 100',
+      city: 'Phoenix',
+      state: 'AZ',
+      postalCode: '85001',
+      country: 'US',
+    });
+    // admin shares the same contact as registrant
+    expect(set.admin).toEqual(set.registrant);
+    // tech: single-token name -> empty last name; no country code on the phone
+    expect(set.tech).toMatchObject({
+      firstName: 'Jane',
+      lastName: '',
+      phone: '2025550000',
+      postalCode: '80202',
+    });
+    expect(set.tech?.organization).toBeUndefined();
+    expect(set.tech?.fax).toBeUndefined();
+    // billing had ContactId 0 -> left unset
+    expect(set.billing).toBeUndefined();
+
+    // domain_info once, then get_contact once per distinct id (100, 200) — id
+    // 100 is not re-fetched for admin
+    const commands = calls.map(c => c.query?.command);
+    expect(commands).toEqual(['domain_info', 'get_contact', 'get_contact']);
+    expect(calls[1].query).toMatchObject({ command: 'get_contact', contact_id: '100' });
+    expect(calls[2].query).toMatchObject({ command: 'get_contact', contact_id: '200' });
+  });
+
+  it('getContacts throws NotFoundError when domain_info has no DomainInfo', async () => {
+    const dy = dynadot();
+    stubHttp(dy, () => ({
+      DomainInfoResponse: { DomainInfoHeader: { ResponseCode: '0' }, DomainInfoContent: {} },
+    }));
+    await expect(dy.getContacts('missing.com')).rejects.toThrow(/not found/);
+  });
+
+  it('leaves updateContacts throwing NotImplementedError', async () => {
+    const dy = dynadot();
     await expect(dy.updateContacts('example.com', {})).rejects.toBeInstanceOf(NotImplementedError);
   });
 });

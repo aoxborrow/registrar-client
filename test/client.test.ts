@@ -93,7 +93,7 @@ describe('capabilities / features', () => {
   it('isCoreFeature reflects membership in CORE_FEATURES', () => {
     expect(isCoreFeature(Feature.GetPricing)).toBe(true);
     expect(isCoreFeature(Feature.SetAutoRenew)).toBe(true);
-    expect(isCoreFeature(Feature.ConfigureDnssec)).toBe(false);
+    expect(isCoreFeature(Feature.SetDnssec)).toBe(false);
   });
 
   it('every provider inherits core and its extended features are valid extras', () => {

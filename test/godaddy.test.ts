@@ -273,11 +273,11 @@ describe('GoDaddy provider', () => {
 
 describe('BaseRegistrar defaults', () => {
   it('unimplemented core methods reject with NotImplementedError', async () => {
-    // cloudflare does not override these, so they fall through to BaseRegistrar
+    // cloudflare does not override these writes, so they fall through to BaseRegistrar
     const cf = createRegistrar('cloudflare', { apiToken: 'x', accountId: 'y' });
-    await expect(cf.getContacts('example.com')).rejects.toBeInstanceOf(NotImplementedError);
-    await expect(cf.getDnsRecords('example.com')).rejects.toBeInstanceOf(NotImplementedError);
-    await expect(cf.getPricing('com')).rejects.toBeInstanceOf(NotImplementedError);
+    await expect(cf.updateContacts('example.com', {})).rejects.toBeInstanceOf(NotImplementedError);
+    await expect(cf.setDnsRecords('example.com', [])).rejects.toBeInstanceOf(NotImplementedError);
+    await expect(cf.setPrivacy('example.com', true)).rejects.toBeInstanceOf(NotImplementedError);
     await expect(cf.registerDomain('example.com', { contacts: {} })).rejects.toBeInstanceOf(
       NotImplementedError
     );
