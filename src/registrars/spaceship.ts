@@ -15,7 +15,6 @@ import type {
   TransferDomainInput,
 } from '../types';
 import { createDomain, filterDomains, requireConsent, sleep } from '../utils';
-import { DEFAULT_PAGE_SIZE } from '../constants';
 import { NotImplementedError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
@@ -184,9 +183,9 @@ export class SpaceshipRegistrar extends BaseRegistrar {
 
   override async listDomains(opts?: ListDomainsOptions): Promise<Domain[]> {
     // No server-side name filter on this endpoint, so `search` is client-side.
-    const { pageSize = DEFAULT_PAGE_SIZE, search, ...reqOpts } = opts ?? {};
+    const { search, ...reqOpts } = opts ?? {};
     const domains: Domain[] = [];
-    const take = Math.min(pageSize, 100); // max items per request (1-100)
+    const take = 100; // Spaceship API maximum page size (1-100)
     let skip = 0;
     let hasMore = true;
 

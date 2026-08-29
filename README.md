@@ -87,18 +87,16 @@ Namecheap is the only one with real per-TLD `getPricing`.
 
 ## Listing domains & portfolios
 
-`listDomains` returns the **full account**, paginating internally, and accepts
-`{ pageSize, search }` (alongside the usual request options). `pageSize` (default
-**100**) only tunes how many domains are fetched per request — it's clamped to
-each provider's maximum and changes the number of requests, never the result.
-Providers whose API has no page-size parameter (**Porkbun**, **Dynadot**) ignore
-it. `search` filters by domain-name substring: server-side where the API supports
-it (**Namecheap** `SearchTerm`, **Gandi** `fqdn`) and client-side everywhere else.
+`listDomains` returns the **full account**, paginating internally at each
+provider's maximum page size (so it makes the fewest requests each API allows).
+Its only option is `search` — a domain-name substring filter, applied server-side
+where the API supports it (**Namecheap** `SearchTerm`, **Gandi** `fqdn`) and
+client-side everywhere else. The usual request options (timeout/retries/signal)
+still apply.
 
 ```ts
 const all = await client.listDomains();
 const acme = await client.listDomains({ search: 'acme' });
-const fewerRequests = await client.listDomains({ pageSize: 1000 }); // where supported
 ```
 
 Nameservers come back **in the single list call** on **GoDaddy** (via

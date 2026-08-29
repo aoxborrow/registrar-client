@@ -64,16 +64,16 @@ describe('GoDaddy provider', () => {
     });
   });
 
-  it('sends pageSize as GoDaddy’s limit param and filters by search client-side', async () => {
+  it('paginates at GoDaddy’s max page size and filters by search client-side', async () => {
     const gd = godaddy();
-    // a short page (< pageSize) terminates pagination
+    // a short page (< max) terminates pagination
     const calls = stubHttp(gd, () => [
       { domain: 'foo.com' },
       { domain: 'bar.com' },
       { domain: 'foobar.com' },
     ]);
-    const all = await gd.listDomains({ pageSize: 50 });
-    expect(calls[0].path).toContain('limit=50');
+    const all = await gd.listDomains();
+    expect(calls[0].path).toContain('limit=1000'); // GoDaddy's max page size
     expect(all).toHaveLength(3);
 
     const matched = await gd.listDomains({ search: 'foo' });

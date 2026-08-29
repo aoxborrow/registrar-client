@@ -15,7 +15,6 @@ import type {
   TransferDomainInput,
 } from '../types';
 import { createDomain, filterDomains, requireConsent } from '../utils';
-import { DEFAULT_PAGE_SIZE } from '../constants';
 import { toRegistrarError } from '../errors';
 import { ensureArray, parseXml } from '../xml';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
@@ -251,9 +250,9 @@ export class NamecheapRegistrar extends BaseRegistrar {
   }
 
   override async listDomains(opts?: ListDomainsOptions): Promise<Domain[]> {
-    const { pageSize = DEFAULT_PAGE_SIZE, search, ...reqOpts } = opts ?? {};
+    const { search, ...reqOpts } = opts ?? {};
     const domains: Domain[] = [];
-    const perPage = Math.min(pageSize, 100); // Namecheap PageSize is 10..100
+    const perPage = 100; // Namecheap PageSize maximum (10..100)
     // `SearchTerm` filters by name substring server-side.
     const searchTerm = search?.trim();
     let page = 1;

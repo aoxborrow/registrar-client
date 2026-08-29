@@ -8,7 +8,6 @@ import type {
   RequestOptions,
 } from '../types';
 import { createDomain, filterDomains } from '../utils';
-import { DEFAULT_PAGE_SIZE } from '../constants';
 import { NotFoundError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
@@ -127,9 +126,9 @@ export class NameSiloRegistrar extends BaseRegistrar {
    * client-side (NameSilo has no server-side name filter).
    */
   override async listDomains(opts?: ListDomainsOptions): Promise<Domain[]> {
-    const { pageSize = DEFAULT_PAGE_SIZE, search, ...reqOpts } = opts ?? {};
+    const { search, ...reqOpts } = opts ?? {};
     const domains: Domain[] = [];
-    const perPage = Math.min(pageSize, 100);
+    const perPage = 100; // NameSilo page size
     let page = 1;
     let hasMore = true;
 

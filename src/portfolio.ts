@@ -33,9 +33,8 @@ function sourceName(source: DomainSource): string {
  * List domains across many registrars at once. Queries every source in parallel
  * and collects results with per-registrar error isolation.
  *
- * `opts` (including `pageSize` and `search`) is passed to EACH source. Every
- * source returns its full account; order of the returned `domains` follows the
- * order of `sources`.
+ * `opts` (including `search`) is passed to EACH source. Every source returns its
+ * full account; order of the returned `domains` follows the order of `sources`.
  *
  *   const { domains, errors } = await listPortfolio(
  *     [godaddyClient, namecheapClient, gandiClient],

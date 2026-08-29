@@ -125,10 +125,9 @@ export class PorkbunRegistrar extends BaseRegistrar {
   }
 
   override async listDomains(opts?: ListDomainsOptions): Promise<Domain[]> {
-    // listAll has no name filter, so `search` is applied client-side. Porkbun has
-    // no page-size parameter (it returns fixed 1000-domain chunks and pages by
-    // `start` offset), so `pageSize` is ignored here.
-    const { pageSize: _pageSize, search, ...reqOpts } = opts ?? {};
+    // listAll has no name filter, so `search` is applied client-side. Porkbun
+    // returns fixed 1000-domain chunks and pages by `start` offset.
+    const { search, ...reqOpts } = opts ?? {};
     const domains: Domain[] = [];
     const chunk = 1000; // Porkbun returns up to 1000 domains per call
     let start = 0;

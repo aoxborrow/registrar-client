@@ -8,7 +8,6 @@ import type {
   RequestOptions,
 } from '../types';
 import { createDomain, filterDomains } from '../utils';
-import { DEFAULT_PAGE_SIZE } from '../constants';
 import { toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import type { RegistrarFeature } from '../features';
@@ -103,9 +102,9 @@ export class CloudflareRegistrar extends BaseRegistrar {
     // The Registrar list endpoint has no name filter, so `search` is applied
     // client-side. It also does not return nameservers (those live on the Zones
     // API); `nameservers` therefore reflects only what the list response carries.
-    const { pageSize = DEFAULT_PAGE_SIZE, search, ...reqOpts } = opts ?? {};
+    const { search, ...reqOpts } = opts ?? {};
     const domains: Domain[] = [];
-    const perPage = Math.min(pageSize, 200); // Cloudflare API maximum page size
+    const perPage = 200; // Cloudflare API maximum page size
     let page = 1;
     let hasMore = true;
 

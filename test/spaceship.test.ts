@@ -44,12 +44,12 @@ describe('Spaceship provider', () => {
     expect(d.expirationDate?.toISOString()).toBe('2027-01-01T00:00:00.000Z');
   });
 
-  it('listDomains uses pageSize as take and filters by search client-side', async () => {
+  it('listDomains paginates at take=100 and filters by search client-side', async () => {
     const sp = spaceship();
     const calls = stubHttp(sp, () => ({ items: [{ name: 'foo.com' }, { name: 'bar.com' }] }));
 
-    const all = await sp.listDomains({ pageSize: 5 });
-    expect(calls[0].query).toMatchObject({ take: 5, skip: 0 });
+    const all = await sp.listDomains();
+    expect(calls[0].query).toMatchObject({ take: 100, skip: 0 });
     expect(all).toHaveLength(2);
 
     const matched = await sp.listDomains({ search: 'foo' });

@@ -175,10 +175,9 @@ export class DynadotRegistrar extends BaseRegistrar {
   }
 
   override async listDomains(opts?: ListDomainsOptions): Promise<Domain[]> {
-    // list_domain returns the whole account in one response (no page-size param),
-    // so `pageSize` is ignored. It already includes nameservers inline
-    // (NameServerSettings).
-    const { pageSize: _pageSize, search, ...reqOpts } = opts ?? {};
+    // list_domain returns the whole account in one response and already includes
+    // nameservers inline (NameServerSettings).
+    const { search, ...reqOpts } = opts ?? {};
     const content = await this.read({ command: 'list_domain' }, reqOpts);
     // ListDomainInfoContent > DomainInfoList > DomainInfo (array)
     const list = asRecord(content.DomainInfoList);
