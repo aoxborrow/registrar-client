@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createRegistrar, ConsentRequiredError, NotImplementedError } from '../src/index';
+import { createRegistrar, ConsentRequiredError } from '../src/index';
 import type { RequestConfig } from '../src/http';
 
 // Namecheap speaks XML, so its HttpClient uses requestText (not request). Stub
@@ -62,17 +62,15 @@ describe('Namecheap provider', () => {
     expect(results).toHaveLength(120);
   });
 
-  it('getDomain reads getInfo for status/dates/privacy and the IsLocked flag from getList', async () => {
+  it('getDomain reads getInfo for status/dates/privacy and the lock from getRegistrarLock', async () => {
     const nc = namecheap();
     // Status is "Ok" while the domain IS transfer-locked — proving `locked` comes
-    // from getList's IsLocked flag, not from the coarse getInfo Status string.
+    // from the dedicated getRegistrarLock command, not the coarse getInfo Status.
     const calls = stubXml(nc, req => {
       const command = String(req.query?.Command ?? '');
-      if (command === 'namecheap.domains.getList') {
+      if (command === 'namecheap.domains.getRegistrarLock') {
         return ok(
-          `<DomainGetListResult>
-             <Domain ID="1" Name="example.com" IsLocked="true" AutoRenew="false" WhoisGuard="ENABLED" Expires="09/05/2027"/>
-           </DomainGetListResult>`
+          `<DomainGetRegistrarLockResult Domain="example.com" RegistrarLockStatus="true"/>`
         );
       }
       return ok(
@@ -90,9 +88,9 @@ describe('Namecheap provider', () => {
       privacy: true,
     });
     expect(domain.expirationDate?.getFullYear()).toBe(2027);
-    // it consulted getList (SearchTerm = SLD) for the lock flag
-    const listCall = calls.find(c => c.query?.Command === 'namecheap.domains.getList');
-    expect(listCall?.query).toMatchObject({ SearchTerm: 'example' });
+    // it consulted the dedicated lock command for this domain
+    const lockCall = calls.find(c => c.query?.Command === 'namecheap.domains.getRegistrarLock');
+    expect(lockCall?.query).toMatchObject({ DomainName: 'example.com' });
   });
 
   it('getPricing reads 1-year register/renew/transfer from users.getPricing', async () => {
@@ -328,9 +326,33 @@ describe('Namecheap provider', () => {
     });
   });
 
-  it('leaves setAutoRenew throwing NotImplementedError (no public API command)', async () => {
+  it('setAutoRenew sends DomainName + IsAutoRenew and reads the inner IsSuccess flag', async () => {
     const nc = namecheap();
-    await expect(nc.setAutoRenew('example.com', true)).rejects.toBeInstanceOf(NotImplementedError);
+    const calls = stubXml(nc, () =>
+      ok(`<SetAutoRenewResult Domain="example.com" IsSuccess="true"/>`)
+    );
+    const res = await nc.setAutoRenew('example.com', true);
+    expect(res.success).toBe(true);
+    expect(calls[0].query).toMatchObject({
+      Command: 'namecheap.domains.setAutoRenew',
+      DomainName: 'example.com',
+      IsAutoRenew: 'true',
+    });
+
+    // enabled=false sends IsAutoRenew=false
+    const offCalls = stubXml(nc, () =>
+      ok(`<SetAutoRenewResult Domain="example.com" IsSuccess="true"/>`)
+    );
+    await nc.setAutoRenew('example.com', false);
+    expect(offCalls[0].query).toMatchObject({ IsAutoRenew: 'false' });
+  });
+
+  it('setAutoRenew fails on an OK envelope carrying IsSuccess="false"', async () => {
+    const nc = namecheap();
+    // a malformed request comes back Status="OK" but IsSuccess="false" (empty Domain)
+    stubXml(nc, () => ok(`<SetAutoRenewResult Domain="" IsSuccess="false"/>`));
+    const res = await nc.setAutoRenew('example.com', true);
+    expect(res.success).toBe(false);
   });
 
   it('getEmailForwarding maps <Forward mailbox> elements and drops blanks', async () => {
