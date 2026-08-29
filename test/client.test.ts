@@ -159,6 +159,6 @@ describe('sandbox / environment', () => {
       .filter(([, R]) => R.supportsSandbox)
       .map(([id]) => id)
       .sort();
-    expect(supported).toEqual(['gandi', 'godaddy', 'namecheap', 'namesilo', 'porkbun']);
+    expect(supported).toEqual(['dynadot', 'gandi', 'godaddy', 'namecheap', 'namesilo', 'porkbun']);
   });
 });
