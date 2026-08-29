@@ -309,4 +309,143 @@ describe('NameSilo provider', () => {
       { domainName: 'b.com', available: false },
     ]);
   });
+
+  // --- extended capabilities ---
+
+  const OK = (extra: Record<string, unknown> = {}) => ({ reply: { code: 300, ...extra } });
+
+  it('getDnssec maps ds_record entries (single or array) to DS records', async () => {
+    const ns = namesilo();
+    stubHttp(ns, () =>
+      OK({
+        ds_record: [
+          { digest: 'ABCD', digest_type: '2', algorithm: '13', key_tag: '50651' },
+          { digest: 'EF01', digest_type: '1', algorithm: '5', key_tag: '111' },
+        ],
+      })
+    );
+    expect(await ns.getDnssec('example.com')).toEqual({
+      enabled: true,
+      dsRecords: [
+        { keyTag: 50651, algorithm: 13, digestType: 2, digest: 'ABCD' },
+        { keyTag: 111, algorithm: 5, digestType: 1, digest: 'EF01' },
+      ],
+    });
+  });
+
+  it('getDnssec reports disabled when there are no ds_record entries', async () => {
+    const ns = namesilo();
+    stubHttp(ns, () => OK());
+    expect(await ns.getDnssec('example.com')).toEqual({ enabled: false, dsRecords: [] });
+  });
+
+  it('disableDnssec deletes each DS record with echoed identifying params', async () => {
+    const ns = namesilo();
+    const calls = stubHttp(ns, req => {
+      if (String(req.path) === '/dnsSecListRecords') {
+        return OK({
+          ds_record: { digest: 'ABCD', digest_type: '2', algorithm: '13', key_tag: '50651' },
+        });
+      }
+      return OK();
+    });
+    const res = await ns.disableDnssec('example.com');
+    expect(res.success).toBe(true);
+    const del = calls.find(c => String(c.path) === '/dnsSecDeleteRecord');
+    expect(del?.query).toMatchObject({
+      domain: 'example.com',
+      digest: 'ABCD',
+      keyTag: '50651',
+      digestType: '2',
+      alg: '13',
+    });
+  });
+
+  it('getEmailForwarding expands forwards_to (single or array) per mailbox', async () => {
+    const ns = namesilo();
+    stubHttp(ns, () =>
+      OK({
+        addresses: [
+          { email: 'hello', forwards_to: ['a@x.com', 'b@y.com'] },
+          { email: 'sales', forwards_to: 'c@z.com' },
+        ],
+      })
+    );
+    expect(await ns.getEmailForwarding('example.com')).toEqual([
+      { alias: 'hello', forwardTo: 'a@x.com' },
+      { alias: 'hello', forwardTo: 'b@y.com' },
+      { alias: 'sales', forwardTo: 'c@z.com' },
+    ]);
+  });
+
+  it('setEmailForwarding upserts forward1..N and deletes removed aliases', async () => {
+    const ns = namesilo();
+    const calls = stubHttp(ns, req => {
+      if (String(req.path) === '/listEmailForwards') {
+        return OK({ addresses: [{ email: 'old', forwards_to: 'x@x.com' }] });
+      }
+      return OK();
+    });
+    const res = await ns.setEmailForwarding('example.com', [
+      { alias: 'hello', forwardTo: 'a@x.com' },
+      { alias: 'hello', forwardTo: 'b@y.com' },
+    ]);
+    expect(res.success).toBe(true);
+    const del = calls.find(c => String(c.path) === '/deleteEmailForward');
+    expect(del?.query).toMatchObject({ domain: 'example.com', email: 'old' });
+    const cfg = calls.find(c => String(c.path) === '/configureEmailForward');
+    expect(cfg?.query).toMatchObject({
+      domain: 'example.com',
+      email: 'hello',
+      forward1: 'a@x.com',
+      forward2: 'b@y.com',
+    });
+  });
+
+  it('getDomainForwarding reads the apex forward from getDomainInfo', async () => {
+    const ns = namesilo();
+    stubHttp(ns, () => OK({ forward_url: 'https://example.com/landing', forward_type: '302' }));
+    expect(await ns.getDomainForwarding('example.com')).toEqual([
+      { host: '@', url: 'https://example.com/landing', type: 'redirect' },
+    ]);
+  });
+
+  it('getDomainForwarding returns [] when no apex forward is set', async () => {
+    const ns = namesilo();
+    stubHttp(ns, () => OK());
+    expect(await ns.getDomainForwarding('example.com')).toEqual([]);
+  });
+
+  it('setDomainForwarding sends domainForward with protocol/address/method for the apex', async () => {
+    const ns = namesilo();
+    const calls = stubHttp(ns, () => OK());
+    await ns.setDomainForwarding('example.com', [
+      { host: '@', url: 'https://dest.com/p', type: 'permanent' },
+    ]);
+    expect(calls[0].path).toBe('/domainForward');
+    expect(calls[0].query).toMatchObject({
+      domain: 'example.com',
+      protocol: 'https',
+      address: 'dest.com/p',
+      method: '301',
+    });
+  });
+
+  it('setDomainForwarding clears by restoring default nameservers on an empty list', async () => {
+    const ns = namesilo();
+    const calls = stubHttp(ns, () => OK());
+    await ns.setDomainForwarding('example.com', []);
+    expect(calls[0].path).toBe('/changeNameServers');
+    expect(calls[0].query).toMatchObject({ ns1: 'ns1.namesilo.com', ns2: 'ns2.namesilo.com' });
+  });
+
+  it('setDomainForwarding rejects per-subdomain hosts (apex-only)', async () => {
+    const ns = namesilo();
+    stubHttp(ns, () => OK());
+    await expect(
+      ns.setDomainForwarding('example.com', [
+        { host: 'www', url: 'https://a.com', type: 'permanent' },
+      ])
+    ).rejects.toThrow(/apex/i);
+  });
 });

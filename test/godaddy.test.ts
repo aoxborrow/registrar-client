@@ -348,11 +348,9 @@ describe('BaseRegistrar defaults', () => {
     const put0 = writes.find(c => c.path === '/domains/forwards/example.com');
     expect(put0?.body).toEqual({ type: 'REDIRECT_PERMANENT', url: 'https://root.com' });
     const put1 = writes.find(c => c.path === '/domains/forwards/app.example.com');
-    expect(put1?.body).toMatchObject({
-      type: 'MASKED',
-      url: 'https://app.com',
-      mask: expect.any(Object),
-    });
+    const body1 = put1?.body as { type: string; url: string; mask?: object };
+    expect(body1).toMatchObject({ type: 'MASKED', url: 'https://app.com' });
+    expect(body1.mask).toBeTypeOf('object');
   });
 
   it('setDomainForwarding with an empty list deletes existing forwards', async () => {
