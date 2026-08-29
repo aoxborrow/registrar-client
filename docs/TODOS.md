@@ -7,14 +7,14 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
 
 ## Needs live testing (built + unit-tested, not executed)
 
-- [ ] `registerDomain` / `renewDomain` / `transferIn` on **NameSilo, GoDaddy,
-      Namecheap** (and NameBright register/renew) — paid/irreversible; built to
-      documented shapes, never run. (Dynadot, Gandi register+renew, and Porkbun
-      are sandbox-verified; Gandi `transferIn` needs an external domain + auth
-      code, not reproducible in the sandbox.)
-- [ ] `updateContacts` on **NameSilo, GoDaddy, Namecheap** — can trigger
-      registrant-change verification / 60-day locks; reviewed only. (Dynadot and
-      Gandi are sandbox-verified.)
+- [ ] `registerDomain` / `renewDomain` / `transferIn` on **NameSilo, GoDaddy**
+      (and NameBright register/renew) — paid/irreversible; built to documented
+      shapes, never run. (Dynadot, Gandi register+renew, Porkbun, and Namecheap
+      register+renew are sandbox-verified; Namecheap and Gandi `transferIn` need an
+      external domain + auth code, not reproducible in the sandbox.)
+- [ ] `updateContacts` on **NameSilo, GoDaddy** — can trigger registrant-change
+      verification / 60-day locks; reviewed only. (Dynadot, Gandi, and Namecheap
+      are sandbox-verified.)
 - [ ] **GoDaddy** `setPrivacy` — disabling is a one-way DELETE (enabling is a paid
       purchase, left `NotImplementedError`); not exercised.
 - [ ] **Extended features on GoDaddy / NameSilo / Spaceship** (authCode, DNSSEC
@@ -36,6 +36,13 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
   delay; `registerDomain` requires the ISO 3166-2 `owner.state` (`US-CA`, not
   `CA`); web forwarding is subdomain-only (no apex) and `protocol: https` 500s in
   the sandbox. See `docs/registrars/gandi.md`.
+- **Namecheap** `setAutoRenew` uses the undocumented-but-live `domains.setAutoRenew`
+  (DomainName + IsAutoRenew; reads its inner `IsSuccess`). `getDomain`'s `locked`
+  reads the dedicated `getRegistrarLock` command — getList's per-row `IsLocked`
+  (and `AutoRenew`) lag in the sandbox even after a successful write. Reverting to
+  Namecheap DNS is a separate `dns.setDefault` command (setCustom rejects the
+  BasicDNS hosts). `setPrivacy` genuinely toggles WhoisGuard (not a no-op). See
+  `docs/registrars/namecheap.md`.
 
 ## Blocked (need better credentials / a suitable domain)
 
@@ -43,15 +50,10 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
       for registrar ops (422); needs a Domain-Registration:Edit token.
 - [ ] **Spaceship** `lockDomain`/`unlockDomain` — API key lacks the transfer-lock
       scope (403); needs a lock-scoped key.
-- [ ] **Namecheap** `lockDomain`/`unlockDomain` — request is correct but the
-      account holds only ccTLDs that don't expose the registrar lock; needs a gTLD
-      to confirm the flag flips.
 
 ## Not buildable (no public API endpoint)
 
 - [ ] **NameBright** `transferIn` — NameBright's REST API has no transfer-in endpoint.
-- [ ] **Namecheap** `setAutoRenew` — no auto-renew command in the public API
-      (dashboard-only).
 - [ ] **NameSilo** `getAuthCode` — `retrieveAuthCode` only emails the EPP code to
       the registrant; it can't be returned synchronously (declaration dropped).
 

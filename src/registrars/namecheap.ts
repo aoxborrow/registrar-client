@@ -129,6 +129,10 @@ interface NcCommandResponse {
     AuxBilling?: NcContactEl;
   };
   UserGetPricingResult?: { ProductType?: NcProductTypeEl | NcProductTypeEl[] };
+  // namecheap.domains.getRegistrarLock — the authoritative per-domain lock state
+  DomainGetRegistrarLockResult?: { '@_RegistrarLockStatus'?: string };
+  // namecheap.domains.setAutoRenew result (carries its own IsSuccess flag)
+  SetAutoRenewResult?: { '@_IsSuccess'?: string };
 }
 
 interface NcResponse {
@@ -164,9 +168,10 @@ const NC_CONTACT_ROLES = [
  * root `Status="OK"` attribute (`isOk`), not the HTTP status. XML is parsed via
  * the shared `parseXml` helper (fast-xml-parser).
  *
- * ## Not implemented (fall through to BaseRegistrar's NotImplementedError)
- * - `setAutoRenew` — Namecheap exposes no dedicated auto-renew command in the
- *   public API; it's a dashboard/account setting, so there's no path to wire up.
+ * `setAutoRenew` uses `namecheap.domains.setAutoRenew` (DomainName + IsAutoRenew).
+ * The command isn't in Namecheap's published method index but is live and keys on
+ * DomainName (an SLD/TLD form is rejected); it returns its own `IsSuccess` flag,
+ * which this reads rather than the envelope status.
  *
  * `registerDomain`/`transferIn` are implemented and require per-call `consent`;
  * they spend real money and are documented-but-unverified. Registration sends the
@@ -312,8 +317,9 @@ export class NamecheapRegistrar extends BaseRegistrar {
    * `nameservers` comes back empty here — use `getNameservers` (dns.getList) for
    * those. The registrar transfer-lock flag isn't in getInfo either (its `Status`
    * reflects the domain lifecycle, e.g. "Ok"/"Expired", not the transfer lock),
-   * so `locked` is read from the authoritative `IsLocked` flag via getList — the
-   * same source `listDomains` uses, keeping the two consistent.
+   * so `locked` is read from the dedicated `getRegistrarLock` command, which is
+   * the authoritative real-time source (getList's per-row `IsLocked` can lag —
+   * confirmed stale in the sandbox after a lock the API had already applied).
    */
   override async getDomain(domainName: string, opts?: RequestOptions): Promise<Domain> {
     const cr = await this.command('namecheap.domains.getInfo', { DomainName: domainName }, opts);
@@ -333,22 +339,19 @@ export class NamecheapRegistrar extends BaseRegistrar {
   }
 
   /**
-   * Reads the registrar transfer-lock flag (`IsLocked`) for a single domain from
-   * getList — getInfo doesn't expose it. getList's `SearchTerm` filters by name
-   * substring, so this searches by the SLD and exact-matches the full name.
+   * Reads the registrar transfer-lock flag for a single domain via the dedicated
+   * `getRegistrarLock` command (`RegistrarLockStatus`). getInfo doesn't expose the
+   * lock, and getList's per-row `IsLocked` can lag the real state — verified live:
+   * after a lock the API reported as applied, getList still showed `IsLocked=false`
+   * while getRegistrarLock correctly returned `RegistrarLockStatus=true`.
    */
   private async getRegistrarLock(domainName: string, opts?: RequestOptions): Promise<boolean> {
-    const target = normalizeDomain(domainName);
-    const sld = target.split('.')[0];
     const cr = await this.command(
-      'namecheap.domains.getList',
-      { PageSize: '100', SearchTerm: sld },
+      'namecheap.domains.getRegistrarLock',
+      { DomainName: normalizeDomain(domainName) },
       opts
     );
-    const match = ensureArray(cr.DomainGetListResult?.Domain).find(
-      d => (d['@_Name'] ?? '').toLowerCase() === target
-    );
-    return match?.['@_IsLocked'] === 'true';
+    return cr.DomainGetRegistrarLockResult?.['@_RegistrarLockStatus'] === 'true';
   }
 
   /**
@@ -490,6 +493,28 @@ export class NamecheapRegistrar extends BaseRegistrar {
       opts
     );
     return statusResult(res);
+  }
+
+  /**
+   * Toggles auto-renew via `namecheap.domains.setAutoRenew`. The command carries
+   * its own `IsSuccess` flag inside an otherwise-OK envelope (a malformed request
+   * comes back `Status="OK"` with `IsSuccess="false"`), so success is read from
+   * that flag, not the envelope status.
+   */
+  override async setAutoRenew(
+    domainName: string,
+    enabled: boolean,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const cr = await this.command(
+      'namecheap.domains.setAutoRenew',
+      { DomainName: domainName, IsAutoRenew: enabled ? 'true' : 'false' },
+      opts
+    );
+    if (cr.SetAutoRenewResult?.['@_IsSuccess'] === 'true') {
+      return { success: true, message: 'OK' };
+    }
+    return { success: false, message: `Failed to ${enabled ? 'enable' : 'disable'} auto-renew` };
   }
 
   override async getNameservers(domainName: string, opts?: RequestOptions): Promise<string[]> {
