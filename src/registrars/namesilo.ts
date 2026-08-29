@@ -61,7 +61,9 @@ export class NameSiloRegistrar extends BaseRegistrar {
   static readonly displayName = 'NameSilo';
   static readonly helpText =
     'Generate an API key in your NameSilo account under Account Options > API Manager. ' +
-    'You can optionally restrict the key to specific IP addresses there.';
+    'You can optionally restrict the key to specific IP addresses there. For sandbox ' +
+    'testing, use { environment: "sandbox" } (OTE host ote.namesilo.com) — OTE ' +
+    'credentials are not self-service; you must contact NameSilo support to be issued them.';
   static readonly configFields: ConfigField[] = [
     { name: 'apiKey', label: 'API Key', type: 'password', required: true },
   ];
