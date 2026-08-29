@@ -309,4 +309,159 @@ describe('NameSilo provider', () => {
       { domainName: 'b.com', available: false },
     ]);
   });
+
+  const op = (c: RequestConfig) => String(c.path).replace(/^\//, '');
+
+  it('setAutoRenew calls add/removeAutoRenewal and treats 280 (no-op) as success', async () => {
+    const ns = namesilo();
+    let calls = stubHttp(ns, () => ({ reply: { code: 300, detail: 'success' } }));
+    await ns.setAutoRenew('example.com', true);
+    expect(op(calls[0])).toBe('addAutoRenewal');
+    expect(calls[0].query).toMatchObject({ domain: 'example.com' });
+
+    calls = stubHttp(ns, () => ({ reply: { code: 280, detail: 'already set' } }));
+    const res = await ns.setAutoRenew('example.com', false);
+    expect(op(calls[0])).toBe('removeAutoRenewal');
+    expect(res.success).toBe(true); // 280 = idempotent no-op
+  });
+
+  it('setPrivacy calls add/removePrivacy', async () => {
+    const ns = namesilo();
+    let calls = stubHttp(ns, () => ({ reply: { code: 300, detail: 'success' } }));
+    await ns.setPrivacy('example.com', true);
+    expect(op(calls[0])).toBe('addPrivacy');
+    calls = stubHttp(ns, () => ({ reply: { code: 300, detail: 'success' } }));
+    await ns.setPrivacy('example.com', false);
+    expect(op(calls[0])).toBe('removePrivacy');
+  });
+
+  it('setDnsRecords diffs: adds new records and deletes stale ones, leaving matches', async () => {
+    const ns = namesilo();
+    const calls = stubHttp(ns, c => {
+      if (op(c) === 'dnsListRecords') {
+        return {
+          reply: {
+            code: 300,
+            resource_record: [
+              { record_id: 'r-a', type: 'A', host: '@', value: '1.1.1.1', ttl: 3600, distance: 0 },
+              {
+                record_id: 'r-old',
+                type: 'TXT',
+                host: 'old',
+                value: 'gone',
+                ttl: 3600,
+                distance: 0,
+              },
+            ],
+          },
+        };
+      }
+      return { reply: { code: 300, detail: 'success' } };
+    });
+
+    const res = await ns.setDnsRecords('example.com', [
+      { type: 'A', name: '@', value: '1.1.1.1', ttl: 3600 }, // unchanged -> neither added nor deleted
+      { type: 'TXT', name: 'new', value: 'hello', ttl: 3600 }, // added
+    ]);
+    expect(res.success).toBe(true);
+
+    const adds = calls.filter(c => op(c) === 'dnsAddRecord');
+    expect(adds).toHaveLength(1);
+    expect(adds[0].query).toMatchObject({
+      rrtype: 'TXT',
+      rrhost: 'new',
+      rrvalue: 'hello',
+      rrttl: 3600,
+    });
+
+    const deletes = calls.filter(c => op(c) === 'dnsDeleteRecord');
+    expect(deletes).toHaveLength(1);
+    expect(deletes[0].query).toMatchObject({ rrid: 'r-old' });
+  });
+
+  it('setDnsRecords maps apex to an empty host and carries MX distance', async () => {
+    const ns = namesilo();
+    const calls = stubHttp(ns, c =>
+      op(c) === 'dnsListRecords'
+        ? { reply: { code: 300, resource_record: [] } }
+        : { reply: { code: 300, detail: 'success' } }
+    );
+    await ns.setDnsRecords('example.com', [
+      { type: 'MX', name: '@', value: 'mail.example.com', priority: 10, ttl: 3600 },
+    ]);
+    const add = calls.find(c => op(c) === 'dnsAddRecord');
+    expect(add?.query).toMatchObject({
+      rrtype: 'MX',
+      rrhost: '',
+      rrvalue: 'mail.example.com',
+      rrdistance: 10,
+    });
+  });
+
+  it('updateContacts creates a contact per role and associates the ids', async () => {
+    const ns = namesilo();
+    let n = 0;
+    const calls = stubHttp(ns, c =>
+      op(c) === 'contactAdd'
+        ? { reply: { code: 300, contact_id: `c-${++n}` } }
+        : { reply: { code: 300, detail: 'success' } }
+    );
+    const contact = {
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      email: 'ada@example.com',
+      phone: '+44.2071234567',
+      address1: '1 Byron Way',
+      city: 'London',
+      state: 'LDN',
+      postalCode: 'EC1',
+      country: 'GB',
+    };
+    const res = await ns.updateContacts('example.com', { registrant: contact });
+    expect(res.success).toBe(true);
+    const add = calls.find(c => op(c) === 'contactAdd');
+    expect(add?.query).toMatchObject({
+      fn: 'Ada',
+      ln: 'Lovelace',
+      ad: '1 Byron Way',
+      ct: 'GB',
+      em: 'ada@example.com',
+    });
+    const assoc = calls.find(c => op(c) === 'contactDomainAssociate');
+    expect(assoc?.query).toMatchObject({ domain: 'example.com', registrant: 'c-1' });
+  });
+
+  it('registerDomain sends years/private/auto_renew and nameservers', async () => {
+    const ns = namesilo();
+    const calls = stubHttp(ns, () => ({ reply: { code: 300, detail: 'success' } }));
+    await ns.registerDomain('example.com', {
+      contacts: { registrant: {} as never },
+      years: 2,
+      privacy: true,
+      autoRenew: true,
+      nameservers: ['ns1.x.net', 'ns2.x.net'],
+    });
+    expect(op(calls[0])).toBe('registerDomain');
+    expect(calls[0].query).toMatchObject({
+      domain: 'example.com',
+      years: 2,
+      private: 1,
+      auto_renew: 1,
+      ns1: 'ns1.x.net',
+      ns2: 'ns2.x.net',
+    });
+  });
+
+  it('transferIn sends the auth code plus private/auto_renew flags', async () => {
+    const ns = namesilo();
+    const calls = stubHttp(ns, () => ({ reply: { code: 300, detail: 'success' } }));
+    await ns.transferIn('example.com', { authCode: 'EPP-123', privacy: false, autoRenew: true });
+    expect(op(calls[0])).toBe('transferDomain');
+    expect(calls[0].query).toMatchObject({
+      domain: 'example.com',
+      auth: 'EPP-123',
+      private: 0,
+      auto_renew: 1,
+    });
+  });
 });

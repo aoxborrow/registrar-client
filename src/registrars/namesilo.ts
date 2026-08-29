@@ -8,9 +8,11 @@ import type {
   DomainAvailability,
   ListDomainsOptions,
   OperationResult,
+  RegisterDomainInput,
   RegistrarOptions,
   RequestOptions,
   TldPricing,
+  TransferDomainInput,
 } from '../types';
 import { createDomain, filterDomains } from '../utils';
 import { NotFoundError, toRegistrarError } from '../errors';
@@ -38,6 +40,8 @@ interface NsReply {
   contact_ids?: NsContactIds;
   // contactList returns full contact records (single object or array)
   contact?: NsContact | NsContact[];
+  // contactAdd returns the new contact's id
+  contact_id?: string | number;
   // dnsListRecords returns resource_record entries (single object or array)
   resource_record?: NsResourceRecord | NsResourceRecord[];
   // checkRegisterAvailability groups results; each group wraps `domain` entries
@@ -416,6 +420,168 @@ export class NameSiloRegistrar extends BaseRegistrar {
     const res = await this.call('domainUnlock', { domain: domainName }, opts);
     return statusResult(res, [253]);
   }
+
+  override async setAutoRenew(
+    domainName: string,
+    enabled: boolean,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    // 300 on change; 280 = "already set to that value" — idempotent success
+    const res = await this.call(
+      enabled ? 'addAutoRenewal' : 'removeAutoRenewal',
+      { domain: domainName },
+      opts
+    );
+    return statusResult(res, [280]);
+  }
+
+  override async setPrivacy(
+    domainName: string,
+    enabled: boolean,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    // 300 on change; 280 = "already in that state" — idempotent success
+    const res = await this.call(
+      enabled ? 'addPrivacy' : 'removePrivacy',
+      { domain: domainName },
+      opts
+    );
+    return statusResult(res, [280]);
+  }
+
+  /**
+   * Replaces the record set. NameSilo has no atomic "set all" endpoint — records
+   * are added/deleted individually by id — so this diffs against the current
+   * records: it adds records not already present and deletes those no longer in
+   * the desired set, leaving unchanged records (and their ids) untouched. The
+   * delegation nameservers aren't part of this list (see `updateNameservers`).
+   */
+  override async setDnsRecords(
+    domainName: string,
+    records: DnsRecord[],
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const listRes = await this.call('dnsListRecords', { domain: domainName }, opts);
+    if (!replyOk(listRes)) return { success: false, message: replyDetail(listRes) };
+    const existing = ensureArray(listRes.reply?.resource_record);
+
+    const existingByKey = new Map<string, string>(); // record key -> record_id
+    for (const rr of existing) {
+      const k = dnsKey(text(rr.type), text(rr.host), text(rr.value), Number(rr.distance));
+      existingByKey.set(k, text(rr.record_id));
+    }
+
+    // add desired records that aren't already present
+    const desiredKeys = new Set<string>();
+    for (const r of records) {
+      const type = r.type.toUpperCase();
+      const k = dnsKey(type, r.name || '@', r.value, r.priority);
+      desiredKeys.add(k);
+      if (existingByKey.has(k)) continue;
+      const query: Record<string, string | number> = {
+        domain: domainName,
+        rrtype: type,
+        rrhost: r.name === '@' ? '' : r.name, // NameSilo wants a bare host, empty at the apex
+        rrvalue: r.value,
+        rrttl: r.ttl ?? 7207, // NameSilo's default TTL
+      };
+      if (type === 'MX') query.rrdistance = r.priority ?? 10;
+      const addRes = await this.call('dnsAddRecord', query, opts);
+      if (!replyOk(addRes)) return { success: false, message: replyDetail(addRes) };
+    }
+
+    // delete existing records no longer in the desired set
+    for (const [k, rrid] of existingByKey) {
+      if (desiredKeys.has(k) || !rrid) continue;
+      const delRes = await this.call('dnsDeleteRecord', { domain: domainName, rrid }, opts);
+      if (!replyOk(delRes)) return { success: false, message: replyDetail(delRes) };
+    }
+    return { success: true, message: 'DNS records updated successfully' };
+  }
+
+  /**
+   * Updates contact roles. NameSilo contacts are account-level records referenced
+   * by id, so this creates a new contact profile per supplied role (`contactAdd`)
+   * and points the domain's roles at the new ids (`contactDomainAssociate`).
+   * Identical contacts across roles are created once. Roles not supplied keep
+   * their current association.
+   */
+  override async updateContacts(
+    domainName: string,
+    contacts: ContactSet,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const roles: [keyof ContactSet, string][] = [
+      ['registrant', 'registrant'],
+      ['admin', 'administrative'],
+      ['tech', 'technical'],
+      ['billing', 'billing'],
+    ];
+    const association: Record<string, string | number> = { domain: domainName };
+    const idByContact = new Map<Contact, string>();
+    for (const [role, param] of roles) {
+      const contact = contacts[role];
+      if (!contact) continue;
+      let id = idByContact.get(contact);
+      if (!id) {
+        const addRes = await this.call('contactAdd', toNsContactParams(contact), opts);
+        if (!replyOk(addRes)) return { success: false, message: replyDetail(addRes) };
+        id = text(addRes.reply?.contact_id);
+        if (!id) return { success: false, message: 'NameSilo: contactAdd returned no contact_id' };
+        idByContact.set(contact, id);
+      }
+      association[param] = id;
+    }
+    if (Object.keys(association).length === 1) {
+      throw new Error('NameSilo: updateContacts requires at least one contact role');
+    }
+    const assocRes = await this.call('contactDomainAssociate', association, opts);
+    return statusResult(assocRes);
+  }
+
+  /**
+   * Registers a domain. NameSilo registers the domain against the account's
+   * default contact profile (use `updateContacts` afterwards to set specific
+   * contacts). `private`/`auto_renew` are honored, and initial nameservers are
+   * passed when supplied. Spends real money; not exercised against a live account.
+   */
+  override async registerDomain(
+    domainName: string,
+    input: RegisterDomainInput,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const query: Record<string, string | number> = {
+      domain: domainName,
+      years: input.years ?? 1,
+      private: input.privacy ? 1 : 0,
+      auto_renew: input.autoRenew ? 1 : 0,
+    };
+    (input.nameservers ?? []).forEach((ns, i) => {
+      query[`ns${i + 1}`] = ns;
+    });
+    const res = await this.call('registerDomain', query, opts);
+    return statusResult(res);
+  }
+
+  /**
+   * Transfers a domain in with its EPP auth code. `private`/`auto_renew` are
+   * honored; contacts come from the account default. Spends real money; not
+   * exercised against a live account.
+   */
+  override async transferIn(
+    domainName: string,
+    input: TransferDomainInput,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const query: Record<string, string | number> = {
+      domain: domainName,
+      auth: input.authCode,
+      private: input.privacy ? 1 : 0,
+      auto_renew: input.autoRenew ? 1 : 0,
+    };
+    const res = await this.call('transferDomain', query, opts);
+    return statusResult(res);
+  }
 }
 
 // safely stringify an unknown XML value: strings/numbers/booleans pass through
@@ -425,6 +591,33 @@ function text(v: unknown): string {
   if (typeof v === 'string') return v.trim();
   if (typeof v === 'number' || typeof v === 'boolean') return String(v);
   return '';
+}
+
+// a stable identity key for a DNS record: type + relative host (apex as "@") +
+// value, plus the MX distance (priority) which is part of an MX record's identity
+function dnsKey(type: string, host: string, value: string, distance: number | undefined): string {
+  const t = type.toUpperCase();
+  const dist = t === 'MX' && Number.isFinite(distance) ? String(distance) : '';
+  return [t, host || '@', value, dist].join(' ');
+}
+
+// map the normalized Contact to NameSilo's contactAdd parameters (fn/ln/ad/…)
+function toNsContactParams(c: Contact): Record<string, string | number> {
+  const params: Record<string, string | number> = {
+    fn: c.firstName,
+    ln: c.lastName,
+    ad: c.address1,
+    cy: c.city,
+    st: c.state ?? '',
+    zp: c.postalCode,
+    ct: c.country,
+    em: c.email,
+    ph: c.phone,
+  };
+  if (c.organization) params.cp = c.organization;
+  if (c.address2) params.ad2 = c.address2;
+  if (c.fax) params.fx = c.fax;
+  return params;
 }
 
 // parse an unknown price-ish value into a positive number, or undefined

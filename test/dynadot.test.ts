@@ -376,4 +376,68 @@ describe('Dynadot provider (RESTful v2)', () => {
     });
     expect(res.success).toBe(true);
   });
+
+  it('updateContacts creates a contact and PUTs role ids, preserving unspecified roles', async () => {
+    const dy = dynadot();
+    let created = 0;
+    const calls = stubHttp(dy, (req: RequestConfig) => {
+      const path = String(req.path);
+      if (req.method === 'POST' && path === '/restful/v2/contacts') {
+        return ok({ contact_id: 5001 + created++ });
+      }
+      if (
+        path === '/restful/v2/domains/example.com' &&
+        (req.method === undefined || req.method === 'GET')
+      ) {
+        return ok({
+          domain_info: {
+            registrant_contact_id: 1,
+            admin_contact_id: 2,
+            technical_contact_id: 3,
+            billing_contact_id: 4,
+          },
+        });
+      }
+      return ok({});
+    });
+
+    const res = await dy.updateContacts('example.com', {
+      registrant: {
+        firstName: 'Jane',
+        lastName: 'Doe',
+        organization: 'Acme',
+        email: 'jane@example.com',
+        phone: '+1.4805551234',
+        address1: '123 Main St',
+        city: 'Phoenix',
+        state: 'AZ',
+        postalCode: '85001',
+        country: 'US',
+      },
+    });
+    expect(res.success).toBe(true);
+
+    // the created contact carries a joined name + split phone
+    const post = calls.find(c => c.method === 'POST' && String(c.path) === '/restful/v2/contacts');
+    expect((post?.body as { contact: Record<string, unknown> }).contact).toMatchObject({
+      name: 'Jane Doe',
+      phone_cc: '1',
+      phone_number: '4805551234',
+      organization: 'Acme',
+      state: 'AZ',
+    });
+
+    // the PUT sets the new registrant id and preserves admin/tech/billing
+    const put = calls.find(
+      c => c.method === 'PUT' && String(c.path) === '/restful/v2/domains/example.com/contacts'
+    );
+    expect(put?.body).toEqual({
+      registrant_contact_id: 5001,
+      admin_contact_id: 2,
+      technical_contact_id: 3,
+      billing_contact_id: 4,
+    });
+
+    await expect(dy.updateContacts('example.com', {})).rejects.toThrow(/at least one/i);
+  });
 });

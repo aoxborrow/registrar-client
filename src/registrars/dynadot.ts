@@ -567,6 +567,68 @@ export class DynadotRegistrar extends BaseRegistrar {
   }
 
   /**
+   * Updates contact roles. Dynadot contacts are account-level records referenced
+   * by id, so this creates a contact per supplied role (`POST /contacts`) and
+   * points the domain's roles at the new ids (`PUT /domains/{d}/contacts`). Roles
+   * not supplied keep their current contact id (read first and passed through, as
+   * the PUT sets all four). Identical contacts across roles are created once.
+   * Verified end-to-end in the sandbox.
+   */
+  override async updateContacts(
+    domainName: string,
+    contacts: ContactSet,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    if (!contacts.registrant && !contacts.admin && !contacts.tech && !contacts.billing) {
+      throw new Error(`${this.name}: updateContacts requires at least one contact role`);
+    }
+    // read current ids so unspecified roles are preserved (the PUT sets all four)
+    const info = (
+      await this.read<{ domain_info?: V2DomainInfo }>(
+        'GET',
+        `/restful/v2/domains/${encodeURIComponent(domainName)}`,
+        undefined,
+        opts
+      )
+    ).domain_info;
+    if (!info) throw new NotFoundError(`Dynadot: domain '${domainName}' not found`);
+
+    const created = new Map<Contact, number>();
+    const idFor = async (c: Contact): Promise<number> => {
+      let id = created.get(c);
+      if (id == null) {
+        const data = await this.read<{ contact_id: number }>(
+          'POST',
+          '/restful/v2/contacts',
+          { contact: toDynadotContact(c) },
+          opts
+        );
+        id = data.contact_id;
+        created.set(c, id);
+      }
+      return id;
+    };
+
+    const body = {
+      registrant_contact_id: contacts.registrant
+        ? await idFor(contacts.registrant)
+        : info.registrant_contact_id,
+      admin_contact_id: contacts.admin ? await idFor(contacts.admin) : info.admin_contact_id,
+      technical_contact_id: contacts.tech ? await idFor(contacts.tech) : info.technical_contact_id,
+      billing_contact_id: contacts.billing
+        ? await idFor(contacts.billing)
+        : info.billing_contact_id,
+    };
+    return this.mutate(
+      'PUT',
+      `/restful/v2/domains/${encodeURIComponent(domainName)}/contacts`,
+      body,
+      'Contacts updated successfully',
+      opts
+    );
+  }
+
+  /**
    * Replaces the DNS record set via POST /domains/{name}/records. Records split
    * into apex ("main") and subdomain lists, mirroring the read shape; MX priority
    * rides in record_value2. Only generic DNS types are supported. Verified live
@@ -728,6 +790,46 @@ function splitName(name: string): { firstName: string; lastName: string } {
 }
 
 // rejoin a split country code + number as "+cc.number" (e.g. "+1.4805551234")
+// map the normalized Contact to Dynadot's contact shape (name + split phone).
+// The inverse of toContact: joins first/last into `name` and splits the
+// "+cc.number" phone into phone_cc / phone_number.
+function toDynadotContact(c: Contact): Record<string, unknown> {
+  const phone = splitDynadotPhone(c.phone);
+  const contact: Record<string, unknown> = {
+    name: `${c.firstName} ${c.lastName}`.trim(),
+    email: c.email,
+    phone_cc: phone.cc,
+    phone_number: phone.number,
+    address1: c.address1,
+    city: c.city,
+    zip: c.postalCode,
+    country: c.country,
+  };
+  if (c.organization) contact.organization = c.organization;
+  if (c.address2) contact.address2 = c.address2;
+  if (c.state) contact.state = c.state;
+  if (c.fax) {
+    const fax = splitDynadotPhone(c.fax);
+    contact.fax_cc = fax.cc;
+    contact.fax_number = fax.number;
+  }
+  return contact;
+}
+
+// split an international phone ("+1.4805551234") into country code + number,
+// the inverse of joinPhone. Falls back to all digits as the number.
+function splitDynadotPhone(phone: string): { cc: string; number: string } {
+  const trimmed = (phone ?? '').trim();
+  const dot = trimmed.indexOf('.');
+  if (trimmed.startsWith('+') && dot > 1) {
+    return {
+      cc: trimmed.slice(1, dot).replace(/\D/g, ''),
+      number: trimmed.slice(dot + 1).replace(/\D/g, ''),
+    };
+  }
+  return { cc: '', number: trimmed.replace(/\D/g, '') };
+}
+
 function joinPhone(cc: string | number | undefined, num: string | number | undefined): string {
   const number = str(num);
   if (!number) return '';
