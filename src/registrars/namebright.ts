@@ -8,6 +8,7 @@ import type {
   DomainAvailability,
   ListDomainsOptions,
   OperationResult,
+  RegisterDomainInput,
   RegistrarOptions,
   RequestOptions,
   TldPricing,
@@ -26,6 +27,12 @@ interface NbToken {
   access_token?: string;
   token_type?: string;
   expires_in?: number;
+}
+
+// the order returned by purchase/register and purchase/renew
+interface NbOrder {
+  OrderId?: number;
+  TotalPrice?: number;
 }
 
 // a domain record from GET account/domains. The list endpoint does not return
@@ -179,8 +186,11 @@ interface NbAvailability {
  * built from the documented endpoints but NOT live-verified — replacing the
  * nameservers on a live domain has no safe test path.
  *
- * renewDomain / registerDomain / transferIn remain NotImplementedError — they
- * incur charges and were out of scope for verification.
+ * registerDomain / renewDomain use the `purchase/register` and `purchase/renew`
+ * order endpoints. They spend real money (each returns an order with a
+ * `TotalPrice`), so they're built from the documented request shape but NOT
+ * exercised against the live account. transferIn remains NotImplementedError —
+ * NameBright's REST API exposes no transfer-in endpoint.
  */
 export class NameBrightRegistrar extends BaseRegistrar {
   readonly name = 'namebright';
@@ -423,6 +433,59 @@ export class NameBrightRegistrar extends BaseRegistrar {
       `WHOIS privacy ${enabled ? 'enabled' : 'disabled'} successfully`,
       opts
     );
+  }
+
+  /**
+   * Registers a domain via the `purchase/register` order endpoint. NameBright's
+   * request carries only the name + term; nameservers, privacy, auto-renew, and
+   * contacts aren't part of registration (they use account defaults and the
+   * per-flag/nameserver endpoints afterwards). Spends real money — built from the
+   * documented shape, not exercised against the live account.
+   */
+  override registerDomain(
+    domainName: string,
+    input: RegisterDomainInput,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    return this.purchase('register', domainName, input.years ?? 1, 'registered', opts);
+  }
+
+  override renewDomain(
+    domainName: string,
+    years = 1,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    return this.purchase('renew', domainName, years, 'renewed', opts);
+  }
+
+  // POST an order to purchase/{register|renew}. Both take the same body and
+  // return an order (OrderId + TotalPrice); a returned OrderId signals success.
+  private async purchase(
+    operation: 'register' | 'renew',
+    domainName: string,
+    years: number,
+    verb: string,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    try {
+      const order = await this.authed<NbOrder>(
+        {
+          method: 'POST',
+          path: `purchase/${operation}`,
+          body: { DomainName: domainName, Years: years, CategoryId: 0, CategoryName: null },
+        },
+        opts
+      );
+      if (order?.OrderId == null) {
+        return { success: false, message: `NameBright: ${operation} returned no order id` };
+      }
+      return {
+        success: true,
+        message: `Domain ${domainName} ${verb} successfully (order ${order.OrderId})`,
+      };
+    } catch (error) {
+      return { success: false, message: toRegistrarError(error).message };
+    }
   }
 
   /**

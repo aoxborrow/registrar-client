@@ -62,24 +62,37 @@ describe('Namecheap provider', () => {
     expect(results).toHaveLength(120);
   });
 
-  it('getDomain reads getInfo: status, dates, WhoisGuard privacy', async () => {
+  it('getDomain reads getInfo for status/dates/privacy and the IsLocked flag from getList', async () => {
     const nc = namecheap();
-    stubXml(nc, () =>
-      ok(
-        `<DomainGetInfoResult Status="Locked" DomainName="example.com">
+    // Status is "Ok" while the domain IS transfer-locked — proving `locked` comes
+    // from getList's IsLocked flag, not from the coarse getInfo Status string.
+    const calls = stubXml(nc, req => {
+      const command = String(req.query?.Command ?? '');
+      if (command === 'namecheap.domains.getList') {
+        return ok(
+          `<DomainGetListResult>
+             <Domain ID="1" Name="example.com" IsLocked="true" AutoRenew="false" WhoisGuard="ENABLED" Expires="09/05/2027"/>
+           </DomainGetListResult>`
+        );
+      }
+      return ok(
+        `<DomainGetInfoResult Status="Ok" DomainName="example.com">
            <DomainDetails><CreatedDate>09/05/2016</CreatedDate><ExpiredDate>09/05/2027</ExpiredDate></DomainDetails>
            <Whoisguard Enabled="True"><ID>123</ID></Whoisguard>
          </DomainGetInfoResult>`
-      )
-    );
+      );
+    });
     const domain = await nc.getDomain('example.com');
     expect(domain).toMatchObject({
       domainName: 'example.com',
-      status: 'locked',
+      status: 'ok',
       locked: true,
       privacy: true,
     });
     expect(domain.expirationDate?.getFullYear()).toBe(2027);
+    // it consulted getList (SearchTerm = SLD) for the lock flag
+    const listCall = calls.find(c => c.query?.Command === 'namecheap.domains.getList');
+    expect(listCall?.query).toMatchObject({ SearchTerm: 'example' });
   });
 
   it('getPricing reads 1-year register/renew/transfer from users.getPricing', async () => {
@@ -315,10 +328,9 @@ describe('Namecheap provider', () => {
     });
   });
 
-  it('leaves autoRenew/privacy throwing NotImplementedError', async () => {
+  it('leaves setAutoRenew throwing NotImplementedError (no public API command)', async () => {
     const nc = namecheap();
     await expect(nc.setAutoRenew('example.com', true)).rejects.toBeInstanceOf(NotImplementedError);
-    await expect(nc.setPrivacy('example.com', true)).rejects.toBeInstanceOf(NotImplementedError);
   });
 
   it('getEmailForwarding maps <Forward mailbox> elements and drops blanks', async () => {
@@ -422,5 +434,63 @@ describe('Namecheap provider', () => {
       Address2: 'https://example.org',
     });
     expect(setQ).not.toHaveProperty('Address3');
+  });
+
+  it('setPrivacy disables WhoisGuard using the id from getInfo', async () => {
+    const nc = namecheap();
+    const calls = stubXml(nc, req => {
+      if (req.query?.Command === 'namecheap.domains.getInfo') {
+        return ok(
+          `<DomainGetInfoResult Status="Ok" DomainName="example.com">
+             <Whoisguard Enabled="True"><ID>555</ID></Whoisguard>
+           </DomainGetInfoResult>`
+        );
+      }
+      return ok(`<DomainPrivacyDisableResult Domain="example.com" IsSuccess="true"/>`);
+    });
+    const res = await nc.setPrivacy('example.com', false);
+    expect(res.success).toBe(true);
+    const disable = calls.find(c => c.query?.Command === 'namecheap.whoisguard.disable');
+    expect(disable?.query).toMatchObject({ WhoisguardID: '555' });
+  });
+
+  it('setPrivacy enables WhoisGuard with the registrant email as ForwardedToEmail', async () => {
+    const nc = namecheap();
+    const calls = stubXml(nc, req => {
+      if (req.query?.Command === 'namecheap.domains.getInfo') {
+        return ok(
+          `<DomainGetInfoResult Status="Ok" DomainName="example.com">
+             <Whoisguard Enabled="False"><ID>777</ID></Whoisguard>
+           </DomainGetInfoResult>`
+        );
+      }
+      if (req.query?.Command === 'namecheap.domains.getContacts') {
+        return ok(
+          `<DomainContactsResult Domain="example.com">
+             <Registrant><FirstName>Ada</FirstName><EmailAddress>ada@example.com</EmailAddress></Registrant>
+           </DomainContactsResult>`
+        );
+      }
+      return ok(`<DomainPrivacyEnableResult Domain="example.com" IsSuccess="true"/>`);
+    });
+    const res = await nc.setPrivacy('example.com', true);
+    expect(res.success).toBe(true);
+    const enable = calls.find(c => c.query?.Command === 'namecheap.whoisguard.enable');
+    expect(enable?.query).toMatchObject({
+      WhoisguardID: '777',
+      ForwardedToEmail: 'ada@example.com',
+    });
+  });
+
+  it('setPrivacy throws when the domain has no WhoisGuard allotted', async () => {
+    const nc = namecheap();
+    stubXml(nc, () =>
+      ok(
+        `<DomainGetInfoResult Status="Ok" DomainName="example.com">
+           <Whoisguard Enabled="NotAlloted"><ID>0</ID></Whoisguard>
+         </DomainGetInfoResult>`
+      )
+    );
+    await expect(nc.setPrivacy('example.com', true)).rejects.toThrow(/WhoisGuard/i);
   });
 });

@@ -370,4 +370,44 @@ describe('NameBright provider', () => {
       'PUT account/domains/example.com/nameservers/ns2.example.net',
     ]);
   });
+
+  it('registerDomain POSTs purchase/register with DomainName + Years and reports the order', async () => {
+    const nb = namebright();
+    const calls = stubHttp(nb, req => {
+      if (req.path.includes('auth/token')) return { access_token: 't', expires_in: 1800 };
+      return { OrderId: 42, TotalPrice: 16.06 };
+    });
+    const res = await nb.registerDomain('example.com', {
+      contacts: { registrant: {} as never },
+      years: 2,
+    });
+    expect(res.success).toBe(true);
+    expect(res.message).toMatch(/order 42/);
+    const post = calls.find(c => c.path === 'purchase/register');
+    expect(post).toMatchObject({
+      method: 'POST',
+      body: { DomainName: 'example.com', Years: 2, CategoryId: 0 },
+    });
+  });
+
+  it('renewDomain POSTs purchase/renew with the requested term', async () => {
+    const nb = namebright();
+    const calls = stubHttp(nb, req => {
+      if (req.path.includes('auth/token')) return { access_token: 't', expires_in: 1800 };
+      return { OrderId: 99, TotalPrice: 12 };
+    });
+    const res = await nb.renewDomain('example.com', 3);
+    expect(res.success).toBe(true);
+    const post = calls.find(c => c.path === 'purchase/renew');
+    expect(post).toMatchObject({ method: 'POST', body: { DomainName: 'example.com', Years: 3 } });
+  });
+
+  it('registerDomain fails when the order has no OrderId', async () => {
+    const nb = namebright();
+    stubHttp(nb, req =>
+      req.path.includes('auth/token') ? { access_token: 't', expires_in: 1800 } : {}
+    );
+    const res = await nb.registerDomain('example.com', { contacts: { registrant: {} as never } });
+    expect(res.success).toBe(false);
+  });
 });

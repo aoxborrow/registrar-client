@@ -341,4 +341,181 @@ describe('Gandi provider', () => {
     const post = calls.find(c => c.method === 'POST');
     expect(post?.body).toEqual({ source: 'new', destinations: ['c@z.com'] });
   });
+
+  it('setAutoRenew PATCHes the /autorenew subresource', async () => {
+    const g = gandi();
+    const calls = stubHttp(g, () => ({}));
+    await g.setAutoRenew('example.com', true);
+    expect(calls[0]).toMatchObject({
+      method: 'PATCH',
+      path: '/domain/domains/example.com/autorenew',
+      body: { enabled: true },
+    });
+  });
+
+  it('setPrivacy PATCHes the owner contact data_obfuscated flag', async () => {
+    const g = gandi();
+    const calls = stubHttp(g, () => ({}));
+    await g.setPrivacy('example.com', false);
+    expect(calls[0]).toMatchObject({
+      method: 'PATCH',
+      path: '/domain/domains/example.com/contacts',
+      body: { owner: { data_obfuscated: false } },
+    });
+  });
+
+  it('setDnsRecords PUTs LiveDNS rrsets, grouping by name+type and re-encoding MX/SRV', async () => {
+    const g = gandi();
+    const calls = stubHttp(g, () => ({}));
+    await g.setDnsRecords('example.com', [
+      { type: 'A', name: '@', value: '1.1.1.1', ttl: 3600 },
+      { type: 'A', name: '@', value: '2.2.2.2', ttl: 3600 }, // same rrset -> grouped
+      { type: 'MX', name: '@', value: 'mail.example.com.', priority: 10, ttl: 3600 },
+      {
+        type: 'SRV',
+        name: '_sip._tcp',
+        value: 'sip.example.com.',
+        priority: 5,
+        weight: 20,
+        port: 5060,
+        ttl: 3600,
+      },
+    ]);
+    expect(calls[0]).toMatchObject({ method: 'PUT', path: '/livedns/domains/example.com/records' });
+    const items = (
+      calls[0].body as {
+        items: {
+          rrset_name: string;
+          rrset_type: string;
+          rrset_ttl?: number;
+          rrset_values: string[];
+        }[];
+      }
+    ).items;
+    const a = items.find(i => i.rrset_type === 'A');
+    expect(a).toMatchObject({
+      rrset_name: '@',
+      rrset_ttl: 3600,
+      rrset_values: ['1.1.1.1', '2.2.2.2'],
+    });
+    expect(items.find(i => i.rrset_type === 'MX')?.rrset_values).toEqual(['10 mail.example.com.']);
+    expect(items.find(i => i.rrset_type === 'SRV')?.rrset_values).toEqual([
+      '5 20 5060 sip.example.com.',
+    ]);
+  });
+
+  it('updateContacts PATCHes contacts, mapping registrant->owner and billing->bill', async () => {
+    const g = gandi();
+    const calls = stubHttp(g, () => ({}));
+    const contact = {
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      organization: 'Analytical Engines',
+      email: 'ada@example.com',
+      phone: '+44.2071234567',
+      address1: '1 Byron Way',
+      city: 'London',
+      postalCode: 'EC1',
+      country: 'GB',
+    };
+    await g.updateContacts('example.com', { registrant: contact, billing: contact });
+    expect(calls[0]).toMatchObject({
+      method: 'PATCH',
+      path: '/domain/domains/example.com/contacts',
+    });
+    const body = calls[0].body as {
+      owner?: Record<string, unknown>;
+      bill?: Record<string, unknown>;
+    };
+    expect(body.owner).toMatchObject({
+      given: 'Ada',
+      family: 'Lovelace',
+      orgname: 'Analytical Engines',
+      type: 1,
+      country: 'GB',
+    });
+    expect(body.bill).toBeDefined();
+  });
+
+  it('registerDomain POSTs fqdn/duration/owner and carries privacy on the owner', async () => {
+    const g = gandi();
+    const calls = stubHttp(g, () => ({}));
+    await g.registerDomain('example.com', {
+      contacts: {
+        registrant: {
+          firstName: 'Ada',
+          lastName: 'Lovelace',
+          email: 'ada@example.com',
+          phone: '+44.2071234567',
+          address1: '1 Byron Way',
+          city: 'London',
+          postalCode: 'EC1',
+          country: 'GB',
+        },
+      },
+      years: 2,
+      privacy: true,
+      nameservers: ['ns1.x.net', 'ns2.x.net'],
+    });
+    expect(calls[0]).toMatchObject({ method: 'POST', path: '/domain/domains' });
+    const body = calls[0].body as {
+      fqdn: string;
+      duration: number;
+      owner: Record<string, unknown>;
+      nameservers: string[];
+    };
+    expect(body).toMatchObject({
+      fqdn: 'example.com',
+      duration: 2,
+      nameservers: ['ns1.x.net', 'ns2.x.net'],
+    });
+    expect(body.owner).toMatchObject({ given: 'Ada', type: 0, data_obfuscated: true });
+  });
+
+  it('transferIn POSTs to /transferin with authinfo + owner, requires a registrant', async () => {
+    const g = gandi();
+    const calls = stubHttp(g, () => ({}));
+    await g.transferIn('example.com', {
+      authCode: 'EPP-XYZ',
+      contacts: {
+        registrant: {
+          firstName: 'Ada',
+          lastName: 'Lovelace',
+          email: 'ada@example.com',
+          phone: '+44.2071234567',
+          address1: '1 Byron Way',
+          city: 'London',
+          postalCode: 'EC1',
+          country: 'GB',
+        },
+      },
+    });
+    expect(calls[0]).toMatchObject({ method: 'POST', path: '/domain/transferin/example.com' });
+    expect(calls[0].body).toMatchObject({ fqdn: 'example.com', authinfo: 'EPP-XYZ' });
+    await expect(g.transferIn('example.com', { authCode: 'x' })).rejects.toThrow(/registrant/i);
+  });
+
+  it('lockDomain PATCHes the /status subresource with clientTransferProhibited:true', async () => {
+    const g = gandi();
+    const calls = stubHttp(g, () => ({ message: 'Domain name status change in progress.' }));
+    const res = await g.lockDomain('example.com');
+    expect(res.success).toBe(true);
+    expect(calls[0]).toMatchObject({
+      method: 'PATCH',
+      path: '/domain/domains/example.com/status',
+      body: { clientTransferProhibited: true },
+    });
+  });
+
+  it('unlockDomain PATCHes the /status subresource with clientTransferProhibited:false', async () => {
+    const g = gandi();
+    const calls = stubHttp(g, () => ({ message: 'Domain name status change in progress.' }));
+    const res = await g.unlockDomain('example.com');
+    expect(res.success).toBe(true);
+    expect(calls[0]).toMatchObject({
+      method: 'PATCH',
+      path: '/domain/domains/example.com/status',
+      body: { clientTransferProhibited: false },
+    });
+  });
 });
