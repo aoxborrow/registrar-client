@@ -131,7 +131,10 @@ export class GoDaddyRegistrar extends BaseRegistrar {
   // Beyond core, only domain forwarding. DNSSEC has no dedicated endpoint (DS
   // records go through the generic DNS API), there's no glue-record or email
   // API, and auth-code retrieval and push webhooks aren't confirmed via API.
-  static readonly extendedFeatures: readonly RegistrarFeature[] = [Feature.SetDomainForwarding];
+  static readonly extendedFeatures: readonly RegistrarFeature[] = [
+    Feature.GetDomainForwarding,
+    Feature.SetDomainForwarding,
+  ];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
     super(

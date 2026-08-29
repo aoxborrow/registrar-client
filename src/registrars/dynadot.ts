@@ -167,16 +167,12 @@ export class DynadotRegistrar extends BaseRegistrar {
   // declared but not yet implemented on the v2 transport (extended layer).
   static readonly extendedFeatures: readonly RegistrarFeature[] = [
     Feature.GetAuthCode,
-    Feature.SetDnssec,
-    Feature.GetGlueRecords,
-    Feature.SetGlueRecords,
+    Feature.GetDnssec,
+    Feature.DisableDnssec,
+    Feature.GetEmailForwarding,
     Feature.SetEmailForwarding,
+    Feature.GetDomainForwarding,
     Feature.SetDomainForwarding,
-    Feature.SubscribeWebhooks,
-    Feature.ListOnMarketplace,
-    Feature.PushToAccount,
-    Feature.AppraiseDomain,
-    Feature.ApplyBulkSettings,
   ];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {

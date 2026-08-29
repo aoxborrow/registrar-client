@@ -131,10 +131,9 @@ export class GandiRegistrar extends BaseRegistrar {
   // state as idempotent success.
   static readonly extendedFeatures: readonly RegistrarFeature[] = [
     Feature.GetAuthCode,
-    Feature.SetDnssec,
-    Feature.GetGlueRecords,
-    Feature.SetGlueRecords,
-    Feature.ProvisionMailbox,
+    Feature.GetDnssec,
+    Feature.DisableDnssec,
+    Feature.GetEmailForwarding,
     Feature.SetEmailForwarding,
   ];
 

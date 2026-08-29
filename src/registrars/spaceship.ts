@@ -144,12 +144,7 @@ export class SpaceshipRegistrar extends BaseRegistrar {
   // Modern REST API. Beyond core, auth-code retrieval, glue records (first-class
   // "personal nameservers"), and marketplace listing. No DNSSEC, domain
   // forwarding, or webhooks; Spacemail (email) has no public API.
-  static readonly extendedFeatures: readonly RegistrarFeature[] = [
-    Feature.GetAuthCode,
-    Feature.GetGlueRecords,
-    Feature.SetGlueRecords,
-    Feature.ListOnMarketplace,
-  ];
+  static readonly extendedFeatures: readonly RegistrarFeature[] = [Feature.GetAuthCode];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
     super(

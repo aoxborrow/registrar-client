@@ -158,11 +158,10 @@ export class PorkbunRegistrar extends BaseRegistrar {
   // signed webhooks. No auth-code retrieval; transfer lock and WHOIS-privacy
   // toggles have no write endpoint (privacy is set only at registration).
   static readonly extendedFeatures: readonly RegistrarFeature[] = [
-    Feature.SetDnssec,
-    Feature.GetGlueRecords,
-    Feature.SetGlueRecords,
+    Feature.GetDnssec,
+    Feature.DisableDnssec,
+    Feature.GetDomainForwarding,
     Feature.SetDomainForwarding,
-    Feature.SubscribeWebhooks,
   ];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {

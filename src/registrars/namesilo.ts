@@ -142,10 +142,11 @@ export class NameSiloRegistrar extends BaseRegistrar {
   // forwarding, and domain forwarding. No webhooks (polling only).
   static readonly extendedFeatures: readonly RegistrarFeature[] = [
     Feature.GetAuthCode,
-    Feature.SetDnssec,
-    Feature.GetGlueRecords,
-    Feature.SetGlueRecords,
+    Feature.GetDnssec,
+    Feature.DisableDnssec,
+    Feature.GetEmailForwarding,
     Feature.SetEmailForwarding,
+    Feature.GetDomainForwarding,
     Feature.SetDomainForwarding,
   ];
 

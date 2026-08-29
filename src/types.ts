@@ -230,8 +230,7 @@ export type RegistrarCredentials = Record<string, string>;
 // --- extended-feature payloads ---
 
 // An alias-style email forward: mail sent to `alias`@domain is redirected to
-// `forwardTo`. This is redirect-only forwarding — no real mailbox is provisioned
-// (see the ProvisionMailbox feature for that).
+// `forwardTo`. This is redirect-only forwarding — no real mailbox is provisioned.
 export interface EmailForward {
   // the local part of the source address at the domain, e.g. "hello" for
   // hello@example.com. Where the registrar supports it, "@" or "*" denotes a

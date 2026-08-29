@@ -122,33 +122,31 @@ routes DNS through another API of that vendor, not that it's unsupported.
 
 ### Extended (opt-in; the "declared by" column is what the scan found)
 
-| `Feature`             | Declared by        | Notes                                                          |
-| --------------------- | ------------------ | -------------------------------------------------------------- |
-| `GetAuthCode`         | DY, GA, NS, SP     | transfer-out EPP code; GD/NC gate it behind the dashboard      |
-| `GetDnssec`           | —                  | read counterpart of `SetDnssec` (planned; not yet wired up)    |
-| `SetDnssec`           | DY, GA, NS, PB     | not exposed via API by every registrar; GD only via DS records |
-| `GetGlueRecords`      | DY, GA, NS, PB, SP | read glue / host records                                       |
-| `SetGlueRecords`      | DY, GA, NS, PB, SP | write glue / host records                                      |
-| `GetEmailForwarding`  | NC                 | read counterpart of `SetEmailForwarding`                       |
-| `SetEmailForwarding`  | DY, GA, NC, NS     | alias redirect only — **distinct from a mailbox**              |
-| `ProvisionMailbox`    | GA                 | real hosted mailboxes                                          |
-| `GetDomainForwarding` | NC                 | read counterpart of `SetDomainForwarding`                      |
-| `SetDomainForwarding` | DY, GD, NC, NS, PB | some model it as `URL`/`URL301`/`FRAME` DNS records            |
-| `SubscribeWebhooks`   | DY, PB             | account-level events; most providers are poll-only             |
-| `ListOnMarketplace`   | DY, SP             | aftermarket / marketplace listing                              |
-| `PushToAccount`       | DY                 | instant intra-registrar ownership transfer                     |
-| `AppraiseDomain`      | DY                 | valuation lookup                                               |
-| `ApplyBulkSettings`   | DY                 | Smart Folders                                                  |
+The extended catalog was **pruned to what we intend to build** (2026-08-29).
+Removed entirely: glue records, marketplace listing, account push, appraisal,
+webhooks, mailbox provisioning, and bulk settings. DNSSEC was narrowed from full
+key management to **read-status + disable** (`getDnssec` / `disableDnssec`);
+enabling DNSSEC is out of scope for this library for now.
 
-The "declared by" column is the honest floor from the doc scan — the scan may
-have missed endpoints, and several of these (auth-code, DNSSEC especially) are
-likely broader than shown. As live testing confirms support, providers add the
-feature to `extendedFeatures` (or, if it turns out universal, it's promoted into
-the core contract). Two modeling notes: (1) **email is split** —
-`setEmailForwarding()` (alias redirect) vs `provisionMailbox()` (real mailbox)
-are different capabilities, not one `enableWebmail()`; (2) core `setPrivacy` /
-lock are sometimes "on by policy" rather than a toggle (Gandi, Cloudflare), so
-those setters treat an already-correct state as idempotent success.
+| `Feature`             | Declared by        | Notes                                                      |
+| --------------------- | ------------------ | ---------------------------------------------------------- |
+| `GetAuthCode`         | DY, GA, NS, SP     | transfer-out EPP code; GD/NC gate it behind the dashboard  |
+| `GetDnssec`           | DY, GA, NS, PB     | read whether DNSSEC is enabled (DS / key records)          |
+| `DisableDnssec`       | DY, GA, NS, PB     | turn DNSSEC off; no enable / key management (out of scope) |
+| `GetEmailForwarding`  | DY, GA, NC, NS     | read counterpart of `SetEmailForwarding`                   |
+| `SetEmailForwarding`  | DY, GA, NC, NS     | alias redirect only — **distinct from a mailbox**          |
+| `GetDomainForwarding` | DY, GD, NC, NS, PB | read counterpart of `SetDomainForwarding`                  |
+| `SetDomainForwarding` | DY, GD, NC, NS, PB | some model it as `URL`/`URL301`/`FRAME` DNS records        |
+
+**Implementation status:** only **Namecheap** has built any extended method so
+far (both forwarding pairs). Every other row above is a _declared_ capability —
+`supports()` returns true, but the method isn't wired up yet (auth-code and
+DNSSEC have no method surface on the interface at all). The "declared by" column
+is the honest floor from the doc scan — it may have missed endpoints, and
+auth-code / DNSSEC are likely broader than shown; confirm against live APIs
+before relying on a cell. Modeling note: core `setPrivacy` / lock are sometimes
+"on by policy" rather than a toggle (Gandi, Cloudflare), so those setters treat
+an already-correct state as idempotent success.
 
 ## Discovery mechanism (implemented)
 
@@ -165,7 +163,7 @@ CORE_FEATURES.includes(Feature.GetDnsRecords); // true
 const p = createRegistrar('godaddy', creds);
 p.supports(Feature.RegisterDomain); // true (core)
 p.supports(Feature.SetDomainForwarding); // true (its extended)
-p.supports(Feature.SubscribeWebhooks); // false
+p.supports(Feature.GetAuthCode); // false
 ```
 
 - **`Feature`** — the constant for every capability id (use instead of strings).
@@ -289,6 +287,10 @@ error isolation, so one provider failing never sinks the combined view. `opts`
   `setDnsRecords` (and DNSSEC) stop throwing `NotImplementedError`.
 - **Async operation model**: GoDaddy v3 and Spaceship return `202 + poll`; a
   shared `pollOperation(id)` abstraction would cover both.
+- **Build out the pruned extended catalog**: wire up method surfaces for
+  `getAuthCode` and DNSSEC read/disable (`getDnssec` / `disableDnssec`), and
+  extend the existing email/domain-forwarding surface (built only for Namecheap
+  today) to the other declared providers.
 - **Verify the doc-ambiguous flags** against live sandbox accounts and widen
-  `extendedFeatures` (or core) accordingly: NC auto-renew / glue records, GD
-  auth-code, per-provider DNSSEC and pricing endpoints.
+  `extendedFeatures` (or core) accordingly: NC auto-renew, GD auth-code, and
+  per-provider DNSSEC and pricing endpoints.

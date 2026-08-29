@@ -93,7 +93,7 @@ describe('capabilities / features', () => {
   it('isCoreFeature reflects membership in CORE_FEATURES', () => {
     expect(isCoreFeature(Feature.GetPricing)).toBe(true);
     expect(isCoreFeature(Feature.SetAutoRenew)).toBe(true);
-    expect(isCoreFeature(Feature.SetDnssec)).toBe(false);
+    expect(isCoreFeature(Feature.GetDnssec)).toBe(false);
   });
 
   it('every provider inherits core and its extended features are valid extras', () => {
@@ -125,7 +125,7 @@ describe('capabilities / features', () => {
     expect(gd.features).toEqual(registrars.godaddy.features);
     expect(gd.supports(Feature.RegisterDomain)).toBe(true); // core
     expect(gd.supports(Feature.SetDomainForwarding)).toBe(true); // its extended
-    expect(gd.supports(Feature.SubscribeWebhooks)).toBe(false); // not declared
+    expect(gd.supports(Feature.GetAuthCode)).toBe(false); // not declared
   });
 });
 
