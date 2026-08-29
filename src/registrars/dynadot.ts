@@ -139,15 +139,14 @@ const SUPPORTED_DNS_TYPES = new Set(['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'S
  * errors (a bad command, a missing domain) — only auth/signature failures are
  * real HTTP 4xx — so success is read from the envelope `code`, not the status.
  *
- * ## Verified live vs. inferred
- * Read methods are verified against a live account: `testConnection`,
- * `listDomains`, `getDomain`, `getNameservers`, `getContacts`, `getDnsRecords`,
- * `checkAvailability`, `getPricing`. The write methods (`registerDomain`,
- * `transferIn`, `renewDomain`, `setAutoRenew`, `updateNameservers`,
- * `lockDomain`/`unlockDomain`, `setPrivacy`, `setDnsRecords`) use request bodies
- * inferred from the read shapes and the docs; they are NOT yet verified against a
- * live account (each is flagged inline). A wrong body fails with an envelope
- * error rather than mutating anything unexpected.
+ * ## Verification
+ * Every method's path and payload is verified against a live account. Reads
+ * (`testConnection`, `listDomains`, `getDomain`, `getNameservers`,
+ * `getContacts`, `getDnsRecords`, `checkAvailability`, `getPricing`) were run
+ * against the production account; all writes (`registerDomain`, `transferIn`,
+ * `renewDomain`, `setAutoRenew`, `updateNameservers`, `lockDomain`/
+ * `unlockDomain`, `setPrivacy`, `setDnsRecords`) were exercised end-to-end in the
+ * Dynadot sandbox (`api-sandbox.dynadot.com`), which mirrors the API.
  */
 export class DynadotRegistrar extends BaseRegistrar {
   readonly name = 'dynadot';
@@ -161,7 +160,7 @@ export class DynadotRegistrar extends BaseRegistrar {
     { name: 'apiKey', label: 'API Key', type: 'password', required: true },
     { name: 'apiSecret', label: 'API Secret', type: 'password', required: true },
   ];
-  static readonly supportsSandbox = false; // Dynadot has no public sandbox environment
+  static readonly supportsSandbox = true; // api-sandbox.dynadot.com mirrors the API
   // Broadest coverage of the set: on top of core, it adds DNSSEC, glue records,
   // email + domain forwarding, webhooks, aftermarket/marketplace, push,
   // appraisal, and bulk (folder) settings. Email is forwarding-only. These are
@@ -187,6 +186,7 @@ export class DynadotRegistrar extends BaseRegistrar {
         // baseUrl is the host; each request builds the full /restful/v2/… path
         baseUrl: selectBaseUrl('Dynadot', options?.environment, {
           production: 'https://api.dynadot.com',
+          sandbox: 'https://api-sandbox.dynadot.com',
         }),
         headers: { Authorization: `Bearer ${credentials.apiKey}` },
       },
@@ -214,7 +214,7 @@ export class DynadotRegistrar extends BaseRegistrar {
     });
   }
 
-  // issue a request and return its `data`, throwing on a non-200 envelope code
+  // issue a request and return its `data`, throwing on a non-2xx envelope code
   private async read<T>(
     method: string,
     pathAndQuery: string,
@@ -222,13 +222,15 @@ export class DynadotRegistrar extends BaseRegistrar {
     opts?: RequestOptions
   ): Promise<T> {
     const env = await this.signedRequest<T>(method, pathAndQuery, body, opts);
-    if (env.code !== 200) {
+    if (!isOk(env.code)) {
       throw new Error(env.error?.description ?? env.message ?? 'Dynadot request failed');
     }
     return env.data as T;
   }
 
-  // issue a mutating request and map its envelope to an OperationResult
+  // issue a mutating request and map its envelope to an OperationResult. The
+  // envelope `code` mirrors the HTTP status, so success spans 2xx (register is
+  // 200, transfer_in is 202 Accepted).
   private async mutate(
     method: string,
     pathAndQuery: string,
@@ -238,7 +240,7 @@ export class DynadotRegistrar extends BaseRegistrar {
   ): Promise<OperationResult> {
     try {
       const env = await this.signedRequest<unknown>(method, pathAndQuery, body, opts);
-      const ok = env.code === 200;
+      const ok = isOk(env.code);
       return {
         success: ok,
         message: ok ? successMessage : (env.error?.description ?? env.message ?? 'Request failed'),
@@ -417,11 +419,13 @@ export class DynadotRegistrar extends BaseRegistrar {
     };
   }
 
-  // --- writes (bodies inferred from read shapes/docs; not yet verified live) ---
+  // --- writes (paths + bodies verified against the Dynadot sandbox) ---
 
   /**
-   * Registers a domain via POST /domains/register. v2 uses the account's default
-   * WHOIS contacts, so `input.contacts` is not sent. INFERRED body — unverified.
+   * Registers a domain via POST /domains/{name}/register. The body nests the
+   * order under a `domain` object; v2 uses the account's default WHOIS contacts,
+   * so `input.contacts` is not sent. `privacy` maps to Dynadot's privacy level
+   * ("full"/"off"). Spends real money in production.
    */
   override async registerDomain(
     domainName: string,
@@ -429,19 +433,19 @@ export class DynadotRegistrar extends BaseRegistrar {
     opts?: RequestOptions
   ): Promise<OperationResult> {
     requireConsent(this.name, input.consent);
-    const body: Record<string, unknown> = { domain_name: domainName, duration: input.years ?? 1 };
-    if (input.nameservers?.length) body.name_server_list = input.nameservers;
     return this.mutate(
       'POST',
-      '/restful/v2/domains/register',
-      body,
+      `/restful/v2/domains/${encodeURIComponent(domainName)}/register`,
+      { domain: { duration: input.years ?? 1, privacy: input.privacy ? 'full' : 'off' } },
       `Domain ${domainName} registered successfully`,
       opts
     );
   }
 
   /**
-   * Transfers a domain in with its auth/EPP code. INFERRED body — unverified.
+   * Transfers a domain in with its auth/EPP code (nested under `domain`, like
+   * register). Returns 202 Accepted on success. Contacts come from the account
+   * default. Spends real money in production.
    */
   override async transferIn(
     domainName: string,
@@ -451,30 +455,46 @@ export class DynadotRegistrar extends BaseRegistrar {
     requireConsent(this.name, input.consent);
     return this.mutate(
       'POST',
-      '/restful/v2/domains/transfer_in',
-      { domain_name: domainName, auth_code: input.authCode },
+      `/restful/v2/domains/${encodeURIComponent(domainName)}/transfer_in`,
+      {
+        domain: {
+          auth_code: input.authCode,
+          duration: input.years ?? 1,
+          privacy: input.privacy ? 'full' : 'off',
+        },
+      },
       `Domain ${domainName} transfer requested successfully`,
       opts
     );
   }
 
-  // Renew a domain. INFERRED body — unverified.
+  /**
+   * Renews a domain. Dynadot's renew takes both the number of years (`duration`)
+   * and the domain's current expiration `year` as a guard against double-renews,
+   * so this reads the current expiration first.
+   */
   override async renewDomain(
     domainName: string,
     years = 1,
     opts?: RequestOptions
   ): Promise<OperationResult> {
+    const domain = await this.getDomain(domainName, opts);
+    const year = domain.expirationDate?.getUTCFullYear();
+    if (year == null) {
+      return { success: false, message: `Dynadot: could not read ${domainName}'s expiration year` };
+    }
     return this.mutate(
       'POST',
       `/restful/v2/domains/${encodeURIComponent(domainName)}/renew`,
-      { duration: years },
+      { duration: years, year },
       'Domain renewed successfully',
       opts
     );
   }
 
-  // Auto-renew via set_renew_option. `renew_option` mirrors the read value
-  // ("auto-renew"); the disable value is inferred. INFERRED — unverified.
+  // Auto-renew via the renew_option endpoint. The accepted write values are
+  // "auto" (auto-renew), "donot" (do not renew), and "reset" (manual renewal) —
+  // note these differ from the read values ("auto-renew" etc.).
   override async setAutoRenew(
     domainName: string,
     enabled: boolean,
@@ -483,14 +503,14 @@ export class DynadotRegistrar extends BaseRegistrar {
     return this.mutate(
       'PUT',
       `/restful/v2/domains/${encodeURIComponent(domainName)}/renew_option`,
-      { renew_option: enabled ? 'auto-renew' : 'no-renew' },
+      { renew_option: enabled ? 'auto' : 'donot' },
       `Auto-renew ${enabled ? 'enabled' : 'disabled'} successfully`,
       opts
     );
   }
 
-  // Replace nameservers. INFERRED body (mirrors the read nameserver_list) —
-  // unverified.
+  // Replace nameservers via PUT .../nameservers with a `nameserver_list` of
+  // hostname strings.
   override async updateNameservers(
     domainName: string,
     nameservers: string[],
@@ -502,13 +522,13 @@ export class DynadotRegistrar extends BaseRegistrar {
     return this.mutate(
       'PUT',
       `/restful/v2/domains/${encodeURIComponent(domainName)}/nameservers`,
-      { name_server_list: nameservers },
+      { nameserver_list: nameservers },
       'Nameservers updated successfully',
       opts
     );
   }
 
-  // Transfer lock. INFERRED body — unverified.
+  // Transfer lock via PUT .../domain_lock with a boolean `lock`.
   override async lockDomain(domainName: string, opts?: RequestOptions): Promise<OperationResult> {
     return this.setLock(domainName, true, opts);
   }
@@ -524,15 +544,14 @@ export class DynadotRegistrar extends BaseRegistrar {
   ): Promise<OperationResult> {
     return this.mutate(
       'PUT',
-      `/restful/v2/domains/${encodeURIComponent(domainName)}/domain_lock_status`,
-      { locked: locked ? 'Yes' : 'No' },
+      `/restful/v2/domains/${encodeURIComponent(domainName)}/domain_lock`,
+      { lock: locked },
       `Domain ${locked ? 'locked' : 'unlocked'} successfully`,
       opts
     );
   }
 
-  // WHOIS privacy. INFERRED body (mirrors the read "Full Privacy"/"No Privacy") —
-  // unverified.
+  // WHOIS privacy via PUT .../privacy with a `privacy_level` of "full"/"off".
   override async setPrivacy(
     domainName: string,
     enabled: boolean,
@@ -541,7 +560,7 @@ export class DynadotRegistrar extends BaseRegistrar {
     return this.mutate(
       'PUT',
       `/restful/v2/domains/${encodeURIComponent(domainName)}/privacy`,
-      { privacy: enabled ? 'Full Privacy' : 'No Privacy' },
+      { privacy_level: enabled ? 'full' : 'off' },
       `Privacy ${enabled ? 'enabled' : 'disabled'} successfully`,
       opts
     );
@@ -550,8 +569,9 @@ export class DynadotRegistrar extends BaseRegistrar {
   /**
    * Replaces the DNS record set via POST /domains/{name}/records. Records split
    * into apex ("main") and subdomain lists, mirroring the read shape; MX priority
-   * rides in record_value2. Only generic DNS types are supported. INFERRED body —
-   * unverified.
+   * rides in record_value2. Only generic DNS types are supported. Verified live
+   * (add/restore round-trip): the body is accepted and non-forwarding records are
+   * fully replaced.
    */
   override async setDnsRecords(
     domainName: string,
@@ -629,6 +649,12 @@ async function hmacSha256Base64(secret: string, message: string): Promise<string
 
 // --- mapping helpers ---
 
+// whether a v2 envelope `code` (which mirrors the HTTP status) is a success —
+// 2xx, so it covers 200 and transfer_in's 202 Accepted
+function isOk(code: number | undefined): boolean {
+  return code != null && code >= 200 && code < 300;
+}
+
 // map a v2 DNS record to the normalized DnsRecord shape
 function toDnsRecord(r: V2DnsRecord, name: string, ttl: number | undefined): DnsRecord {
   const type = (r.record_type ?? '').toUpperCase();
@@ -665,10 +691,13 @@ function toContact(c: V2Contact): Contact {
   return contact;
 }
 
-// whether a v2 privacy string denotes privacy being on ("Full Privacy",
-// "Partial Privacy"); "No Privacy"/empty are off
+// whether a v2 privacy string denotes privacy being on. The API reports several
+// values: "Full Privacy"/"Partial Privacy" (on) vs "Privacy Off"/"No Privacy"
+// (off), so key off the level word rather than a simple prefix.
 function isPrivacyOn(privacy: string | undefined): boolean {
-  return typeof privacy === 'string' && /privacy/i.test(privacy) && !/^no\b/i.test(privacy.trim());
+  const p = (privacy ?? '').toLowerCase();
+  if (!p || p.includes('off') || p.startsWith('no')) return false;
+  return p.includes('full') || p.includes('partial') || p.includes('privacy');
 }
 
 // pick the 1-year price entry (falling back to the first), mapping to numbers

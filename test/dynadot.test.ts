@@ -279,7 +279,7 @@ describe('Dynadot provider (RESTful v2)', () => {
     ).rejects.toThrow(/not supported/);
   });
 
-  it('updateNameservers PUTs name_server_list and enforces the 2-13 count', async () => {
+  it('updateNameservers PUTs nameserver_list and enforces the 2-13 count', async () => {
     const dy = dynadot();
     const calls = stubHttp(dy, () => ok({}));
     const res = await dy.updateNameservers('example.com', ['ns1.x.com', 'ns2.x.com']);
@@ -287,47 +287,55 @@ describe('Dynadot provider (RESTful v2)', () => {
     expect(calls[0]).toMatchObject({
       method: 'PUT',
       path: '/restful/v2/domains/example.com/nameservers',
-      body: { name_server_list: ['ns1.x.com', 'ns2.x.com'] },
+      body: { nameserver_list: ['ns1.x.com', 'ns2.x.com'] },
     });
     await expect(dy.updateNameservers('example.com', ['only1.x.com'])).rejects.toThrow(/2-13/);
   });
 
-  it('lock/unlock and setPrivacy PUT the expected status bodies', async () => {
+  it('lock/unlock PUT a boolean lock; setPrivacy PUTs a privacy_level', async () => {
     const dy = dynadot();
     const calls = stubHttp(dy, () => ok({}));
     await dy.lockDomain('example.com');
     await dy.unlockDomain('example.com');
     await dy.setPrivacy('example.com', true);
+    await dy.setPrivacy('example.com', false);
     expect(calls[0]).toMatchObject({
       method: 'PUT',
-      path: '/restful/v2/domains/example.com/domain_lock_status',
-      body: { locked: 'Yes' },
+      path: '/restful/v2/domains/example.com/domain_lock',
+      body: { lock: true },
     });
-    expect(calls[1].body).toEqual({ locked: 'No' });
+    expect(calls[1].body).toEqual({ lock: false });
     expect(calls[2]).toMatchObject({
       path: '/restful/v2/domains/example.com/privacy',
-      body: { privacy: 'Full Privacy' },
+      body: { privacy_level: 'full' },
     });
+    expect(calls[3].body).toEqual({ privacy_level: 'off' });
   });
 
-  it('setAutoRenew and renewDomain hit the right endpoints', async () => {
+  it('setAutoRenew PUTs renew_option; renewDomain reads the exp year then POSTs duration+year', async () => {
     const dy = dynadot();
-    const calls = stubHttp(dy, () => ok({}));
+    const calls = stubHttp(dy, req =>
+      req.method === 'GET'
+        ? ok({ domain_info: { domain_name: 'example.com', expiration_date: 1811376748000 } })
+        : ok({})
+    );
     await dy.setAutoRenew('example.com', true);
     await dy.renewDomain('example.com', 2);
     expect(calls[0]).toMatchObject({
       method: 'PUT',
       path: '/restful/v2/domains/example.com/renew_option',
-      body: { renew_option: 'auto-renew' },
+      body: { renew_option: 'auto' },
     });
-    expect(calls[1]).toMatchObject({
+    // renew first GETs the domain (for its expiration year), then POSTs the renew
+    expect(calls[1]).toMatchObject({ method: 'GET', path: '/restful/v2/domains/example.com' });
+    expect(calls[2]).toMatchObject({
       method: 'POST',
       path: '/restful/v2/domains/example.com/renew',
-      body: { duration: 2 },
+      body: { duration: 2, year: 2027 },
     });
   });
 
-  it('registerDomain/transferIn require consent and POST the v2 bodies', async () => {
+  it('registerDomain/transferIn require consent and POST the nested v2 bodies', async () => {
     const dy = dynadot();
     const calls = stubHttp(dy, () => ok({}));
 
@@ -340,21 +348,32 @@ describe('Dynadot provider (RESTful v2)', () => {
 
     const reg = await dy.registerDomain('example.com', {
       years: 2,
+      privacy: true,
       contacts: {},
       consent: { agreedBy: 'user' },
     });
     expect(reg.success).toBe(true);
     expect(calls.at(-1)).toMatchObject({
       method: 'POST',
-      path: '/restful/v2/domains/register',
-      body: { domain_name: 'example.com', duration: 2 },
+      path: '/restful/v2/domains/example.com/register',
+      body: { domain: { duration: 2, privacy: 'full' } },
     });
 
     await dy.transferIn('example.com', { authCode: 'EPP1', consent: { agreedBy: 'user' } });
     expect(calls.at(-1)).toMatchObject({
       method: 'POST',
-      path: '/restful/v2/domains/transfer_in',
-      body: { domain_name: 'example.com', auth_code: 'EPP1' },
+      path: '/restful/v2/domains/example.com/transfer_in',
+      body: { domain: { auth_code: 'EPP1', duration: 1, privacy: 'off' } },
     });
+  });
+
+  it('treats a 202 Accepted envelope (transfer_in) as success', async () => {
+    const dy = dynadot();
+    stubHttp(dy, () => ({ code: 202, message: 'Accepted' }));
+    const res = await dy.transferIn('example.com', {
+      authCode: 'EPP1',
+      consent: { agreedBy: 'user' },
+    });
+    expect(res.success).toBe(true);
   });
 });
