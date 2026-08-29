@@ -7,6 +7,8 @@ import type {
   DnssecStatus,
   Domain,
   DomainAvailability,
+  DomainForward,
+  DomainForwardType,
   DsRecord,
   EmailForward,
   ListDomainsOptions,
@@ -125,6 +127,28 @@ interface GandiForward {
   destinations?: string[];
 }
 
+// a web-forwarding (URL redirect) entry from GET
+// /v5/domain/domains/{fqdn}/webredirs. `host` is the full FQDN of the source
+// subdomain; `type` is Gandi's redirect kind (http301/http302/cloak).
+interface GandiWebredir {
+  host?: string;
+  type?: string;
+  url?: string;
+  protocol?: string;
+}
+
+// map our DomainForwardType to Gandi's webredir `type`, and back.
+const GANDI_FORWARD_TYPE: Record<DomainForwardType, string> = {
+  permanent: 'http301',
+  redirect: 'http302',
+  frame: 'cloak',
+};
+const GANDI_TYPE_TO_FORWARD: Record<string, DomainForwardType> = {
+  http301: 'permanent',
+  http302: 'redirect',
+  cloak: 'frame',
+};
+
 /**
  * Gandi.net Registrar
  * API docs: https://api.gandi.net/docs/
@@ -148,15 +172,18 @@ export class GandiRegistrar extends BaseRegistrar {
   // Gandi's v5 API offers a sandbox at api.sandbox.gandi.net (separate account)
   static readonly supportsSandbox = true;
   // On top of core: transfer-out auth code (`authinfo`), DNSSEC read/disable
-  // (LiveDNS keys), and email forwarding. Note core `setPrivacy` is
-  // automatic/GDPR-driven on Gandi rather than a clean toggle — the method treats
-  // an already-correct state as idempotent success.
+  // (LiveDNS keys), email forwarding, and web/URL forwarding (webredirs;
+  // per-subdomain, no apex). Note core `setPrivacy` disabling is a no-op for
+  // individual (natural-person) registrants — Gandi keeps WHOIS obfuscation on
+  // for GDPR regardless of the request.
   static readonly extendedFeatures: readonly RegistrarFeature[] = [
     Feature.GetAuthCode,
     Feature.GetDnssec,
     Feature.DisableDnssec,
     Feature.GetEmailForwarding,
     Feature.SetEmailForwarding,
+    Feature.GetDomainForwarding,
+    Feature.SetDomainForwarding,
   ];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
@@ -573,22 +600,123 @@ export class GandiRegistrar extends BaseRegistrar {
     }
   }
 
+  /**
+   * Read web/URL forwarding via GET /domain/domains/{fqdn}/webredirs. Gandi keys
+   * each redirect by the full FQDN of the source subdomain; we normalize that back
+   * to a host relative to the apex (e.g. `shop.example.com` -> `shop`).
+   */
+  override async getDomainForwarding(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<DomainForward[]> {
+    const redirs = await this.http.request<GandiWebredir[]>({
+      path: `/domain/domains/${domainName}/webredirs`,
+      ...opts,
+    });
+    return (redirs ?? []).map(r => ({
+      host: gandiFqdnToHost(r.host ?? domainName, domainName),
+      url: r.url ?? '',
+      type: GANDI_TYPE_TO_FORWARD[(r.type ?? '').toLowerCase()] ?? 'permanent',
+    }));
+  }
+
+  /**
+   * Replace web/URL forwarding (full replace; empty clears). Gandi's webredirs
+   * endpoint has no update — only create (POST) and delete (DELETE by FQDN) — so
+   * this diffs against the current set: delete entries that are gone or changed,
+   * then create the desired ones that aren't already present identically.
+   *
+   * Gandi only supports forwarding a subdomain, not the apex; an apex host ("@")
+   * throws rather than silently failing with a 500 from the API.
+   */
+  override async setDomainForwarding(
+    domainName: string,
+    forwards: DomainForward[],
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    try {
+      for (const f of forwards) {
+        if (!f.host || f.host === '@') {
+          throw new Error(
+            `${this.name}: web forwarding requires a subdomain host; Gandi cannot forward the apex ("@")`
+          );
+        }
+      }
+      const current = await this.getDomainForwarding(domainName, opts);
+      const same = (a: DomainForward, b: DomainForward): boolean =>
+        a.host === b.host && a.url === b.url && a.type === b.type;
+
+      // delete current entries that are no longer wanted, or whose url/type changed
+      for (const existing of current) {
+        if (!forwards.some(f => same(f, existing))) {
+          await this.http.request({
+            method: 'DELETE',
+            path: `/domain/domains/${domainName}/webredirs/${gandiHostToFqdn(existing.host, domainName)}`,
+            ...opts,
+          });
+        }
+      }
+      // create desired entries that aren't already present identically
+      for (const f of forwards) {
+        if (!current.some(c => same(c, f))) {
+          await this.http.request({
+            method: 'POST',
+            path: `/domain/domains/${domainName}/webredirs`,
+            // `protocol` is intentionally omitted so Gandi applies its default
+            // (http). Requesting `https` makes Gandi provision a Let's Encrypt
+            // certificate for the source host, which our normalized model doesn't
+            // express (and which the sandbox can't do — it 500s).
+            body: {
+              host: gandiHostToFqdn(f.host, domainName),
+              type: GANDI_FORWARD_TYPE[f.type],
+              url: f.url,
+            },
+            ...opts,
+          });
+        }
+      }
+      return { success: true, message: 'Domain forwarding updated successfully' };
+    } catch (error) {
+      return { success: false, message: toRegistrarError(error).message };
+    }
+  }
+
   override async setAutoRenew(
     domainName: string,
     enabled: boolean,
     opts?: RequestOptions
   ): Promise<OperationResult> {
-    return this.mutate(
-      { method: 'PATCH', path: `/domain/domains/${domainName}/autorenew`, body: { enabled } },
-      `Auto-renew ${enabled ? 'enabled' : 'disabled'} successfully`,
-      opts
-    );
+    try {
+      await this.http.request({
+        method: 'PATCH',
+        path: `/domain/domains/${domainName}/autorenew`,
+        body: { enabled },
+        ...opts,
+      });
+      return {
+        success: true,
+        message: `Auto-renew ${enabled ? 'enabled' : 'disabled'} successfully`,
+      };
+    } catch (error) {
+      // Disabling auto-renew on a domain that never had an autorenew record
+      // returns 400 "This product has no autorenew record". That state already
+      // means auto-renew is off, so treat it as idempotent success.
+      const message = toRegistrarError(error).message;
+      if (!enabled && /no autorenew record/i.test(message)) {
+        return { success: true, message: 'Auto-renew disabled successfully' };
+      }
+      return { success: false, message };
+    }
   }
 
   /**
    * WHOIS privacy on Gandi is the per-contact `data_obfuscated` flag, toggled by
-   * PATCHing the domain's owner contact. (Not exercised live — every domain in
-   * the test account carries real registrant data.)
+   * PATCHing the domain's owner contact. Enabling works; disabling is accepted
+   * (HTTP 202) but is a **no-op for individual (natural-person) registrants** —
+   * Gandi keeps their contact obfuscated in WHOIS for GDPR regardless. The
+   * request is well-formed, so this reports the registrar's acceptance; whether
+   * the state actually changes is governed by Gandi's policy for the contact
+   * type. (Verified live against the sandbox.)
    */
   override async setPrivacy(
     domainName: string,
@@ -747,8 +875,17 @@ function toGandiContact(c: Contact): GandiContact & { type: number } {
   };
   if (c.organization) contact.orgname = c.organization;
   if (c.fax) contact.fax = c.fax;
-  if (c.state) contact.state = c.state;
+  if (c.state) contact.state = toGandiState(c.state, c.country);
   return contact;
+}
+
+// Gandi wants the ISO 3166-2 subdivision code for `state` (e.g. `US-CA`), and
+// rejects a bare 2-letter code as "shorter than minimum length 4". The rest of
+// the library stores just the subdivision (`CA`, `ENG`), so prefix it with the
+// country to form the ISO 3166-2 code. A value that already contains a `-`
+// (already `US-CA`) is left as-is.
+function toGandiState(state: string, country: string): string {
+  return country && !state.includes('-') ? `${country}-${state}` : state;
 }
 
 // regroup flat DnsRecords into Gandi LiveDNS rrsets (one per name+type, values
@@ -775,6 +912,17 @@ function toGandiRrsets(records: DnsRecord[]): GandiRecord[] {
     rrset.rrset_values!.push(value);
   }
   return [...groups.values()];
+}
+
+// Gandi webredirs are keyed by the full FQDN of the source subdomain, while our
+// DomainForward.host is relative to the apex. These convert between the two.
+function gandiHostToFqdn(host: string, domain: string): string {
+  return !host || host === '@' ? domain : `${host}.${domain}`;
+}
+function gandiFqdnToHost(fqdn: string, domain: string): string {
+  if (fqdn === domain) return '@';
+  const suffix = `.${domain}`;
+  return fqdn.endsWith(suffix) ? fqdn.slice(0, -suffix.length) : fqdn;
 }
 
 function fromGandiContact(c: GandiContact | undefined): Contact | undefined {
