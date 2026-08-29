@@ -13,9 +13,11 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
       are sandbox-verified; Gandi `transferIn` needs an external domain + auth
       code, not reproducible in the sandbox.)
 - [ ] **GoDaddy** register/renew/transfer — v3 register (quote→execute) is paid
-      with **no v3 sandbox** (OTE is v1-only), so only the free quote step is
-      testable; v1 register/renew/transfer are OTE-testable but the OTE account
-      currently holds 0 domains. Run once an OTE domain exists / for a real buy.
+      with **no v3 sandbox** (OTE is v1-only). The v1 purchase path is correct
+      (`POST /v1/domains/purchase/validate` returns 200 for our body) but OTE
+      itself returns `500 ERROR_UNKNOWN` on the actual purchase — the OTE shopper
+      account has no payment method / test funds. Add a payment method in the OTE
+      dashboard to unblock v1 register/renew/transfer testing on OTE.
 - [ ] **GoDaddy** `updateNameservers` (v3 PUT bare-array) — built + unit-tested;
       not run live (would repoint a real domain's NS). Verify with a reversible swap.
 - [ ] `updateContacts` on **NameSilo, GoDaddy, Namecheap** — can trigger
