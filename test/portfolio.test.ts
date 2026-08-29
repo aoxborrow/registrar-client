@@ -38,14 +38,14 @@ describe('listPortfolio', () => {
     expect(errors[0].error).toBeInstanceOf(Error);
   });
 
-  it('forwards list options (limit) to each source', async () => {
+  it('forwards list options (pageSize) to each source', async () => {
     const gd = createRegistrar('godaddy', { apiKey: 'k', apiSecret: 's' });
     let seenPath = '';
     stubHttp(gd, req => {
       seenPath = req.path;
       return [{ domain: 'a.com' }];
     });
-    await listPortfolio([gd], { limit: 7 });
+    await listPortfolio([gd], { pageSize: 7 });
     expect(seenPath).toContain('limit=7');
   });
 });

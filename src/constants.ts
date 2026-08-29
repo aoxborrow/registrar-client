@@ -10,7 +10,8 @@ export const DEFAULT_OPTIONS: RegistrarClientOptions = {
 // package identifier used in the default User-Agent header
 export const USER_AGENT = '@aoxborrow/registrar-client';
 
-// default cap on how many domains `listDomains` returns (and, where the API
-// allows, fetches) when no explicit `limit` is given. Keeps large accounts
-// (10k+ domains) from pulling every page by default.
-export const DEFAULT_LIST_LIMIT = 1000;
+// default per-request page size for `listDomains`. The library paginates
+// internally at this size until the account is exhausted. 100 is within every
+// provider's per-request cap; providers that don't support a page-size param
+// (Porkbun, Dynadot) ignore it and page however their API allows.
+export const DEFAULT_PAGE_SIZE = 100;

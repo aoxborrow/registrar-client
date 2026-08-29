@@ -48,13 +48,13 @@ describe('NameBright provider', () => {
     expect(domains[0]).toMatchObject({ status: 'active', privacy: true, autoRenew: true });
   });
 
-  it('listDomains caps at limit and filters by search', async () => {
+  it('listDomains filters by search client-side', async () => {
     const nb = namebright();
     stubHttp(nb, req => {
       if (req.path.includes('auth/token')) return { access_token: 't', expires_in: 1800 };
       return { Domains: [{ DomainName: 'foo.com' }, { DomainName: 'bar.com' }] };
     });
-    const matched = await nb.listDomains({ search: 'foo', limit: 5 });
+    const matched = await nb.listDomains({ search: 'foo' });
     expect(matched.map(d => d.domainName)).toEqual(['foo.com']);
   });
 });

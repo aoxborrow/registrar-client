@@ -6,8 +6,8 @@ import type {
   RegistrarOptions,
   RequestOptions,
 } from '../types';
-import { applyListOptions, createDomain } from '../utils';
-import { DEFAULT_LIST_LIMIT } from '../constants';
+import { createDomain, filterDomains } from '../utils';
+import { DEFAULT_PAGE_SIZE } from '../constants';
 import { AuthenticationError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import type { RegistrarFeature } from '../features';
@@ -149,13 +149,13 @@ export class NameBrightRegistrar extends BaseRegistrar {
   override async listDomains(opts?: ListDomainsOptions): Promise<Domain[]> {
     // The list endpoint has no name filter, so `search` is applied client-side.
     // Nameservers are not returned here (see NbDomain).
-    const { limit = DEFAULT_LIST_LIMIT, search, ...reqOpts } = opts ?? {};
+    const { pageSize = DEFAULT_PAGE_SIZE, search, ...reqOpts } = opts ?? {};
     const domains: Domain[] = [];
-    const perPage = Math.min(limit, 100); // domainsPerPage max is 100
+    const perPage = Math.min(pageSize, 100); // domainsPerPage max is 100
     let page = 1;
     let hasMore = true;
 
-    while (hasMore && domains.length < limit) {
+    while (hasMore) {
       const data = await this.authed<NbDomainsPage | NbDomain[]>(
         { path: 'account/domains', query: { page, domainsPerPage: perPage } },
         reqOpts
@@ -183,6 +183,6 @@ export class NameBrightRegistrar extends BaseRegistrar {
       hasMore = list.length === perPage;
       page++;
     }
-    return applyListOptions(domains, { limit, search });
+    return filterDomains(domains, search);
   }
 }

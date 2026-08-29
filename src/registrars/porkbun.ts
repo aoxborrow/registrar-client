@@ -7,8 +7,7 @@ import type {
   RegistrarOptions,
   RequestOptions,
 } from '../types';
-import { applyListOptions, createDomain } from '../utils';
-import { DEFAULT_LIST_LIMIT } from '../constants';
+import { createDomain, filterDomains } from '../utils';
 import { toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
@@ -126,14 +125,16 @@ export class PorkbunRegistrar extends BaseRegistrar {
   }
 
   override async listDomains(opts?: ListDomainsOptions): Promise<Domain[]> {
-    // listAll has no name filter, so `search` is applied client-side.
-    const { limit = DEFAULT_LIST_LIMIT, search, ...reqOpts } = opts ?? {};
+    // listAll has no name filter, so `search` is applied client-side. Porkbun has
+    // no page-size parameter (it returns fixed 1000-domain chunks and pages by
+    // `start` offset), so `pageSize` is ignored here.
+    const { pageSize: _pageSize, search, ...reqOpts } = opts ?? {};
     const domains: Domain[] = [];
-    const pageSize = 1000; // Porkbun returns up to 1000 domains per call
+    const chunk = 1000; // Porkbun returns up to 1000 domains per call
     let start = 0;
     let hasMore = true;
 
-    while (hasMore && domains.length < limit) {
+    while (hasMore) {
       const res = await this.call('/domain/listAll', { start, includeLabels: 'no' }, reqOpts);
       if (!isOk(res)) {
         throw new Error(res.message ?? 'API request failed');
@@ -157,10 +158,10 @@ export class PorkbunRegistrar extends BaseRegistrar {
         );
       }
 
-      hasMore = list.length === pageSize;
-      start += pageSize;
+      hasMore = list.length === chunk;
+      start += chunk;
     }
-    return applyListOptions(domains, { limit, search });
+    return filterDomains(domains, search);
   }
 
   override async updateNameservers(

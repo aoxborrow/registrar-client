@@ -87,16 +87,18 @@ Namecheap is the only one with real per-TLD `getPricing`.
 
 ## Listing domains & portfolios
 
-`listDomains` accepts `{ limit, search }` (alongside the usual request options).
-`limit` defaults to **1000** — providers request capped page sizes and stop
-paginating once that many domains are collected, so a 10k-domain account never
-pulls every page by default. `search` filters by domain-name substring:
-server-side where the API supports it (**Namecheap** `SearchTerm`, **Gandi**
-`fqdn`) and client-side everywhere else.
+`listDomains` returns the **full account**, paginating internally, and accepts
+`{ pageSize, search }` (alongside the usual request options). `pageSize` (default
+**100**) only tunes how many domains are fetched per request — it's clamped to
+each provider's maximum and changes the number of requests, never the result.
+Providers whose API has no page-size parameter (**Porkbun**, **Dynadot**) ignore
+it. `search` filters by domain-name substring: server-side where the API supports
+it (**Namecheap** `SearchTerm`, **Gandi** `fqdn`) and client-side everywhere else.
 
 ```ts
-const recent = await client.listDomains({ limit: 100 });
+const all = await client.listDomains();
 const acme = await client.listDomains({ search: 'acme' });
+const fewerRequests = await client.listDomains({ pageSize: 1000 }); // where supported
 ```
 
 Nameservers come back **in the single list call** on **GoDaddy** (via
@@ -113,14 +115,11 @@ down never sinks the whole view). Every `Domain` already carries its `registrar`
 ```ts
 import { listPortfolio, createRegistrar } from '@aoxborrow/registrar-client';
 
-const { domains, errors } = await listPortfolio(
-  [
-    createRegistrar('godaddy', godaddyCreds),
-    createRegistrar('namecheap', namecheapCreds),
-    createRegistrar('gandi', gandiCreds),
-  ],
-  { limit: 1000 } // applied to each registrar independently
-);
+const { domains, errors } = await listPortfolio([
+  createRegistrar('godaddy', godaddyCreds),
+  createRegistrar('namecheap', namecheapCreds),
+  createRegistrar('gandi', gandiCreds),
+]);
 // domains: Domain[] (each tagged with .registrar); errors: { registrar, error }[]
 ```
 

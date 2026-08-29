@@ -58,12 +58,11 @@ describe('Gandi provider', () => {
     });
   });
 
-  it('listDomains sends the fqdn wildcard filter for search and caps at limit', async () => {
+  it('listDomains sends the fqdn wildcard filter and re-filters by search', async () => {
     const g = gandi();
     const calls = stubHttp(g, () => [{ fqdn: 'foo.com' }, { fqdn: 'bar.com' }]);
-    const capped = await g.listDomains({ search: 'foo', limit: 1 });
+    const filtered = await g.listDomains({ search: 'foo' });
     expect(calls[0].query).toMatchObject({ fqdn: '*foo*' });
-    // limit caps the returned set, and the client-side search re-filters
-    expect(capped.map(d => d.domainName)).toEqual(['foo.com']);
+    expect(filtered.map(d => d.domainName)).toEqual(['foo.com']);
   });
 });

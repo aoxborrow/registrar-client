@@ -7,8 +7,8 @@ import type {
   RegistrarOptions,
   RequestOptions,
 } from '../types';
-import { applyListOptions, createDomain } from '../utils';
-import { DEFAULT_LIST_LIMIT } from '../constants';
+import { createDomain, filterDomains } from '../utils';
+import { DEFAULT_PAGE_SIZE } from '../constants';
 import { NotFoundError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
@@ -127,14 +127,14 @@ export class NameSiloRegistrar extends BaseRegistrar {
    * client-side (NameSilo has no server-side name filter).
    */
   override async listDomains(opts?: ListDomainsOptions): Promise<Domain[]> {
-    const { limit = DEFAULT_LIST_LIMIT, search, ...reqOpts } = opts ?? {};
+    const { pageSize = DEFAULT_PAGE_SIZE, search, ...reqOpts } = opts ?? {};
     const domains: Domain[] = [];
-    const pageSize = Math.min(limit, 100);
+    const perPage = Math.min(pageSize, 100);
     let page = 1;
     let hasMore = true;
 
-    while (hasMore && domains.length < limit) {
-      const res = await this.call('listDomains', { page, pageSize }, reqOpts);
+    while (hasMore) {
+      const res = await this.call('listDomains', { page, pageSize: perPage }, reqOpts);
       if (!replyOk(res)) {
         throw new Error(replyDetail(res));
       }
@@ -154,10 +154,10 @@ export class NameSiloRegistrar extends BaseRegistrar {
         );
       }
 
-      hasMore = entries.length === pageSize;
+      hasMore = entries.length === perPage;
       page++;
     }
-    return applyListOptions(domains, { limit, search });
+    return filterDomains(domains, search);
   }
 
   /**

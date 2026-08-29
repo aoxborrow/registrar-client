@@ -7,8 +7,8 @@ import type {
   RegistrarOptions,
   RequestOptions,
 } from '../types';
-import { applyListOptions, createDomain } from '../utils';
-import { DEFAULT_LIST_LIMIT } from '../constants';
+import { createDomain, filterDomains } from '../utils';
+import { DEFAULT_PAGE_SIZE } from '../constants';
 import { toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
@@ -92,9 +92,9 @@ export class GandiRegistrar extends BaseRegistrar {
   }
 
   override async listDomains(opts?: ListDomainsOptions): Promise<Domain[]> {
-    const { limit = DEFAULT_LIST_LIMIT, search, ...reqOpts } = opts ?? {};
+    const { pageSize = DEFAULT_PAGE_SIZE, search, ...reqOpts } = opts ?? {};
     const domains: Domain[] = [];
-    const perPage = Math.min(limit, 1000); // Gandi API maximum page size
+    const perPage = Math.min(pageSize, 1000); // Gandi API maximum page size
     // Gandi's `fqdn` filter is server-side and supports wildcards, so a plain
     // substring search is wrapped in `*...*`.
     const term = search?.trim();
@@ -111,10 +111,10 @@ export class GandiRegistrar extends BaseRegistrar {
 
       for (const d of list) domains.push(this.toDomain(d));
 
-      if (list.length < perPage || domains.length >= limit) break;
+      if (list.length < perPage) break;
       page++;
     }
-    return applyListOptions(domains, { limit, search });
+    return filterDomains(domains, search);
   }
 
   // map Gandi's list/detail domain shape into a normalized Domain, tolerating

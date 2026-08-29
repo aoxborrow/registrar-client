@@ -110,7 +110,7 @@ describe('Namecheap provider', () => {
     });
   });
 
-  it('listDomains passes SearchTerm server-side and caps PageSize at limit', async () => {
+  it('listDomains passes SearchTerm server-side and pageSize as PageSize', async () => {
     const nc = namecheap();
     const calls = stubXml(nc, () =>
       ok(
@@ -120,7 +120,7 @@ describe('Namecheap provider', () => {
          </DomainGetListResult>`
       )
     );
-    const domains = await nc.listDomains({ search: 'exam', limit: 5 });
+    const domains = await nc.listDomains({ search: 'exam', pageSize: 5 });
     expect(calls[0].query).toMatchObject({ SearchTerm: 'exam', PageSize: '5', Page: '1' });
     expect(domains[0]).toMatchObject({
       domainName: 'example.com',
