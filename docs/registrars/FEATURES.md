@@ -122,20 +122,23 @@ routes DNS through another API of that vendor, not that it's unsupported.
 
 ### Extended (opt-in; the "declared by" column is what the scan found)
 
-| `Feature`             | Declared by | Notes                                                          |
-| --------------------- | ----------- | -------------------------------------------------------------- |
-| `GetAuthCode`         | DY, GA, SP  | transfer-out EPP code; GD/NC gate it behind the dashboard      |
-| `ConfigureDnssec`     | DY, GA      | not exposed via API by every registrar; GD only via DS records |
-| `GetGlueRecords`      | DY, GA, SP  | read glue / host records                                       |
-| `SetGlueRecords`      | DY, GA, SP  | write glue / host records                                      |
-| `SetEmailForwarding`  | DY, GA, NC  | alias redirect only — **distinct from a mailbox**              |
-| `ProvisionMailbox`    | GA          | real hosted mailboxes                                          |
-| `SetDomainForwarding` | DY, GD, NC  | some model it as `URL`/`URL301`/`FRAME` DNS records            |
-| `SubscribeWebhooks`   | DY          | most providers are poll-only                                   |
-| `ListOnMarketplace`   | DY, SP      | aftermarket / marketplace listing                              |
-| `PushToAccount`       | DY          | instant intra-registrar ownership transfer                     |
-| `AppraiseDomain`      | DY          | valuation lookup                                               |
-| `ApplyBulkSettings`   | DY          | Smart Folders                                                  |
+| `Feature`             | Declared by        | Notes                                                          |
+| --------------------- | ------------------ | -------------------------------------------------------------- |
+| `GetAuthCode`         | DY, GA, NS, SP     | transfer-out EPP code; GD/NC gate it behind the dashboard      |
+| `GetDnssec`           | —                  | read counterpart of `SetDnssec` (planned; not yet wired up)    |
+| `SetDnssec`           | DY, GA, NS, PB     | not exposed via API by every registrar; GD only via DS records |
+| `GetGlueRecords`      | DY, GA, NS, PB, SP | read glue / host records                                       |
+| `SetGlueRecords`      | DY, GA, NS, PB, SP | write glue / host records                                      |
+| `GetEmailForwarding`  | —                  | read counterpart of `SetEmailForwarding` (planned)             |
+| `SetEmailForwarding`  | DY, GA, NC, NS     | alias redirect only — **distinct from a mailbox**              |
+| `ProvisionMailbox`    | GA                 | real hosted mailboxes                                          |
+| `GetDomainForwarding` | —                  | read counterpart of `SetDomainForwarding` (planned)            |
+| `SetDomainForwarding` | DY, GD, NC, NS, PB | some model it as `URL`/`URL301`/`FRAME` DNS records            |
+| `SubscribeWebhooks`   | DY, PB             | account-level events; most providers are poll-only             |
+| `ListOnMarketplace`   | DY, SP             | aftermarket / marketplace listing                              |
+| `PushToAccount`       | DY                 | instant intra-registrar ownership transfer                     |
+| `AppraiseDomain`      | DY                 | valuation lookup                                               |
+| `ApplyBulkSettings`   | DY                 | Smart Folders                                                  |
 
 The "declared by" column is the honest floor from the doc scan — the scan may
 have missed endpoints, and several of these (auth-code, DNSSEC especially) are

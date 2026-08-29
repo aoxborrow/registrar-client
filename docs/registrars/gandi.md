@@ -43,7 +43,7 @@ There is no separate "IP allowlisting" documented for the v5 API. Requests are o
 
 ## Notable / Unique Features
 
-- **LiveDNS** — Gandi's own low-latency anycast DNS hosting product with full zone/record REST management, DNSSEC key management, AXFR/TSIG secondary-DNS support, and automatic zone snapshots. Generic method: `manageDnsZone(domain, records)` / `configureDnssec(domain, keys)`.
+- **LiveDNS** — Gandi's own low-latency anycast DNS hosting product with full zone/record REST management, DNSSEC key management, AXFR/TSIG secondary-DNS support, and automatic zone snapshots. Generic method: `manageDnsZone(domain, records)` / `setDnssec(domain, keys)`.
 - **Mailbox/Email products** — Gandi sells and provisions actual mailboxes (not just forwarding) via its Email and Mailbox (beta) APIs. Generic method: `provisionMailbox(domain, mailboxConfig)`.
 - **Sandbox environment** — a fully separate `api.sandbox.gandi.net` deployment with its own signup/credentials for safe end-to-end testing of registration, transfers, etc. Generic method/concept: `useSandboxEnvironment(true)`.
 - **Fine-grained Personal Access Tokens** — scoped-permission, single-organization, expiring tokens (vs. all-or-nothing legacy API keys). Generic concept: `createScopedApiToken(scopes, orgId, expiry)`.

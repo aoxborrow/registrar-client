@@ -29,17 +29,17 @@ access**.
 
 **Dynadot is my preferred registrar.**
 
-- ❌ **Moving *out of* Dynadot is forbidden.** Never transfer a domain away from
+- ❌ **Moving _out of_ Dynadot is forbidden.** Never transfer a domain away from
   Dynadot.
-- ✅ **Moving *into* Dynadot is always allowed.** Transferring a personal domain
+- ✅ **Moving _into_ Dynadot is always allowed.** Transferring a personal domain
   from any other registrar into Dynadot is a valid consolidation move and a good
   way to test `transferIn`.
-- ✅ **Moving a personal domain *into* GoDaddy is allowed** — **as long as the
+- ✅ **Moving a personal domain _into_ GoDaddy is allowed** — **as long as the
   domain isn't currently on Dynadot** (that would violate the rule above).
-- For **all other registrars** (as a transfer *target*): personal-domain
+- For **all other registrars** (as a transfer _target_): personal-domain
   consolidation isn't desired, so test `transferIn` with a **numeric throwaway
   domain** instead (see below). The only allowed personal-domain consolidation
-  moves are *into Dynadot* (from anywhere non-Dynadot) and *into GoDaddy* (from
+  moves are _into Dynadot_ (from anywhere non-Dynadot) and _into GoDaddy_ (from
   anywhere non-Dynadot).
 
 ## Renewal rules
@@ -64,29 +64,29 @@ transfer**, so a full register→renew→transfer cycle costs about a dollar.
 - Only **6–9 digit all-numeric** `.xyz` names get this pricing; normal `.xyz`
   domains don't.
 - Numeric domains can be bounced between registrars to test `transferIn` (moving
-  *out* of any registrar is fine **except Dynadot**).
+  _out_ of any registrar is fine **except Dynadot**).
 - If a registrar needs a throwaway and doesn't have one, register a fresh
   1.111B-class numeric `.xyz` there.
 
-| Domain       | Currently at | Purpose                         |
-| ------------ | ------------ | ------------------------------- |
+| Domain       | Currently at | Purpose                           |
+| ------------ | ------------ | --------------------------------- |
 | `482233.xyz` | NameSilo     | register / renew / transfer tests |
 
 ## Per-registrar plan
 
-`transferIn` = transferring a domain *into* that registrar.
+`transferIn` = transferring a domain _into_ that registrar.
 
-| Registrar  | Sandbox (CI)? | Register test        | Renew test              | TransferIn test |
-| ---------- | ------------- | -------------------- | ----------------------- | --------------- |
-| Dynadot    | no            | numeric `.xyz`       | **personal domain** ✓   | **personal domain → Dynadot** (consolidation; also renews) |
-| GoDaddy    | yes           | numeric `.xyz`       | **personal domain** ✓   | **personal domain (not from Dynadot) → GoDaddy** (also renews) |
-| Namecheap  | yes           | numeric `.xyz`       | numeric domain          | numeric domain |
-| Gandi      | yes           | numeric `.xyz`       | numeric domain          | numeric domain |
-| Porkbun    | yes           | numeric `.xyz`       | numeric domain          | numeric domain |
-| NameSilo   | yes           | numeric `.xyz`       | numeric domain          | numeric domain |
-| Spaceship  | no            | numeric `.xyz`       | numeric domain          | numeric domain |
-| NameBright | no (API access pending) | numeric `.xyz` | numeric domain     | numeric domain |
-| Cloudflare | no            | n/a — Registrar API mid-migration (no register/renew/transfer endpoint) | n/a | n/a |
+| Registrar  | Sandbox (CI)?           | Register test                                                           | Renew test            | TransferIn test                                                |
+| ---------- | ----------------------- | ----------------------------------------------------------------------- | --------------------- | -------------------------------------------------------------- |
+| Dynadot    | no                      | numeric `.xyz`                                                          | **personal domain** ✓ | **personal domain → Dynadot** (consolidation; also renews)     |
+| GoDaddy    | yes                     | numeric `.xyz`                                                          | **personal domain** ✓ | **personal domain (not from Dynadot) → GoDaddy** (also renews) |
+| Namecheap  | yes                     | numeric `.xyz`                                                          | numeric domain        | numeric domain                                                 |
+| Gandi      | yes                     | numeric `.xyz`                                                          | numeric domain        | numeric domain                                                 |
+| Porkbun    | yes                     | numeric `.xyz`                                                          | numeric domain        | numeric domain                                                 |
+| NameSilo   | yes                     | numeric `.xyz`                                                          | numeric domain        | numeric domain                                                 |
+| Spaceship  | no                      | numeric `.xyz`                                                          | numeric domain        | numeric domain                                                 |
+| NameBright | no (API access pending) | numeric `.xyz`                                                          | numeric domain        | numeric domain                                                 |
+| Cloudflare | no                      | n/a — Registrar API mid-migration (no register/renew/transfer endpoint) | n/a                   | n/a                                                            |
 
 ## Transfers will be limited for a while
 

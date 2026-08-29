@@ -48,11 +48,14 @@ export const Feature = {
 
   // --- extended (opt-in; declared per provider) ---
   GetAuthCode: 'getAuthCode', // retrieve transfer auth/EPP code (transfer out)
-  ConfigureDnssec: 'configureDnssec', // manage DNSSEC keys / DS records
+  GetDnssec: 'getDnssec', // read DNSSEC keys / DS records
+  SetDnssec: 'setDnssec', // manage DNSSEC keys / DS records
   GetGlueRecords: 'getGlueRecords', // read glue / host records
   SetGlueRecords: 'setGlueRecords', // write glue / host records
+  GetEmailForwarding: 'getEmailForwarding', // read alias-style email forwarding rules
   SetEmailForwarding: 'setEmailForwarding', // alias-style email forwarding (redirect only)
   ProvisionMailbox: 'provisionMailbox', // provision a real hosted mailbox
+  GetDomainForwarding: 'getDomainForwarding', // read URL redirect / domain forwarding
   SetDomainForwarding: 'setDomainForwarding', // URL redirect / domain forwarding
   SubscribeWebhooks: 'subscribeWebhooks', // register webhook / event subscriptions
   ListOnMarketplace: 'listOnMarketplace', // list a domain on an aftermarket/marketplace
@@ -90,11 +93,14 @@ export const CORE_FEATURES = [
 // of these via its static `extendedFeatures`.
 export const EXTENDED_FEATURES = [
   Feature.GetAuthCode,
-  Feature.ConfigureDnssec,
+  Feature.GetDnssec,
+  Feature.SetDnssec,
   Feature.GetGlueRecords,
   Feature.SetGlueRecords,
+  Feature.GetEmailForwarding,
   Feature.SetEmailForwarding,
   Feature.ProvisionMailbox,
+  Feature.GetDomainForwarding,
   Feature.SetDomainForwarding,
   Feature.SubscribeWebhooks,
   Feature.ListOnMarketplace,
