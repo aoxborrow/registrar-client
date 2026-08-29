@@ -63,18 +63,32 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
   Namecheap DNS is a separate `dns.setDefault` command (setCustom rejects the
   BasicDNS hosts). `setPrivacy` genuinely toggles WhoisGuard (not a no-op). See
   `docs/registrars/namecheap.md`.
+- **Cloudflare** (live-verified 2026-08-29): registration is a real beta API —
+  `checkAvailability`/`getPricing` use `POST domain-check` (authoritative;
+  `domain-search` over-reports premium names as registrable), and `registerDomain`
+  uses `POST registrations` (`namebot.dev` registered live for $12.20). Premium
+  names and unsupported extensions are rejected by the availability check.
+  `setPrivacy` works via the legacy `PUT privacy`; `setDnsRecords` works via the
+  Zones API but a replace-all hits **error 1046** on Email-Routing-managed
+  MX/DKIM/SPF records (disable Email Routing first). `GET /user/tokens/verify`
+  returns "Invalid API Token" for an account-scoped token — expected, not a bad
+  token. See `docs/registrars/cloudflare.md`.
 - **Spaceship** (live-verified 2026-08-29 with a `domains:transfer`-scoped key):
   `getAuthCode` returns the 16-char EPP code synchronously; `lockDomain`/
   `unlockDomain` are accepted (200) but the lock state (the `clientTransferProhibited`
   eppStatus) propagates with a delay, so an immediate read-back is stale — poll
   `getDomain` to confirm, same as GoDaddy. See `docs/registrars/spaceship.md`.
 
-## Blocked (need better credentials / a suitable domain)
-
-- [ ] **Cloudflare** writes (auto-renew, nameservers, lock) — token is read-only
-      for registrar ops (422); needs a Domain-Registration:Edit token.
-
 ## Not buildable (no public API endpoint)
+
+- [ ] **Cloudflare** `setAutoRenew` / `lockDomain` / `unlockDomain` /
+      `updateNameservers` / `renewDomain` / `updateContacts` — no Cloudflare API
+      path (verified live 2026-08-29). The legacy `PUT registrar/domains/{name}`
+      returns 422 for `auto_renew`/`locked` and 403 for nameservers on **both** a
+      `.uk` and a gTLD (`.dev`), and the new `registrations` beta has no update
+      endpoint. `auto_renew`/`privacy`/`locked` are settable only **at
+      registration**. Not a credential problem — the token writes fine (privacy +
+      DNS succeed). Revisit when Cloudflare ships registration-update endpoints.
 
 - [ ] **NameBright** `transferIn` — NameBright's REST API has no transfer-in endpoint.
 - [ ] **NameSilo** `getAuthCode` — `retrieveAuthCode` only emails the EPP code to
