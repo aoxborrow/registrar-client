@@ -279,11 +279,10 @@ describe('GoDaddy provider', () => {
 describe('BaseRegistrar defaults', () => {
   it('unimplemented core methods reject with NotImplementedError', async () => {
     // cloudflare does not override these writes, so they fall through to BaseRegistrar
+    // (updateContacts/transferIn are not available via the Cloudflare API)
     const cf = createRegistrar('cloudflare', { apiToken: 'x', accountId: 'y' });
     await expect(cf.updateContacts('example.com', {})).rejects.toBeInstanceOf(NotImplementedError);
-    await expect(cf.setDnsRecords('example.com', [])).rejects.toBeInstanceOf(NotImplementedError);
-    await expect(cf.setPrivacy('example.com', true)).rejects.toBeInstanceOf(NotImplementedError);
-    await expect(cf.registerDomain('example.com', { contacts: {} })).rejects.toBeInstanceOf(
+    await expect(cf.transferIn('example.com', { authCode: 'x' })).rejects.toBeInstanceOf(
       NotImplementedError
     );
     // extended methods default to NotImplementedError too, unless a provider declares them

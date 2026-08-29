@@ -23,22 +23,22 @@ folder ([cloudflare](cloudflare.md) · [dynadot](dynadot.md) · [gandi](gandi.md
 
 | #   | Feature                          | CF  | DY  | GA  | GD  | NC  | SP  | Tally (✓ / ✓+~) |
 | --- | -------------------------------- | --- | --- | --- | --- | --- | --- | --------------- |
-| 1   | Test connection / verify creds   | ~   | ✓   | ~   | ~   | ~   | ~   | 1 / 6           |
-| 2   | List domains                     | ~   | ✓   | ✓   | ✓   | ✓   | ✓   | 5 / 6           |
-| 3   | Get single domain details        | ~   | ✓   | ✓   | ✓   | ✓   | ✓   | 5 / 6           |
+| 1   | Test connection / verify creds   | ✓   | ✓   | ~   | ~   | ~   | ~   | 2 / 6           |
+| 2   | List domains                     | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | 6 / 6           |
+| 3   | Get single domain details        | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | 6 / 6           |
 | 4   | **Check availability**           | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | **6 / 6**       |
 | 5   | Get pricing (TLD / domain)       | ✓   | ✓   | ✓   | ✓   | ✓   | ✗   | 5 / 5           |
 | 6   | **Register a domain**            | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | **6 / 6**       |
 | 7   | Renew a domain                   | ✗   | ✓   | ✓   | ✓   | ✓   | ✓   | 5 / 5           |
-| 8   | Auto-renew toggle                | ~   | ✓   | ✓   | ✓   | ✓   | ✓   | 5 / 6           |
+| 8   | Auto-renew toggle                | ✗²  | ✓   | ✓   | ✓   | ✓   | ✓   | 5 / 5           |
 | 9   | Transfer domain in               | ✗   | ✓   | ✓   | ✓   | ✓   | ✓   | 5 / 5           |
 | 10  | Transfer out / get auth code     | ✗   | ✓   | ✓   | ~   | ~   | ✓   | 3 / 5           |
 | 11  | Update nameservers               | ✗   | ✓   | ✓   | ✓   | ✓   | ✓   | 5 / 5           |
-| 12  | Get nameservers                  | ~   | ✓   | ✓   | ✓   | ✓   | ~   | 4 / 6           |
-| 13  | Lock / unlock (transfer lock)    | ~   | ✓   | ~   | ✓   | ✓   | ✓   | 4 / 6           |
-| 14  | Get / set WHOIS privacy          | ~   | ✓   | ~   | ✓   | ✓   | ✓   | 4 / 6           |
+| 12  | Get nameservers                  | ✓   | ✓   | ✓   | ✓   | ✓   | ~   | 5 / 6           |
+| 13  | Lock / unlock (transfer lock)    | ✗²  | ✓   | ~   | ✓   | ✓   | ✓   | 4 / 5           |
+| 14  | Get / set WHOIS privacy          | ✓   | ✓   | ~   | ✓   | ✓   | ✓   | 5 / 6           |
 | 15  | Update contact info              | ✗   | ✓   | ✓   | ✓   | ✓   | ✓   | 5 / 5           |
-| 16  | DNS record management            | ✗¹  | ✓   | ✓   | ✓   | ✓   | ✓   | 5 / 5           |
+| 16  | DNS record management            | ✓¹  | ✓   | ✓   | ✓   | ✓   | ✓   | 6 / 6           |
 | 17  | DNSSEC management                | ✗   | ✓   | ✓   | ~   | ✗   | ✗   | 2 / 3           |
 | 18  | Glue / host records              | ✗   | ✓   | ✓   | ✗   | ~   | ✓   | 3 / 4           |
 | 19  | Email forwarding / mailbox       | ✗   | ~   | ✓   | ✗   | ~   | ✗   | 1 / 3           |
@@ -47,25 +47,34 @@ folder ([cloudflare](cloudflare.md) · [dynadot](dynadot.md) · [gandi](gandi.md
 
 ¹ Cloudflare _does_ offer world-class DNS record management — but through its
 separate DNS/Zones API, not the Registrar API. DNS is a **headline feature** of
-this library, not out of scope, so the Cloudflare provider is expected to route
-`getDnsRecords`/`setDnsRecords` (and DNSSEC) through the Zones API rather than
-decline them. Same approach applies to its email forwarding (Email Routing) and
-redirects (Bulk Redirects) if/when those are wired up.
+this library, so the Cloudflare provider routes `getDnsRecords`/`setDnsRecords`
+through the Zones API — **implemented and live-verified 2026-08-29**
+(`setDnsRecords` is a replace-all; it fails only when Cloudflare Email Routing
+locks the zone's managed MX/DKIM/SPF records, surfaced cleanly). Same approach
+would apply to email forwarding (Email Routing) and redirects (Bulk Redirects)
+if/when those are wired up.
+
+² **Verified impossible via the API, not just unimplemented** (2026-08-29): the
+legacy `PUT registrar/domains/{name}` returns 422 "not allowed to perform this
+action" for `auto_renew`/`locked` — on **both** a `.uk` and a gTLD (`.dev`), so
+it is API-wide, not TLD-specific — and the new `registrations` resource has no
+update endpoint. These are settable **only at registration**.
 
 ### The Cloudflare caveat (read before trusting column CF)
 
-Cloudflare is the systematic outlier on write operations, and it's mid-migration:
+Column CF is **live-verified as of 2026-08-29** (see [cloudflare.md](cloudflare.md)).
+Cloudflare is mid-migration and the write surface is split:
 
-- The old `registrar/domains` endpoints (which _did_ support `auto_renew`,
-  `locked`, and `privacy` toggles) are **deprecated, EOL 2026-09-27**.
-- The new `registrar/registrations` + `domain-check` API (April 2026 beta) adds
-  **availability, pricing, and registration** — but has **not yet** re-absorbed
-  renew, transfer, nameservers, lock, privacy, or contact updates.
-- So there is a live functionality gap _in the Registrar API_. Cloudflare is
-  still held to the core contract; several core methods just have to route
-  through other Cloudflare APIs (DNS via Zones) or wait for the Registrar API to
-  catch up, and they throw `NotImplementedError` until then rather than being
-  declared unsupported.
+- **Now working:** reads, `checkAvailability` + `getPricing` (`domain-check`),
+  `registerDomain` (`registrations`, beta — `example.dev` registered live),
+  `setPrivacy` (legacy `PUT privacy`, still accepted), and DNS via the Zones API.
+- **Not available via any Cloudflare API** — `setAutoRenew`, `lockDomain`/
+  `unlockDomain`, `updateNameservers`, `renewDomain`, `updateContacts`,
+  `transferIn`: the old `registrar/domains` edit endpoint (EOL 2026-09-27) rejects
+  these fields (422/403), and the new `registrations` API has not re-absorbed them.
+  `auto_renew`/`privacy`/`locked` can only be set **at registration**. These throw
+  `NotImplementedError` with a specific message until Cloudflare ships update
+  endpoints.
 
 ## Core vs. extended
 
