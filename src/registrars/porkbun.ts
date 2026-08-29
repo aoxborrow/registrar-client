@@ -54,7 +54,10 @@ export class PorkbunRegistrar extends BaseRegistrar {
   static readonly helpText =
     'Create an API key and secret in your Porkbun account under Account > API Access, ' +
     'then enable "API Access" on each domain you want to manage (per-domain toggle in ' +
-    'the domain details).';
+    'the domain details). For testing, use a sandbox key (prefixed "pk1_sb_") with ' +
+    '{ environment: "sandbox" } — it hits the same base URL but an isolated test ' +
+    'environment with $1,000 of fake credit and no real charges (top up or reset via ' +
+    'POST /sandbox/topup and POST /sandbox/reset).';
   static readonly configFields: ConfigField[] = [
     { name: 'apiKey', label: 'API Key', type: 'password', required: true },
     { name: 'secretApiKey', label: 'Secret API Key', type: 'password', required: true },

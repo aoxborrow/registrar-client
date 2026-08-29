@@ -68,9 +68,11 @@ export class NameBrightRegistrar extends BaseRegistrar {
 
   static readonly displayName = 'NameBright';
   static readonly helpText =
-    'Create an API Application under my.namebright.com > My Account > API Management. ' +
-    'The Client ID is "<accountName>:<applicationName>"; NameBright issues the Client ' +
-    'Secret. Note the application also enforces an IP whitelist.';
+    'API access is not enabled by default — you must request it from NameBright ' +
+    '(contact support / your account manager) before the API Management page is ' +
+    'available. Once enabled, create an API Application under my.namebright.com > ' +
+    'My Account > API Management. The Client ID is "<accountName>:<applicationName>"; ' +
+    'NameBright issues the Client Secret. Note the application also enforces an IP whitelist.';
   static readonly configFields: ConfigField[] = [
     { name: 'clientId', label: 'Client ID', type: 'text', required: true },
     { name: 'clientSecret', label: 'Client Secret', type: 'password', required: true },
