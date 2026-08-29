@@ -409,4 +409,28 @@ describe('Gandi provider', () => {
     expect(calls[0].body).toMatchObject({ fqdn: 'example.com', authinfo: 'EPP-XYZ' });
     await expect(g.transferIn('example.com', { authCode: 'x' })).rejects.toThrow(/registrant/i);
   });
+
+  it('lockDomain PATCHes the /status subresource with clientTransferProhibited:true', async () => {
+    const g = gandi();
+    const calls = stubHttp(g, () => ({ message: 'Domain name status change in progress.' }));
+    const res = await g.lockDomain('example.com');
+    expect(res.success).toBe(true);
+    expect(calls[0]).toMatchObject({
+      method: 'PATCH',
+      path: '/domain/domains/example.com/status',
+      body: { clientTransferProhibited: true },
+    });
+  });
+
+  it('unlockDomain PATCHes the /status subresource with clientTransferProhibited:false', async () => {
+    const g = gandi();
+    const calls = stubHttp(g, () => ({ message: 'Domain name status change in progress.' }));
+    const res = await g.unlockDomain('example.com');
+    expect(res.success).toBe(true);
+    expect(calls[0]).toMatchObject({
+      method: 'PATCH',
+      path: '/domain/domains/example.com/status',
+      body: { clientTransferProhibited: false },
+    });
+  });
 });

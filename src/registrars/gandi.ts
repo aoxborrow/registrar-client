@@ -392,9 +392,18 @@ export class GandiRegistrar extends BaseRegistrar {
     );
   }
 
+  // The transfer lock lives on the domain's `/status` subresource and is toggled
+  // with the `clientTransferProhibited` EPP flag (a boolean) — not by PATCHing a
+  // `status` string on the domain object, which 404s. The change is asynchronous
+  // (Gandi returns 202 "status change in progress"), so a read-back right after
+  // may still show the old state briefly.
   override async lockDomain(domainName: string, opts?: RequestOptions): Promise<OperationResult> {
     return this.mutate(
-      { method: 'PATCH', path: `/domain/domains/${domainName}`, body: { status: 'locked' } },
+      {
+        method: 'PATCH',
+        path: `/domain/domains/${domainName}/status`,
+        body: { clientTransferProhibited: true },
+      },
       'Domain locked successfully',
       opts
     );
@@ -402,7 +411,11 @@ export class GandiRegistrar extends BaseRegistrar {
 
   override async unlockDomain(domainName: string, opts?: RequestOptions): Promise<OperationResult> {
     return this.mutate(
-      { method: 'PATCH', path: `/domain/domains/${domainName}`, body: { status: 'active' } },
+      {
+        method: 'PATCH',
+        path: `/domain/domains/${domainName}/status`,
+        body: { clientTransferProhibited: false },
+      },
       'Domain unlocked successfully',
       opts
     );
