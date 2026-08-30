@@ -78,6 +78,19 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
     (`agreedAt` + `agreedBy` IP + `agreementKeys`) that `setPrivacy` can't carry.
     The client now returns a clear error pointing to the dashboard. Paid DBP still
     cancels via the DELETE. See `docs/registrars/godaddy.md`.
+  - **Domain forwarding** lives on the **v2 customer-scoped** route
+    `/v2/customers/{customerId}/domains/forwards/{fqdn}` (the old v1
+    `/v1/domains/forwards` routes now 404). It works on a standard account with
+    either a PAT or an sso-key — the earlier "reseller-only 403" was an artifact of
+    passing the numeric **shopper ID** where the API wants the customer **UUID**.
+    The client takes `customerId` as either the UUID (used directly) or the numeric
+    shopper ID, which it resolves to the UUID via
+    `GET /v1/shoppers/{id}?includes=customerId` (**sso-key only** — that lookup
+    rejects a PAT with 401, so the numeric form needs Key/Secret; the UUID form
+    doesn't). Per-fqdn `PUT`/`DELETE` (204), and the read/write enums differ: a
+    write sends `REDIRECT_PERMANENT`/`REDIRECT_TEMPORARY`, a read returns
+    `PERMANENT_REDIRECT`/`TEMPORARY_REDIRECT`. Full set→read→clear round-trip
+    verified live 2026-08-29. See `docs/registrars/godaddy.md`.
 - **Namecheap** `setAutoRenew` uses the undocumented-but-live `domains.setAutoRenew`
   (DomainName + IsAutoRenew; reads its inner `IsSuccess`). `getDomain`'s `locked`
   reads the dedicated `getRegistrarLock` command — getList's per-row `IsLocked`
@@ -133,14 +146,6 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
 - [ ] **NameBright** `transferIn` — NameBright's REST API has no transfer-in endpoint.
 - [ ] **NameSilo** `getAuthCode` — `retrieveAuthCode` only emails the EPP code to
       the registrant; it can't be returned synchronously (declaration dropped).
-- [ ] **GoDaddy** domain forwarding — removed from the reachable API (verified live
-      2026-08-29). The v1 `/v1/domains/forwards/{fqdn}` routes now 404 ("no method
-      to handle request"); the replacement lives under the **reseller-only** v2
-      `/v2/customers/{customerId}/domains/forwards/{fqdn}`, which returns
-      **403 ACCESS_DENIED** for standard ("non-API-Users") accounts regardless of
-      auth (PAT or sso-key) or customerId. The client no longer declares the
-      forwarding features (they reject with `NotImplementedError`). Revisit only
-      for reseller/API-Users accounts.
 
 ## Deferred capabilities (pruned; revisit later)
 

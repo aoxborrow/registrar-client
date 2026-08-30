@@ -6,6 +6,8 @@ import type {
   DnsRecord,
   Domain,
   DomainAvailability,
+  DomainForward,
+  DomainForwardType,
   ListDomainsOptions,
   OperationResult,
   RegisterDomainInput,
@@ -15,8 +17,14 @@ import type {
   TldPricing,
   TransferDomainInput,
 } from '../types';
-import { createDomain, filterDomains } from '../utils';
-import { ConsentRequiredError, NotImplementedError, toRegistrarError } from '../errors';
+import { createDomain, filterDomains, settableForwards } from '../utils';
+import {
+  ConfigurationError,
+  ConsentRequiredError,
+  NotFoundError,
+  NotImplementedError,
+  toRegistrarError,
+} from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
@@ -89,6 +97,38 @@ interface GoDaddyAgreement {
   title?: string;
   url?: string;
 }
+
+// GoDaddy models forwarding as a per-fqdn resource under the v2 customer-scoped
+// route /v2/customers/{customerId}/domains/forwards/{fqdn}. Note the asymmetry
+// between the write and read enums: a write takes REDIRECT_PERMANENT (301) /
+// REDIRECT_TEMPORARY (302) / MASKED (frame), but a read returns the *_REDIRECT
+// spelling (PERMANENT_REDIRECT / TEMPORARY_REDIRECT). `mask` is only meaningful
+// for MASKED. Verified live 2026-08-29.
+interface GoDaddyForward {
+  fqdn?: string;
+  type?: string;
+  url?: string;
+  mask?: { title?: string; description?: string; keywords?: string };
+}
+
+// normalized DomainForwardType → the token the v2 write endpoint expects
+const GD_FORWARD_TYPE: Record<'temporary' | 'permanent', string> = {
+  permanent: 'REDIRECT_PERMANENT',
+  temporary: 'REDIRECT_TEMPORARY',
+};
+// every token a v2 read might return → normalized DomainForwardType. Both the
+// write spelling (REDIRECT_*) and the read spelling (*_REDIRECT) are accepted so
+// the map is robust to either surface.
+const GD_TYPE_TO_FORWARD: Record<string, DomainForwardType> = {
+  REDIRECT_PERMANENT: 'permanent',
+  REDIRECT_TEMPORARY: 'temporary',
+  PERMANENT_REDIRECT: 'permanent',
+  TEMPORARY_REDIRECT: 'temporary',
+  MASKED: 'masked', // read-only; setDomainForwarding rejects it
+};
+
+// GoDaddy customerId is a UUID; a raw shopper/account number is not.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // GoDaddy reports availability prices in micro-units (1,000,000 = 1 unit of currency)
 const PRICE_MICRO_UNITS = 1_000_000;
@@ -235,27 +275,37 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     'this enables the modern v3 API. For sandbox testing, create OTE ' +
     '(test environment) keys and pass `apiKey` + `apiSecret` with ' +
     '{ environment: "sandbox" }; OTE only exposes the legacy v1 API. The ' +
-    'sso-key (API Key/Secret) scheme is deprecated by GoDaddy in 2026.';
+    'sso-key (API Key/Secret) scheme is deprecated by GoDaddy in 2026. ' +
+    'Domain forwarding uses the v2 customer-scoped API — set `customerId` to ' +
+    'your GoDaddy customer UUID, or to your numeric shopper/account ID (which ' +
+    'the client resolves to the UUID via an sso-key-authenticated lookup).';
   static readonly configFields: ConfigField[] = [
     { name: 'apiToken', label: 'API Token (PAT)', type: 'password', required: false },
     { name: 'apiKey', label: 'API Key', type: 'password', required: false },
     { name: 'apiSecret', label: 'API Secret', type: 'password', required: false },
+    { name: 'customerId', label: 'Customer ID or Shopper ID', type: 'text', required: false },
   ];
   // GoDaddy's OTE ("Operational Test Environment") is its sandbox
   static readonly supportsSandbox = true;
-  // Beyond core: transfer-out auth code (the `authCode` field on the v1
-  // domain-detail response). Domain forwarding is NOT reachable and was dropped:
-  // the v1 /v1/domains/forwards routes now 404 ("no method to handle request"),
-  // and the replacement lives under the reseller-only v2 /v2/customers/{id}/
-  // domains/forwards, which returns 403 ACCESS_DENIED for non-"API Users"
-  // accounts — verified live 2026-08-29. DNSSEC has no dedicated endpoint (DS
-  // records go through the generic DNS API), and there's no glue-record, email,
-  // or push-webhook API.
-  static readonly extendedFeatures: readonly RegistrarFeature[] = [Feature.GetAuthCode];
+  // Beyond core: domain forwarding and transfer-out auth code (the `authCode`
+  // field on the v1 domain-detail response). Forwarding uses the v2
+  // customer-scoped route /v2/customers/{customerId}/domains/forwards/{fqdn}
+  // (the old v1 /v1/domains/forwards routes now 404); it requires `customerId`
+  // to be configured — verified live 2026-08-29. DNSSEC has no dedicated
+  // endpoint (DS records go through the generic DNS API), and there's no
+  // glue-record, email, or push-webhook API.
+  static readonly extendedFeatures: readonly RegistrarFeature[] = [
+    Feature.GetAuthCode,
+    Feature.GetDomainForwarding,
+    Feature.SetDomainForwarding,
+  ];
 
   // true → prefer the v3 API (production + PAT). false → all calls use v1
   // (sso-key auth, or OTE/sandbox where v3 does not exist).
   private readonly useV3: boolean;
+
+  // memoized v2 customerId (UUID) resolution; see resolveCustomerId()
+  private customerIdPromise?: Promise<string>;
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
     const authHeader = GoDaddyRegistrar.authHeader(credentials);
@@ -965,6 +1015,143 @@ export class GoDaddyRegistrar extends BaseRegistrar {
   // --- extended capabilities ---------------------------------------------
 
   /**
+   * Resolve the configured `customerId` to the UUID the v2 API expects, memoized
+   * for the instance's lifetime. GoDaddy's v2 customer-scoped routes key on a
+   * customer **UUID**, which differs from the numeric shopper/account ID shown in
+   * most dashboards. Callers may configure either:
+   *   - a UUID → used directly, and
+   *   - a numeric shopper ID → resolved via `GET /v1/shoppers/{id}?includes=customerId`.
+   * The shopper lookup is **sso-key-only** (it rejects a PAT with 401), so
+   * resolving a numeric ID requires `apiKey` + `apiSecret`; supplying the UUID
+   * directly avoids that dependency. Throws a ConfigurationError when
+   * `customerId` is absent, or a clear error when a numeric ID can't be resolved.
+   */
+  private async resolveCustomerId(opts?: RequestOptions): Promise<string> {
+    const configured = this.credentials.customerId?.trim();
+    if (!configured) {
+      throw new ConfigurationError(
+        `${this.name}: domain forwarding uses the v2 customer-scoped API, which ` +
+          'requires a customer ID. Set `customerId` to your GoDaddy customer UUID ' +
+          '(or your numeric shopper/account ID, which will be resolved to the UUID).'
+      );
+    }
+    if (UUID_RE.test(configured)) return configured;
+    // numeric shopper ID → resolve to the customer UUID (sso-key only)
+    return (this.customerIdPromise ??= (async () => {
+      if (!this.credentials.apiKey || !this.credentials.apiSecret) {
+        throw new ConfigurationError(
+          `${this.name}: resolving a numeric shopper ID ("${configured}") to a customer ` +
+            'UUID requires an sso-key (apiKey + apiSecret); the shopper lookup rejects a ' +
+            'PAT. Either supply the customer UUID directly as `customerId`, or add sso-key ' +
+            'credentials.'
+        );
+      }
+      try {
+        const shopper = await this.http.request<{ customerId?: string }>({
+          // resolution is sso-key-only, so send the sso-key header explicitly
+          // rather than the instance default (which may be a Bearer PAT).
+          path: `/v1/shoppers/${encodeURIComponent(configured)}`,
+          query: { includes: 'customerId' },
+          headers: {
+            Authorization: `sso-key ${this.credentials.apiKey}:${this.credentials.apiSecret}`,
+          },
+          ...opts,
+        });
+        if (!shopper.customerId) {
+          throw new Error('response did not include a customerId');
+        }
+        return shopper.customerId;
+      } catch (error) {
+        this.customerIdPromise = undefined; // allow a later retry
+        throw new ConfigurationError(
+          `${this.name}: could not resolve shopper ID "${configured}" to a customer UUID ` +
+            `(${toRegistrarError(error).message}). Supply the customer UUID directly as ` +
+            '`customerId`.'
+        );
+      }
+    })());
+  }
+
+  /**
+   * Read URL forwarding via the v2 customer-scoped route
+   * GET /v2/customers/{customerId}/domains/forwards/{fqdn}?includeSubs=true.
+   * GoDaddy keys forwarding by fqdn (the domain or a subdomain), so each entry
+   * maps to a DomainForward whose `host` is relative to the apex ("@" = domain).
+   * A domain with no forwarding returns 404, which we treat as an empty list.
+   */
+  override async getDomainForwarding(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<DomainForward[]> {
+    const customerId = await this.resolveCustomerId(opts);
+    let forwards: GoDaddyForward[];
+    try {
+      forwards = await this.http.request<GoDaddyForward[]>({
+        path: this.forwardPath(customerId, domainName),
+        query: { includeSubs: true },
+        ...opts,
+      });
+    } catch (error) {
+      if (error instanceof NotFoundError) return [];
+      throw error;
+    }
+    return (forwards ?? []).map(f => ({
+      host: fqdnToHost(f.fqdn ?? domainName, domainName),
+      url: f.url ?? '',
+      type: GD_TYPE_TO_FORWARD[(f.type ?? '').toUpperCase()] ?? 'permanent',
+    }));
+  }
+
+  /**
+   * Replace URL forwarding (full replace; an empty list clears it). GoDaddy has
+   * no bulk endpoint — forwarding is a per-fqdn PUT/DELETE — so we read the
+   * current forwards, DELETE any fqdn no longer wanted, then PUT each desired
+   * rule to /v2/customers/{customerId}/domains/forwards/{fqdn}.
+   */
+  override async setDomainForwarding(
+    domainName: string,
+    forwards: DomainForward[],
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    try {
+      const settable = settableForwards(forwards); // reject masked before any write
+      const customerId = await this.resolveCustomerId(opts);
+      const current = await this.getDomainForwarding(domainName, opts);
+      const desiredHosts = new Set(settable.map(f => f.host || '@'));
+
+      for (const existing of current) {
+        if (!desiredHosts.has(existing.host)) {
+          const fqdn = hostToFqdn(existing.host, domainName);
+          await this.http.request({
+            method: 'DELETE',
+            path: this.forwardPath(customerId, fqdn),
+            ...opts,
+          });
+        }
+      }
+
+      for (const f of settable) {
+        const fqdn = hostToFqdn(f.host || '@', domainName);
+        const body: GoDaddyForward = { type: GD_FORWARD_TYPE[f.type], url: f.url };
+        await this.http.request({
+          method: 'PUT',
+          path: this.forwardPath(customerId, fqdn),
+          body,
+          ...opts,
+        });
+      }
+      return { success: true, message: 'Domain forwarding updated successfully' };
+    } catch (error) {
+      return { success: false, message: toRegistrarError(error).message };
+    }
+  }
+
+  // the v2 customer-scoped forwarding resource path for a given fqdn
+  private forwardPath(customerId: string, fqdn: string): string {
+    return `/v2/customers/${encodeURIComponent(customerId)}/domains/forwards/${encodeURIComponent(fqdn)}`;
+  }
+
+  /**
    * Transfer authorization (EPP) code. GoDaddy exposes it as the `authCode`
    * field on the v1 domain-detail response; transfers were never moved to v3,
    * so this always reads from v1 regardless of the `useV3` routing. Returned
@@ -1066,6 +1253,17 @@ function toGoDaddyContact(c: Contact): GoDaddyContact {
       country: c.country,
     },
   };
+}
+
+// resolve a forwarding host relative to the apex into a full fqdn, and back.
+// "@" (or "") denotes the apex domain itself.
+function hostToFqdn(host: string, domain: string): string {
+  return !host || host === '@' ? domain : `${host}.${domain}`;
+}
+function fqdnToHost(fqdn: string, domain: string): string {
+  if (fqdn === domain) return '@';
+  const suffix = `.${domain}`;
+  return fqdn.endsWith(suffix) ? fqdn.slice(0, -suffix.length) : fqdn;
 }
 
 // --- v3 helpers ------------------------------------------------------------
