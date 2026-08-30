@@ -26,11 +26,12 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
       are sandbox-verified.)
 - [ ] **GoDaddy** `setPrivacy` — disabling is a one-way DELETE (enabling is a paid
       purchase, left `NotImplementedError`); not exercised.
-- [ ] **Extended features on GoDaddy / NameSilo** (authCode, DNSSEC
-      read/disable, email + domain forwarding) — built from docs only; add sandbox
-      creds to `.env.testing` and verify. (Dynadot, Gandi, and Porkbun are
-      sandbox-verified; GoDaddy forwarding is v1-only — check on a real domain.
-      Spaceship `getAuthCode` is now live-verified — see confirmed quirks below.)
+- [ ] **Extended features on GoDaddy / NameSilo** (DNSSEC read/disable, email +
+      domain forwarding) — built from docs only; add sandbox creds to
+      `.env.testing` and verify. (Dynadot, Gandi, and Porkbun are sandbox-verified;
+      GoDaddy forwarding is v1-only — check on a real domain. `getAuthCode` on
+      GoDaddy, NameBright, and Spaceship is now live-verified — see confirmed
+      quirks below.)
 - [ ] **NameBright** `updateNameservers` — coded from the documented endpoints; no
       safe way to test NS replacement on the live account, so unverified.
 - [ ] **Dynadot** DNSSEC enabled→disabled transition — `disableDnssec`/`getDnssec`
@@ -98,6 +99,12 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
   `unlockDomain` are accepted (200) but the lock state (the `clientTransferProhibited`
   eppStatus) propagates with a delay, so an immediate read-back is stale — poll
   `getDomain` to confirm, same as GoDaddy. See `docs/registrars/spaceship.md`.
+- **GoDaddy / NameBright** `getAuthCode` (live-verified 2026-08-29, PR #33): both
+  return the 16-char EPP code synchronously on the domain-detail response —
+  GoDaddy's `authCode` on `GET /v1/domains/{domain}` (transfers stay on v1),
+  NameBright's `AuthCode` on `GET account/domains/{domain}`. Not email-only. The
+  domain must generally be unlocked / out of the 60-day lock for the code to be
+  usable for an outbound transfer.
 
 ## Not buildable (no public API endpoint)
 
