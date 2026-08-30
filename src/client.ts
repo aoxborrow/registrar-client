@@ -26,8 +26,46 @@ export class RegistrarClient {
     return this.provider.testConnection(opts);
   }
 
-  listDomains(opts?: ListDomainsOptions): Promise<Domain[]> {
-    return this.provider.listDomains(opts);
+  async listDomains(opts?: ListDomainsOptions): Promise<Domain[]> {
+    const domains = await this.provider.listDomains(opts);
+    if (!opts?.detailed) return domains;
+    return this.enrichWithDetail(domains, opts);
+  }
+
+  // Fills fields that a provider's list endpoint omits (nameservers, privacy,
+  // lock) by fetching each domain's detail and merging it over the summary.
+  // Runs with bounded concurrency; a per-domain detail failure leaves that
+  // domain's summary values untouched rather than failing the whole listing.
+  private async enrichWithDetail(domains: Domain[], opts: RequestOptions): Promise<Domain[]> {
+    const CONCURRENCY = 5;
+    const result = [...domains];
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (next < domains.length) {
+        const index = next++;
+        const name = domains[index].domainName;
+        try {
+          const detail = await this.provider.getDomain(name, opts);
+          let merged = { ...domains[index], ...detail };
+          // Some providers expose nameservers only via a dedicated endpoint, not
+          // on the domain detail — fetch them separately when still empty.
+          if (merged.nameservers.length === 0) {
+            try {
+              const nameservers = await this.provider.getNameservers(name, opts);
+              if (nameservers.length > 0) merged = { ...merged, nameservers };
+            } catch {
+              // leave nameservers empty if this provider can't supply them
+            }
+          }
+          result[index] = merged;
+        } catch {
+          // keep the summary values for this domain on detail failure
+        }
+      }
+    };
+    const workers = Array.from({ length: Math.min(CONCURRENCY, domains.length) }, worker);
+    await Promise.all(workers);
+    return result;
   }
 
   getDomain(domainName: string, opts?: RequestOptions): Promise<Domain> {

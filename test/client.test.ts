@@ -15,6 +15,31 @@ import {
   ALL_FEATURES,
   isCoreFeature,
 } from '../src/index';
+import type { Domain, Registrar } from '../src/index';
+
+// Minimal fake provider exercising just listDomains + getDomain. The rest of
+// the Registrar contract is unused by these tests, so we cast a partial.
+function fakeProvider(config: {
+  summaries: Domain[];
+  detail: (name: string) => Domain;
+  onGetDomain?: (name: string) => void;
+  failFor?: string;
+  nameservers?: (name: string) => string[];
+}): Registrar {
+  return {
+    name: 'fake',
+    listDomains: () => Promise.resolve(config.summaries),
+    getDomain: (name: string) => {
+      config.onGetDomain?.(name);
+      if (config.failFor === name) {
+        return Promise.reject(new Error('detail failed'));
+      }
+      return Promise.resolve(config.detail(name));
+    },
+    getNameservers: (name: string) =>
+      Promise.resolve(config.nameservers ? config.nameservers(name) : []),
+  } as unknown as Registrar;
+}
 
 describe('normalizeDomain', () => {
   it('trims, lowercases, and strips a trailing dot', () => {
@@ -73,6 +98,66 @@ describe('registrars catalog', () => {
       createRegistrar('cloudflare', { apiToken: 'x', accountId: 'y' })
     );
     expect(client.provider.name).toBe('cloudflare');
+  });
+});
+
+describe('RegistrarClient listDomains detailed enrichment', () => {
+  const summaries = [
+    createDomain({ domainName: 'a.com', privacy: false, nameservers: [] }),
+    createDomain({ domainName: 'b.com', privacy: false, nameservers: [] }),
+  ];
+  const detail = (name: string) =>
+    createDomain({
+      domainName: name,
+      privacy: true,
+      nameservers: ['ns1.example.net', 'ns2.example.net'],
+    });
+
+  it('returns the summary and skips detail calls without `detailed`', async () => {
+    const calls: string[] = [];
+    const client = new RegistrarClient(
+      fakeProvider({ summaries, detail, onGetDomain: n => calls.push(n) })
+    );
+    const out = await client.listDomains();
+    expect(out.map(d => d.privacy)).toEqual([false, false]);
+    expect(out.map(d => d.nameservers)).toEqual([[], []]);
+    expect(calls).toEqual([]);
+  });
+
+  it('merges per-domain detail when `detailed` is set', async () => {
+    const calls: string[] = [];
+    const client = new RegistrarClient(
+      fakeProvider({ summaries, detail, onGetDomain: n => calls.push(n) })
+    );
+    const out = await client.listDomains({ detailed: true });
+    expect(out.map(d => d.privacy)).toEqual([true, true]);
+    expect(out[0].nameservers).toEqual(['ns1.example.net', 'ns2.example.net']);
+    expect(calls.sort()).toEqual(['a.com', 'b.com']);
+  });
+
+  it('falls back to getNameservers when detail leaves nameservers empty', async () => {
+    // getDomain fixes privacy but returns no nameservers (Namecheap-style).
+    const detailNoNs = (name: string) =>
+      createDomain({ domainName: name, privacy: true, nameservers: [] });
+    const client = new RegistrarClient(
+      fakeProvider({
+        summaries,
+        detail: detailNoNs,
+        nameservers: () => ['dns1.registrar.net', 'dns2.registrar.net'],
+      })
+    );
+    const out = await client.listDomains({ detailed: true });
+    expect(out[0].privacy).toBe(true);
+    expect(out[0].nameservers).toEqual(['dns1.registrar.net', 'dns2.registrar.net']);
+  });
+
+  it('keeps the summary for a domain whose detail fetch fails', async () => {
+    const client = new RegistrarClient(fakeProvider({ summaries, detail, failFor: 'a.com' }));
+    const out = await client.listDomains({ detailed: true });
+    const a = out.find(d => d.domainName === 'a.com');
+    const b = out.find(d => d.domainName === 'b.com');
+    expect(a?.privacy).toBe(false); // detail failed → summary kept
+    expect(b?.privacy).toBe(true); // enriched
   });
 });
 

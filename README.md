@@ -90,22 +90,35 @@ via their availability endpoint.
 
 `listDomains` returns the **full account**, paginating internally at each
 provider's maximum page size (so it makes the fewest requests each API allows).
-Its only option is `search` — a domain-name substring filter, applied server-side
-where the API supports it (**Namecheap** `SearchTerm`, **Gandi** `fqdn`) and
-client-side everywhere else. The usual request options (timeout/retries/signal)
-still apply.
+Options:
+
+- `search` — a domain-name substring filter, applied server-side where the API
+  supports it (**Namecheap** `SearchTerm`, **Gandi** `fqdn`) and client-side
+  everywhere else.
+- `detailed` — fetch full per-domain detail after listing (see below).
+
+The usual request options (timeout/retries/signal) still apply.
 
 ```ts
 const all = await client.listDomains();
 const acme = await client.listDomains({ search: 'acme' });
+const full = await client.listDomains({ detailed: true });
 ```
 
-Nameservers come back **in the single list call** on **GoDaddy** (via
-`includes=nameServers`), **Gandi**, **Spaceship**, and **Dynadot**. The others
-(**Namecheap**, **Porkbun**, **NameSilo**, **NameBright**) don't return
-nameservers from their list endpoint — use `getNameservers` / `getDomain`
-per domain for those. **Cloudflare** manages nameservers via its Zones API, not
-the Registrar list.
+Several providers' list endpoints return only a **summary** that omits
+`nameservers`, `privacy`, and/or the transfer `locked` flag, which then read as
+their defaults (`[]` / `false`). Nameservers come back in the single list call
+only on **GoDaddy** (via `includes=nameServers`), **Spaceship**, and
+**Dynadot**; **Gandi**, **Namecheap**, **Porkbun**, **NameSilo**, and
+**NameBright** omit them (and **Gandi**/**NameSilo** also omit `privacy`).
+(**Cloudflare** manages nameservers via its Zones API, not the Registrar list.)
+
+Pass `detailed: true` and the facade follows up with a `getDomain` per domain
+(bounded concurrency, falling back to `getNameservers` where detail still lacks
+them) and merges the result — so `nameservers`, `privacy`, and `locked` are
+accurate. It costs one extra request per domain, so it's opt-in; leave it off
+for a fast summary, or call `getDomain` / `getNameservers` yourself for
+individual domains.
 
 To build a combined view across registrars, `listPortfolio` fans out over many
 providers concurrently with per-registrar error isolation (one provider being
