@@ -274,6 +274,13 @@ describe('GoDaddy provider', () => {
     expect(calls[0]).toMatchObject({ method: 'DELETE' });
     await expect(gd.setPrivacy('example.com', true)).rejects.toBeInstanceOf(NotImplementedError);
   });
+
+  it('getAuthCode reads authCode from the v1 domain-detail endpoint', async () => {
+    const gd = godaddy();
+    const calls = stubHttp(gd, () => ({ domain: 'example.com', authCode: 'EPP-abc123' }));
+    expect(await gd.getAuthCode('example.com')).toBe('EPP-abc123');
+    expect(calls[0].path).toBe('/v1/domains/example.com');
+  });
 });
 
 describe('BaseRegistrar defaults', () => {

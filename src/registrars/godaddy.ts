@@ -63,6 +63,7 @@ interface GoDaddyDomain {
   contactAdmin?: GoDaddyContact;
   contactTech?: GoDaddyContact;
   contactBilling?: GoDaddyContact;
+  authCode?: string;
 }
 
 // one entry from POST /v1/domains/available; `price` is in micro-units of `currency`
@@ -269,12 +270,14 @@ export class GoDaddyRegistrar extends BaseRegistrar {
   ];
   // GoDaddy's OTE ("Operational Test Environment") is its sandbox
   static readonly supportsSandbox = true;
-  // Beyond core, only domain forwarding. DNSSEC has no dedicated endpoint (DS
-  // records go through the generic DNS API), there's no glue-record or email
-  // API, and auth-code retrieval and push webhooks aren't confirmed via API.
+  // Beyond core: domain forwarding and transfer-out auth code (the `authCode`
+  // field on the v1 domain-detail response). DNSSEC has no dedicated endpoint
+  // (DS records go through the generic DNS API), and there's no glue-record,
+  // email, or push-webhook API.
   static readonly extendedFeatures: readonly RegistrarFeature[] = [
     Feature.GetDomainForwarding,
     Feature.SetDomainForwarding,
+    Feature.GetAuthCode,
   ];
 
   // true → prefer the v3 API (production + PAT). false → all calls use v1
@@ -963,6 +966,22 @@ export class GoDaddyRegistrar extends BaseRegistrar {
   }
 
   // --- extended capabilities ---------------------------------------------
+
+  /**
+   * Transfer authorization (EPP) code. GoDaddy exposes it as the `authCode`
+   * field on the v1 domain-detail response; transfers were never moved to v3,
+   * so this always reads from v1 regardless of the `useV3` routing. Returned
+   * synchronously in the body — not email-only. The domain generally needs to
+   * be unlocked and out of the 60-day post-registration/transfer lock for the
+   * code to be usable for an outbound transfer.
+   */
+  override async getAuthCode(domainName: string, opts?: RequestOptions): Promise<string> {
+    const d = await this.http.request<GoDaddyDomain>({
+      path: `/v1/domains/${encodeURIComponent(domainName)}`,
+      ...opts,
+    });
+    return d.authCode ?? '';
+  }
 
   /**
    * Read URL forwarding via GET /domains/forwards/{fqdn}?includeSubs=true.
