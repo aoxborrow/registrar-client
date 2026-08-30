@@ -32,7 +32,7 @@ folder ([cloudflare](cloudflare.md) · [dynadot](dynadot.md) · [gandi](gandi.md
 | 7   | Renew a domain                   | ✗   | ✓   | ✓   | ✓   | ✓   | ✓   | 5 / 5           |
 | 8   | Auto-renew toggle                | ✗²  | ✓   | ✓   | ✓   | ✓   | ✓   | 5 / 5           |
 | 9   | Transfer domain in               | ✗   | ✓   | ✓   | ✓   | ✓   | ✓   | 5 / 5           |
-| 10  | Transfer out / get auth code     | ✗   | ✓   | ✓   | ~   | ~   | ✓   | 3 / 5           |
+| 10  | Transfer out / get auth code     | ✗   | ✓   | ✓   | ✓   | ~   | ✓   | 4 / 5           |
 | 11  | Update nameservers               | ✗   | ✓   | ✓   | ✓   | ✓   | ✓   | 5 / 5           |
 | 12  | Get nameservers                  | ✓   | ✓   | ✓   | ✓   | ✓   | ~   | 5 / 6           |
 | 13  | Lock / unlock (transfer lock)    | ✗²  | ✓   | ~   | ✓   | ✓   | ✓   | 4 / 5           |
@@ -148,23 +148,26 @@ webhooks, mailbox provisioning, and bulk settings. DNSSEC was narrowed from full
 key management to **read-status + disable** (`getDnssec` / `disableDnssec`);
 enabling DNSSEC is out of scope for this library for now.
 
-| `Feature`             | Declared by                | Notes                                                                                                  |
-| --------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `GetAuthCode`         | DY, GA, SP                 | transfer-out EPP code; NameSilo emails it (can't return it); GD/NC gate it behind the dashboard        |
-| `GetDnssec`           | DY, GA, NS, PB             | read whether DNSSEC is enabled (DS / key records)                                                      |
-| `DisableDnssec`       | DY, GA, NS, PB             | turn DNSSEC off; no enable / key management (out of scope)                                             |
-| `GetEmailForwarding`  | CF, DY, GA, NC, NS         | read counterpart of `SetEmailForwarding`                                                               |
-| `SetEmailForwarding`  | CF, DY, GA, NC, NS         | alias redirect only — **distinct from a mailbox**; CF uses Email Routing                               |
-| `GetDomainForwarding` | CF, DY, GA, GD, NC, NS, PB | read counterpart of `SetDomainForwarding`                                                              |
-| `SetDomainForwarding` | CF, DY, GA, GD, NC, NS, PB | `temporary`/`permanent` only (`masked` is read-only); Gandi `webredirs` (subdomain-only); CF via Rules |
+| `Feature`             | Declared by                | Notes                                                                                                   |
+| --------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `GetAuthCode`         | DY, GA, GD, NB, SP         | transfer-out EPP code returned synchronously; NameSilo/NC only email it; Porkbun gates it behind the UI |
+| `GetDnssec`           | DY, GA, NS, PB             | read whether DNSSEC is enabled (DS / key records)                                                       |
+| `DisableDnssec`       | DY, GA, NS, PB             | turn DNSSEC off; no enable / key management (out of scope)                                              |
+| `GetEmailForwarding`  | CF, DY, GA, NC, NS         | read counterpart of `SetEmailForwarding`                                                                |
+| `SetEmailForwarding`  | CF, DY, GA, NC, NS         | alias redirect only — **distinct from a mailbox**; CF uses Email Routing                                |
+| `GetDomainForwarding` | CF, DY, GA, GD, NC, NS, PB | read counterpart of `SetDomainForwarding`                                                               |
+| `SetDomainForwarding` | CF, DY, GA, GD, NC, NS, PB | `temporary`/`permanent` only (`masked` is read-only); Gandi `webredirs` (subdomain-only); CF via Rules  |
 
 **Implementation status:** every declared extended feature above is now
 implemented on its provider(s). **Dynadot**, **Gandi**, and **Porkbun** are
 verified end-to-end in their sandboxes; **Namecheap** forwarding predates this
 work; **Spaceship**'s only extended feature (`GetAuthCode`) is live-verified
-against the production account (2026-08-29, `domains:transfer`-scoped key); the
-rest (**GoDaddy**, **NameSilo**) are implemented from verified endpoint docs but
-not live-verified (no sandbox credentials available).
+against the production account (2026-08-29, `domains:transfer`-scoped key).
+**GoDaddy** and **NameBright** `GetAuthCode` are also live-verified against their
+production accounts (2026-08-29) — both return the transfer/EPP code
+synchronously on the domain-detail response (`authCode` / `AuthCode`);
+**NameSilo**'s remaining forwarding feature is implemented from verified endpoint
+docs but not live-verified (no sandbox credentials available).
 Two provider-specific limitations worth noting: **NameSilo** dropped
 `GetAuthCode` (its `retrieveAuthCode` emails the code to the registrant rather
 than returning it) and reads only the apex URL forward (no forwarding-list

@@ -1,6 +1,6 @@
 # GoDaddy — Domains API Research
 
-> Researched: 2026-08-26 · Docs: https://developer.godaddy.com/doc · https://developer.godaddy.com/en/docs/references/rest/domains
+> Researched: 2026-08-26 · **`getAuthCode` live-verified: 2026-08-29** · Docs: https://developer.godaddy.com/doc · https://developer.godaddy.com/en/docs/references/rest/domains
 
 ## Overview
 
@@ -95,7 +95,7 @@ Two auth schemes coexist: the legacy `sso-key {API_KEY}:{API_SECRET}` header (us
 | Renew a domain                              | ✓       | v1/v2 endpoint (`POST /v1/domains/{domain}/renew`); stated as remaining on v1/v2, out of scope for v3.                                                                                         |
 | Auto-renew toggle                           | ✓       | Managed via domain settings update on `PATCH /v1/domains/{domain}`.                                                                                                                            |
 | Transfer domain in                          | ✓       | v1/v2 `POST /v1/domains/{domain}/transfer` (inbound transfer initiation).                                                                                                                      |
-| Transfer out / get auth/EPP code            | ~       | Outbound transfer supported per doc summary ("inbound and outbound transfers"); explicit EPP/auth-code retrieval endpoint not confirmed in fetched pages.                                      |
+| Transfer out / get auth/EPP code            | ✓       | `getAuthCode` reads the `authCode` field on `GET /v1/domains/{domain}` (transfers stay on v1). Returned synchronously; live-verified 2026-08-29.                                               |
 | Update nameservers                          | ✓       | `PATCH /v1/domains/{domain}` (nameservers field) and v3 nameserver management endpoints.                                                                                                       |
 | Get nameservers                             | ✓       | Included in `GET /v1/domains/{domain}` / v3 domain read.                                                                                                                                       |
 | Lock / unlock domain (transfer lock)        | ✓       | Registry lock flag on domain settings (`PATCH /v1/domains/{domain}`), read/toggle per domain-management-concepts doc.                                                                          |
