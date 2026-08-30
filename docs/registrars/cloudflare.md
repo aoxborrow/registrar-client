@@ -28,6 +28,25 @@ the research table below predate this and are partly superseded by these finding
   works and persists (toggled `true→false→true`, reversible).
 - **`setDnsRecords`** — Zones API replace-all (delete existing, recreate). **Verified on
   the clean `example.dev` zone**: set A/TXT/MX, read-back matched, restored to empty.
+- **`get/setDomainForwarding`** (extended) — composed from the Rules API + a proxied
+  placeholder DNS record (there is no native Registrar forwarding). `setDomainForwarding`
+  writes one static redirect rule per host to the `http_request_dynamic_redirect` phase
+  ruleset (301 `permanent` / 302 `redirect`) and ensures a proxied `AAAA → 100::`
+  placeholder on each source host so the edge applies the redirect. HTTPS works via
+  Universal SSL. **Verified live** on a gTLD test zone: apex + `www` → an external
+  HTTPS target both return `302` at the edge. Clearing removes the rules and the
+  placeholder records.
+- **`get/setEmailForwarding`** (extended) — Cloudflare Email Routing. `setEmailForwarding`
+  enables routing if needed (adds MX/SPF), writes a routing rule per `alias@domain`, and
+  maps `*`/`@` to the catch-all. It also pre-checks destination addresses: any unknown
+  destination is added (which sends Cloudflare's verification email) and the result names
+  the ones still awaiting verification (rules to them stay inactive until verified). This
+  needs the token's **Email Routing Addresses** scope — without it (`/email/routing/addresses`
+  → 403) the pre-check is skipped and verification is done in the dashboard. **Verified
+  live**: wildcard catch-all on `example.dev` to an already-verified destination.
+- **Masked/framed forwarding is read-only**: `DomainForwardType` is `temporary | permanent
+| masked`; `setDomainForwarding` rejects `masked`, `getDomainForwarding` reports it.
+  Cloudflare never produces `masked` (it can't cloak).
 
 **Not available via the API (confirmed, both `.uk` and gTLD `.dev`):**
 

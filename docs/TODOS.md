@@ -118,5 +118,8 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
 
 - [ ] **Marketplace listing + account push** — `listOnMarketplace`
       (Dynadot/Spaceship) and `pushToAccount` (Dynadot/NameBright).
-- [ ] **Cloudflare extended routing** — email forwarding (Email Routing) and domain
-      forwarding (Bulk Redirects) via Cloudflare's non-registrar APIs.
+- [x] **Cloudflare extended routing** — DONE (live-verified 2026-08-29): email
+      forwarding via Email Routing and domain forwarding via the Rules API (a
+      redirect rule + a proxied placeholder DNS record). Not implemented via Bulk
+      Redirects — the per-zone Rules `http_request_dynamic_redirect` phase is the
+      right fit for a single domain's apex/www forward.
