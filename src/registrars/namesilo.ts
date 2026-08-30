@@ -801,7 +801,7 @@ function text(v: unknown): string {
 function dnsKey(type: string, host: string, value: string, distance: number | undefined): string {
   const t = type.toUpperCase();
   const dist = t === 'MX' && Number.isFinite(distance) ? String(distance) : '';
-  return [t, host || '@', value, dist].join(' ');
+  return [t, host || '@', value, dist].join('\x00');
 }
 
 // map the normalized Contact to NameSilo's contactAdd parameters (fn/ln/ad/…)
