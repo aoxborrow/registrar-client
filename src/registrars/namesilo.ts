@@ -20,7 +20,7 @@ import type {
 } from '../types';
 import { createDomain, filterDomains, settableForwards } from '../utils';
 import { NotFoundError, toRegistrarError } from '../errors';
-import { ensureArray } from '../xml';
+import { ensureArray, parseXml } from '../xml';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
@@ -504,21 +504,48 @@ export class NameSiloRegistrar extends BaseRegistrar {
   }
 
   /**
-   * Read email forwarding via listEmailForwards. Each `addresses` entry has an
-   * `email` (local part) and one or more `forwards_to`; expand each destination
-   * into its own {alias, forwardTo} row.
+   * Read the raw email-forward rows via listEmailForwards. NameSilo's `type=json`
+   * output for this one call is lossy — it drops the alias (the `<email>` tag) and
+   * returns only nested `forwards_to` arrays — so this call is fetched as XML and
+   * parsed. The XML `<email>` is the full address (alias@domain); return just the
+   * local part, plus its destinations.
+   */
+  private async listEmailForwards(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<{ alias: string; forwardsTo: string[] }[]> {
+    const xml = await this.http.requestText({
+      path: '/listEmailForwards',
+      query: { version: 1, type: 'xml', key: this.credentials.apiKey, domain: domainName },
+      ...opts,
+    });
+    const reply = parseXml<{ namesilo?: NsResponse }>(xml)?.namesilo?.reply;
+    if (!reply || Number(reply.code) !== 300) {
+      throw new Error(reply?.detail ? text(reply.detail) : 'NameSilo: listEmailForwards failed');
+    }
+    const suffix = `@${domainName.toLowerCase()}`;
+    return ensureArray<NsEmailAddresses>(reply.addresses).map(a => {
+      const full = text(a.email);
+      const alias = full.toLowerCase().endsWith(suffix)
+        ? full.slice(0, full.length - suffix.length)
+        : full;
+      return { alias, forwardsTo: ensureArray<string>(a.forwards_to).map(text).filter(Boolean) };
+    });
+  }
+
+  /**
+   * Read email forwarding. Expands each alias's destinations into its own
+   * {alias, forwardTo} row.
    */
   override async getEmailForwarding(
     domainName: string,
     opts?: RequestOptions
   ): Promise<EmailForward[]> {
-    const res = await this.call('listEmailForwards', { domain: domainName }, opts);
-    if (!replyOk(res)) throw new Error(replyDetail(res));
+    const rows = await this.listEmailForwards(domainName, opts);
     const out: EmailForward[] = [];
-    for (const a of ensureArray<NsEmailAddresses>(res.reply?.addresses)) {
-      const alias = text(a.email);
-      for (const dest of ensureArray<string>(a.forwards_to)) {
-        if (alias && dest) out.push({ alias, forwardTo: text(dest) });
+    for (const { alias, forwardsTo } of rows) {
+      for (const dest of forwardsTo) {
+        if (alias && dest) out.push({ alias, forwardTo: dest });
       }
     }
     return out;
@@ -541,12 +568,8 @@ export class NameSiloRegistrar extends BaseRegistrar {
         list.push(f.forwardTo);
         desired.set(f.alias, list);
       }
-      const res = await this.call('listEmailForwards', { domain: domainName }, opts);
-      if (!replyOk(res)) return statusResult(res);
       const currentAliases = new Set(
-        ensureArray<NsEmailAddresses>(res.reply?.addresses)
-          .map(a => text(a.email))
-          .filter(Boolean)
+        (await this.listEmailForwards(domainName, opts)).map(r => r.alias).filter(Boolean)
       );
 
       for (const alias of currentAliases) {
@@ -585,8 +608,12 @@ export class NameSiloRegistrar extends BaseRegistrar {
   ): Promise<DomainForward[]> {
     const res = await this.call('getDomainInfo', { domain: domainName }, opts);
     if (!replyOk(res)) throw new Error(replyDetail(res));
+    // NameSilo keeps the last `forward_url` even after forwarding is switched off,
+    // so gate on `traffic_type` — only "Forwarded" means an active apex forward.
+    // (A never-forwarded domain also reports forward_url "N/A".)
+    if (text(res.reply?.traffic_type) !== 'Forwarded') return [];
     const url = text(res.reply?.forward_url);
-    if (!url) return [];
+    if (!url || url === 'N/A') return [];
     return [{ host: '@', url, type: nsForwardType(res.reply?.forward_type) }];
   }
 
@@ -893,9 +920,11 @@ function isYes(v: unknown): boolean {
   return s === 'yes' || s === '1' || s === 'true';
 }
 
-// NameSilo's default nameservers, used to switch a domain off URL forwarding
-// (there is no dedicated "stop forwarding" command).
-const NAMESILO_DEFAULT_NS = ['ns1.namesilo.com', 'ns2.namesilo.com'];
+// NameSilo's DNS-hosting nameservers (DNSOWL). There is no dedicated "stop
+// forwarding" command; re-pointing the domain at these flips its `traffic_type`
+// from "Forwarded" back to "Custom DNS", which deactivates the apex forward.
+// (The parking servers ns1/ns2.namesilo.com do NOT clear forwarding.)
+const NAMESILO_DEFAULT_NS = ['ns1.dnsowl.com', 'ns2.dnsowl.com', 'ns3.dnsowl.com'];
 
 // map our generic (settable) forward type to NameSilo's domainForward `method`
 const NS_FORWARD_METHOD: Record<'temporary' | 'permanent', string> = {

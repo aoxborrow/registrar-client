@@ -200,11 +200,16 @@ export class HttpClient {
         const retryAfter = Number(response.headers.get('retry-after'));
         return new RateLimitError(message, Number.isFinite(retryAfter) ? retryAfter : undefined);
       }
-      default:
+      default: {
         if (response.status >= 500) {
           return new InvalidResponseError(message);
         }
-        return new RegistrarError(message);
+        // preserve the real status for 4xx codes without a dedicated class
+        // (400, 402, 409, 422, …) so callers can branch on it
+        const err = new RegistrarError(message);
+        err.status = response.status;
+        return err;
+      }
     }
   }
 }
