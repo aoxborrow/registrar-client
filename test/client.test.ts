@@ -125,7 +125,7 @@ describe('capabilities / features', () => {
     expect(gd.features).toEqual(registrars.godaddy.features);
     expect(gd.supports(Feature.RegisterDomain)).toBe(true); // core
     expect(gd.supports(Feature.GetAuthCode)).toBe(true); // its extended
-    expect(gd.supports(Feature.SetDomainForwarding)).toBe(false); // forwarding dropped (v1 gone, v2 reseller-only)
+    expect(gd.supports(Feature.SetDomainForwarding)).toBe(true); // v2 customer-scoped forwarding
     expect(gd.supports(Feature.GetDnssec)).toBe(false); // not declared
     // a provider that declares an extended feature reports it as supported
     const ns = createRegistrar('namesilo', { apiKey: 'k' });

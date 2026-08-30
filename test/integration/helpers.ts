@@ -20,6 +20,8 @@ export const SANDBOX_TARGETS: SandboxTarget[] = [
     name: 'godaddy',
     // use GoDaddy OTE keys from developer.godaddy.com (OTE environment)
     required: { apiKey: 'GODADDY_API_KEY', apiSecret: 'GODADDY_API_SECRET' },
+    // customerId (customer UUID or numeric shopper ID) enables v2 domain forwarding
+    optional: { customerId: 'GODADDY_CUSTOMER_ID' },
     environmentVar: 'GODADDY_ENVIRONMENT',
   },
   {

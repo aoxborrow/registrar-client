@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   createRegistrar,
+  ConfigurationError,
   ConsentRequiredError,
   NotImplementedError,
+  NotFoundError,
   RegistrarError,
   Feature,
 } from '../src/index';
@@ -303,14 +305,108 @@ describe('GoDaddy provider', () => {
     expect(calls.some(c => c.method === 'PATCH')).toBe(false);
   });
 
-  it('domain forwarding is not supported (GoDaddy removed the API)', async () => {
+  it('declares domain forwarding (v2 customer-scoped API)', () => {
     const gd = godaddy();
-    expect(gd.supports(Feature.GetDomainForwarding)).toBe(false);
-    expect(gd.supports(Feature.SetDomainForwarding)).toBe(false);
-    await expect(gd.getDomainForwarding('example.com')).rejects.toBeInstanceOf(NotImplementedError);
-    await expect(gd.setDomainForwarding('example.com', [])).rejects.toBeInstanceOf(
-      NotImplementedError
+    expect(gd.supports(Feature.GetDomainForwarding)).toBe(true);
+    expect(gd.supports(Feature.SetDomainForwarding)).toBe(true);
+  });
+
+  it('forwarding requires customerId to be configured', async () => {
+    const gd = godaddy(); // no customerId
+    await expect(gd.getDomainForwarding('example.com')).rejects.toBeInstanceOf(ConfigurationError);
+    const res = await gd.setDomainForwarding('example.com', []);
+    expect(res.success).toBe(false);
+    expect(res.message).toMatch(/customer ID/i);
+  });
+
+  it('getDomainForwarding uses the v2 path with a UUID customerId and maps read tokens', async () => {
+    const uuid = '373a9a36-de96-4fb6-a005-beb658622652';
+    const gd = createRegistrar('godaddy', { apiKey: 'k', apiSecret: 's', customerId: uuid });
+    const calls = stubHttp(gd, () => [
+      { fqdn: 'example.com', type: 'PERMANENT_REDIRECT', url: 'https://dest.example' },
+      { fqdn: 'www.example.com', type: 'TEMPORARY_REDIRECT', url: 'https://dest.example/w' },
+    ]);
+    const forwards = await gd.getDomainForwarding('example.com');
+    // no shopper-resolution call — the UUID is used directly
+    expect(calls).toHaveLength(1);
+    expect(calls[0].path).toBe(`/v2/customers/${uuid}/domains/forwards/example.com`);
+    expect(forwards).toEqual([
+      { host: '@', url: 'https://dest.example', type: 'permanent' },
+      { host: 'www', url: 'https://dest.example/w', type: 'temporary' },
+    ]);
+  });
+
+  it('getDomainForwarding treats a 404 as no forwarding', async () => {
+    const gd = createRegistrar('godaddy', {
+      apiKey: 'k',
+      apiSecret: 's',
+      customerId: '373a9a36-de96-4fb6-a005-beb658622652',
+    });
+    stubHttp(gd, () => {
+      throw new NotFoundError('Resource not found');
+    });
+    await expect(gd.getDomainForwarding('example.com')).resolves.toEqual([]);
+  });
+
+  it('resolves a numeric shopper ID to a customer UUID via an sso-key lookup', async () => {
+    const uuid = '373a9a36-de96-4fb6-a005-beb658622652';
+    const gd = createRegistrar('godaddy', { apiKey: 'k', apiSecret: 's', customerId: '55905996' });
+    const calls = stubHttp(gd, req => {
+      if (req.path.startsWith('/v1/shoppers/')) return { shopperId: '55905996', customerId: uuid };
+      return []; // the forwards read
+    });
+    await gd.getDomainForwarding('example.com');
+    // first the shopper resolution (sso-key header), then the v2 forwards read
+    expect(calls[0].path).toBe('/v1/shoppers/55905996');
+    expect(calls[0].query).toMatchObject({ includes: 'customerId' });
+    expect(calls[0].headers?.Authorization).toBe('sso-key k:s');
+    expect(calls[1].path).toBe(`/v2/customers/${uuid}/domains/forwards/example.com`);
+    // a second call reuses the memoized UUID (no repeat resolution)
+    await gd.getDomainForwarding('example.com');
+    expect(calls.filter(c => c.path.startsWith('/v1/shoppers/'))).toHaveLength(1);
+  });
+
+  it('a numeric shopper ID needs sso-key credentials to resolve (PAT alone fails)', async () => {
+    const gd = createRegistrar(
+      'godaddy',
+      { apiToken: 'gd_pat_x', customerId: '55905996' },
+      { environment: 'production' }
     );
+    await expect(gd.getDomainForwarding('example.com')).rejects.toBeInstanceOf(ConfigurationError);
+  });
+
+  it('setDomainForwarding PUTs each rule with the write token and clears removed hosts', async () => {
+    const uuid = '373a9a36-de96-4fb6-a005-beb658622652';
+    const gd = createRegistrar('godaddy', { apiKey: 'k', apiSecret: 's', customerId: uuid });
+    const calls = stubHttp(gd, req => {
+      // current state read (getDomainForwarding): a www forward that will be removed
+      if (req.method === undefined || req.method === 'GET') {
+        return [{ fqdn: 'www.example.com', type: 'PERMANENT_REDIRECT', url: 'https://old' }];
+      }
+      return undefined;
+    });
+    const res = await gd.setDomainForwarding('example.com', [
+      { host: '@', url: 'https://dest.example', type: 'permanent' },
+    ]);
+    expect(res.success).toBe(true);
+    // www (no longer desired) is DELETEd; apex is PUT with the write-side token
+    const del = calls.find(c => c.method === 'DELETE');
+    expect(del?.path).toBe(`/v2/customers/${uuid}/domains/forwards/www.example.com`);
+    const put = calls.find(c => c.method === 'PUT');
+    expect(put?.path).toBe(`/v2/customers/${uuid}/domains/forwards/example.com`);
+    expect(put?.body).toEqual({ type: 'REDIRECT_PERMANENT', url: 'https://dest.example' });
+  });
+
+  it('setDomainForwarding rejects masked forwards before any write', async () => {
+    const uuid = '373a9a36-de96-4fb6-a005-beb658622652';
+    const gd = createRegistrar('godaddy', { apiKey: 'k', apiSecret: 's', customerId: uuid });
+    const calls = stubHttp(gd, () => []);
+    const res = await gd.setDomainForwarding('example.com', [
+      { host: '@', url: 'https://dest.example', type: 'masked' },
+    ]);
+    expect(res.success).toBe(false);
+    // nothing was written
+    expect(calls.some(c => c.method === 'PUT' || c.method === 'DELETE')).toBe(false);
   });
 });
 

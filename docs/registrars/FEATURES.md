@@ -1,86 +1,25 @@
-# Registrar Feature Matrix
+# Registrar Capabilities — Design & Implementation Notes
 
-Cross-provider synthesis of the six original per-registrar research docs in this
-folder ([cloudflare](cloudflare.md) · [dynadot](dynadot.md) · [gandi](gandi.md) ·
-[godaddy](godaddy.md) · [namecheap](namecheap.md) · [spaceship](spaceship.md)).
+The design record behind the capability model, plus the per-registrar engineering
+detail, for the providers documented in this folder ([cloudflare](cloudflare.md) ·
+[dynadot](dynadot.md) · [gandi](gandi.md) · [godaddy](godaddy.md) ·
+[namecheap](namecheap.md) · [namesilo](namesilo.md) · [porkbun](porkbun.md) ·
+[namebright](namebright.md) · [spaceship](spaceship.md)). Three others —
+[squarespace](squarespace.md), [networksolutions](networksolutions.md), and
+[edomains](edomains.md) — were researched but **not implemented**: none expose a
+usable public API (reseller/partner-gated or undocumented).
 
-> Researched 2026-08-26 against each provider's latest public API docs. This is a
-> capability map to drive the library's **common core** vs. **optional/generic**
-> method split — not an endpoint reference. See the per-registrar docs for
-> endpoints, auth, and access gates.
+> The **capability matrix** — which method each provider implements, read from the
+> code across all nine providers — lives in the project README under
+> [Supported functionality](../../README.md#supported-functionality), which is the
+> single source of truth. This document covers the model _behind_ that table: the
+> core-vs-extended contract, the discovery API, and per-provider implementation
+> notes. See the per-registrar docs for endpoints, auth, and access gates.
 
-> **Also researched since (not in the matrix below yet):** implemented —
-> [namesilo](namesilo.md) (broad JSON API), [porkbun](porkbun.md) (JSON API; no
-> transfer-lock write, renewal needs a price handshake), and
-> [namebright](namebright.md) (OAuth2; reads implemented, writes pending
-> verification). Not implemented — [squarespace](squarespace.md),
-> [networksolutions](networksolutions.md), and [edomains](edomains.md), none of
-> which expose a usable public API (reseller/partner-gated or undocumented).
+## The Cloudflare caveat
 
-**Legend:** ✓ supported · ~ partial / caveat / indirect · ✗ not in the API
-
-## Master matrix
-
-| #   | Feature                          | CF  | DY  | GA  | GD  | NC  | SP  | Tally (✓ / ✓+~) |
-| --- | -------------------------------- | --- | --- | --- | --- | --- | --- | --------------- |
-| 1   | Test connection / verify creds   | ✓   | ✓   | ~   | ~   | ~   | ~   | 2 / 6           |
-| 2   | List domains                     | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | 6 / 6           |
-| 3   | Get single domain details        | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | 6 / 6           |
-| 4   | **Check availability**           | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | **6 / 6**       |
-| 5   | Get pricing (TLD / domain)       | ✓   | ✓   | ✓   | ✓   | ✓   | ✗   | 5 / 5           |
-| 6   | **Register a domain**            | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | **6 / 6**       |
-| 7   | Renew a domain                   | ✗   | ✓   | ✓   | ✓   | ✓   | ✓   | 5 / 5           |
-| 8   | Auto-renew toggle                | ✗²  | ✓   | ✓   | ✓   | ✓   | ✓   | 5 / 5           |
-| 9   | Transfer domain in               | ✗   | ✓   | ✓   | ✓   | ✓   | ✓   | 5 / 5           |
-| 10  | Transfer out / get auth code     | ✗   | ✓   | ✓   | ✓   | ~   | ✓   | 4 / 5           |
-| 11  | Update nameservers               | ✗   | ✓   | ✓   | ✓   | ✓   | ✓   | 5 / 5           |
-| 12  | Get nameservers                  | ✓   | ✓   | ✓   | ✓   | ✓   | ~   | 5 / 6           |
-| 13  | Lock / unlock (transfer lock)    | ✗²  | ✓   | ~   | ✓   | ✓   | ✓   | 4 / 5           |
-| 14  | Get / set WHOIS privacy          | ✓   | ✓   | ~   | ~   | ✓   | ✓   | 4 / 6           |
-| 15  | Update contact info              | ✗   | ✓   | ✓   | ✓   | ✓   | ✓   | 5 / 5           |
-| 16  | DNS record management            | ✓¹  | ✓   | ✓   | ✓   | ✓   | ✓   | 6 / 6           |
-| 17  | DNSSEC management                | ✗   | ✓   | ✓   | ~   | ✗   | ✗   | 2 / 3           |
-| 18  | Glue / host records              | ✗   | ✓   | ✓   | ✗   | ~   | ✓   | 3 / 4           |
-| 19  | Email forwarding / mailbox       | ✓³  | ~   | ✓   | ✗   | ~   | ✗   | 2 / 4           |
-| 20  | Domain forwarding / URL redirect | ✓³  | ✓   | ✓   | ✗⁴  | ✓   | ✗   | 4 / 4           |
-| 21  | Webhooks / event notifications   | ✗   | ✓   | ✗   | ~   | ✗   | ✗   | 1 / 2           |
-
-¹ Cloudflare _does_ offer world-class DNS record management — but through its
-separate DNS/Zones API, not the Registrar API. DNS is a **headline feature** of
-this library, so the Cloudflare provider routes `getDnsRecords`/`setDnsRecords`
-through the Zones API — **implemented and live-verified 2026-08-29**
-(`setDnsRecords` is a replace-all; it fails only when Cloudflare Email Routing
-locks the zone's managed MX/DKIM/SPF records, surfaced cleanly). The same
-Cloudflare-APIs-outside-the-Registrar-API approach now also powers email
-forwarding (Email Routing) and domain forwarding (Rules) — see ³.
-
-² **Verified impossible via the API, not just unimplemented** (2026-08-29): the
-legacy `PUT registrar/domains/{name}` returns 422 "not allowed to perform this
-action" for `auto_renew`/`locked` — on **both** a `.uk` and a gTLD (`.dev`), so
-it is API-wide, not TLD-specific — and the new `registrations` resource has no
-update endpoint. These are settable **only at registration**.
-
-³ Cloudflare has no native forwarding primitive; the provider composes it from
-other Cloudflare APIs (live-verified 2026-08-29). **Domain forwarding** = a Rules
-redirect (`http_request_dynamic_redirect`) plus a proxied `AAAA → 100::`
-placeholder record so the edge applies it; verified apex + `www` → `302` at the
-edge. **Email forwarding** = Email Routing (enabling it adds MX/SPF); catch-all
-verified live. `setEmailForwarding` adds unknown destinations (sending the
-verification email) and reports which are still pending, where the token has the
-Email Routing Addresses scope; otherwise verification is done in the dashboard.
-Masked/framed forwarding is read-only for all providers: `getDomainForwarding`
-reports `masked`, `setDomainForwarding` rejects it.
-
-⁴ GoDaddy domain forwarding is **no longer reachable via API** (verified live
-2026-08-29): the v1 `/v1/domains/forwards/{fqdn}` routes 404 ("no method to handle
-request"), and the v2 replacement `/v2/customers/{customerId}/domains/forwards/{fqdn}`
-returns 403 ACCESS_DENIED for standard accounts (it's gated behind GoDaddy's
-reseller / "API Users" program). The provider no longer declares the feature.
-
-### The Cloudflare caveat (read before trusting column CF)
-
-Column CF is **live-verified as of 2026-08-29** (see [cloudflare.md](cloudflare.md)).
-Cloudflare is mid-migration and the write surface is split:
+Cloudflare is **live-verified as of 2026-08-29** (see [cloudflare.md](cloudflare.md))
+and is mid-migration, so its write surface is split:
 
 - **Now working:** reads, `checkAvailability` + `getPricing` (`domain-check`),
   `registerDomain` (`registrations`, beta — `namebot.dev` registered live),
@@ -142,11 +81,11 @@ finding.
 | `getDnsRecords(domain)`            | `GetDnsRecords`     |
 | `setDnsRecords(domain, records)`   | `SetDnsRecords`     |
 
-**DNS record management is core** — one of the library's headline features. The
-scan's "not in the Registrar API" cells (notably Cloudflare) mean the provider
-routes DNS through another API of that vendor, not that it's unsupported.
+**DNS record management is core** — one of the library's headline features. Where a
+provider's Registrar API lacks DNS (notably Cloudflare), the provider routes DNS
+through another API of that vendor, not that it's unsupported.
 
-### Extended (opt-in; the "declared by" column is what the scan found)
+### Extended (opt-in)
 
 The extended catalog was **pruned to what we intend to build** (2026-08-29).
 Removed entirely: glue records, marketplace listing, account push, appraisal,
@@ -154,15 +93,19 @@ webhooks, mailbox provisioning, and bulk settings. DNSSEC was narrowed from full
 key management to **read-status + disable** (`getDnssec` / `disableDnssec`);
 enabling DNSSEC is out of scope for this library for now.
 
-| `Feature`             | Declared by            | Notes                                                                                                   |
-| --------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------- |
-| `GetAuthCode`         | DY, GA, GD, NB, SP     | transfer-out EPP code returned synchronously; NameSilo/NC only email it; Porkbun gates it behind the UI |
-| `GetDnssec`           | DY, GA, NS, PB         | read whether DNSSEC is enabled (DS / key records)                                                       |
-| `DisableDnssec`       | DY, GA, NS, PB         | turn DNSSEC off; no enable / key management (out of scope)                                              |
-| `GetEmailForwarding`  | CF, DY, GA, NC, NS     | read counterpart of `SetEmailForwarding`                                                                |
-| `SetEmailForwarding`  | CF, DY, GA, NC, NS     | alias redirect only — **distinct from a mailbox**; CF uses Email Routing                                |
-| `GetDomainForwarding` | CF, DY, GA, NC, NS, PB | read counterpart of `SetDomainForwarding`                                                               |
-| `SetDomainForwarding` | CF, DY, GA, NC, NS, PB | `temporary`/`permanent` only (`masked` is read-only); Gandi `webredirs` (subdomain-only); CF via Rules  |
+Which provider declares each extended feature is in the README's
+[Supported functionality](../../README.md#supported-functionality) table; the notes
+below capture the per-feature caveats behind those cells.
+
+| `Feature`             | Notes                                                                                                   |
+| --------------------- | ------------------------------------------------------------------------------------------------------- |
+| `GetAuthCode`         | transfer-out EPP code returned synchronously; NameSilo/NC only email it; Porkbun gates it behind the UI |
+| `GetDnssec`           | read whether DNSSEC is enabled (DS / key records)                                                       |
+| `DisableDnssec`       | turn DNSSEC off; no enable / key management (out of scope)                                              |
+| `GetEmailForwarding`  | read counterpart of `SetEmailForwarding`                                                                |
+| `SetEmailForwarding`  | alias redirect only — **distinct from a mailbox**; CF uses Email Routing                                |
+| `GetDomainForwarding` | read counterpart of `SetDomainForwarding`                                                               |
+| `SetDomainForwarding` | `temporary`/`permanent` only (`masked` is read-only); Gandi `webredirs` (subdomain-only); CF via Rules  |
 
 **Implementation status:** every declared extended feature above is now
 implemented on its provider(s). **Dynadot**, **Gandi**, and **Porkbun** are
