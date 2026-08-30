@@ -2,14 +2,26 @@ import { describe, it, expect } from 'vitest';
 import { createRegistrar } from '../src/index';
 import type { RequestConfig } from '../src/http';
 
-// NameSilo speaks JSON over its HttpClient.request; stub that.
+// NameSilo speaks JSON over HttpClient.request, plus raw XML over requestText for
+// listEmailForwards (whose JSON output is lossy). Stub both; the handler returns
+// an object for JSON calls and an XML string for requestText calls.
 function stubHttp(provider: unknown, handler: (req: RequestConfig) => unknown): RequestConfig[] {
   const calls: RequestConfig[] = [];
-  (provider as { http: { request: (req: RequestConfig) => Promise<unknown> } }).http.request = (
-    req: RequestConfig
-  ) => {
+  const http = (
+    provider as {
+      http: {
+        request: (req: RequestConfig) => Promise<unknown>;
+        requestText: (req: RequestConfig) => Promise<string>;
+      };
+    }
+  ).http;
+  http.request = (req: RequestConfig) => {
     calls.push(req);
     return Promise.resolve(handler(req));
+  };
+  http.requestText = (req: RequestConfig) => {
+    calls.push(req);
+    return Promise.resolve(handler(req) as string);
   };
   return calls;
 }
@@ -361,28 +373,41 @@ describe('NameSilo provider', () => {
     });
   });
 
-  it('getEmailForwarding expands forwards_to (single or array) per mailbox', async () => {
+  // NameSilo's JSON output for listEmailForwards drops the alias, so the client
+  // reads it as XML (type=xml) via requestText. The <email> is the full address.
+  const emailXml = (rows: { email: string; forwards_to: string[] }[]) =>
+    `<namesilo><reply><code>300</code><detail>success</detail>${rows
+      .map(
+        r =>
+          `<addresses><email>${r.email}</email>${r.forwards_to
+            .map(f => `<forwards_to>${f}</forwards_to>`)
+            .join('')}</addresses>`
+      )
+      .join('')}</reply></namesilo>`;
+
+  it('getEmailForwarding reads XML and expands forwards_to per mailbox', async () => {
     const ns = namesilo();
-    stubHttp(ns, () =>
-      OK({
-        addresses: [
-          { email: 'hello', forwards_to: ['a@x.com', 'b@y.com'] },
-          { email: 'sales', forwards_to: 'c@z.com' },
-        ],
-      })
+    const calls = stubHttp(ns, () =>
+      emailXml([
+        { email: 'hello@example.com', forwards_to: ['a@x.com', 'b@y.com'] },
+        { email: 'sales@example.com', forwards_to: ['c@z.com'] },
+      ])
     );
     expect(await ns.getEmailForwarding('example.com')).toEqual([
       { alias: 'hello', forwardTo: 'a@x.com' },
       { alias: 'hello', forwardTo: 'b@y.com' },
       { alias: 'sales', forwardTo: 'c@z.com' },
     ]);
+    // fetched as XML, not JSON
+    expect(calls[0].path).toBe('/listEmailForwards');
+    expect(calls[0].query).toMatchObject({ type: 'xml' });
   });
 
   it('setEmailForwarding upserts forward1..N and deletes removed aliases', async () => {
     const ns = namesilo();
     const calls = stubHttp(ns, req => {
       if (String(req.path) === '/listEmailForwards') {
-        return OK({ addresses: [{ email: 'old', forwards_to: 'x@x.com' }] });
+        return emailXml([{ email: 'old@example.com', forwards_to: ['x@x.com'] }]);
       }
       return OK();
     });
@@ -404,7 +429,13 @@ describe('NameSilo provider', () => {
 
   it('getDomainForwarding reads the apex forward from getDomainInfo', async () => {
     const ns = namesilo();
-    stubHttp(ns, () => OK({ forward_url: 'https://example.com/landing', forward_type: '302' }));
+    stubHttp(ns, () =>
+      OK({
+        forward_url: 'https://example.com/landing',
+        forward_type: '302',
+        traffic_type: 'Forwarded',
+      })
+    );
     expect(await ns.getDomainForwarding('example.com')).toEqual([
       { host: '@', url: 'https://example.com/landing', type: 'temporary' },
     ]);
@@ -413,6 +444,20 @@ describe('NameSilo provider', () => {
   it('getDomainForwarding returns [] when no apex forward is set', async () => {
     const ns = namesilo();
     stubHttp(ns, () => OK());
+    expect(await ns.getDomainForwarding('example.com')).toEqual([]);
+  });
+
+  it('getDomainForwarding returns [] for a stale forward_url when traffic_type is not Forwarded', async () => {
+    const ns = namesilo();
+    // NameSilo keeps the last forward_url after forwarding is switched off; only
+    // traffic_type === "Forwarded" means it is actually active.
+    stubHttp(ns, () =>
+      OK({
+        forward_url: 'https://example.com/old',
+        forward_type: '301',
+        traffic_type: 'Custom DNS',
+      })
+    );
     expect(await ns.getDomainForwarding('example.com')).toEqual([]);
   });
 
@@ -431,12 +476,18 @@ describe('NameSilo provider', () => {
     });
   });
 
-  it('setDomainForwarding clears by restoring default nameservers on an empty list', async () => {
+  it('setDomainForwarding clears by restoring DNS-hosting nameservers on an empty list', async () => {
     const ns = namesilo();
     const calls = stubHttp(ns, () => OK());
     await ns.setDomainForwarding('example.com', []);
     expect(calls[0].path).toBe('/changeNameServers');
-    expect(calls[0].query).toMatchObject({ ns1: 'ns1.namesilo.com', ns2: 'ns2.namesilo.com' });
+    // DNSOWL (DNS hosting), not the ns*.namesilo.com parking servers — pointing at
+    // these flips traffic_type back to "Custom DNS" and deactivates forwarding.
+    expect(calls[0].query).toMatchObject({
+      ns1: 'ns1.dnsowl.com',
+      ns2: 'ns2.dnsowl.com',
+      ns3: 'ns3.dnsowl.com',
+    });
   });
 
   it('setDomainForwarding rejects per-subdomain hosts (apex-only)', async () => {

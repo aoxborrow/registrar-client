@@ -2,8 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   createRegistrar,
   ConsentRequiredError,
-  NotFoundError,
   NotImplementedError,
+  RegistrarError,
+  Feature,
 } from '../src/index';
 import type { RequestConfig } from '../src/http';
 import type { Contact } from '../src/index';
@@ -281,6 +282,36 @@ describe('GoDaddy provider', () => {
     expect(await gd.getAuthCode('example.com')).toBe('EPP-abc123');
     expect(calls[0].path).toBe('/v1/domains/example.com');
   });
+
+  it('setPrivacy(false) returns a clear error on a 409 (free DBP needs consent)', async () => {
+    const gd = godaddy();
+    // GoDaddy's free privacy can't be canceled via DELETE (409); disabling it
+    // needs a WHOIS-exposure consent block setPrivacy can't supply, so the client
+    // surfaces a clear, actionable failure rather than silently erroring.
+    const calls = stubHttp(gd, req => {
+      if (req.method === 'DELETE') {
+        const err = new RegistrarError('Free DBP cannot be canceled');
+        err.status = 409;
+        throw err;
+      }
+      return '';
+    });
+    const off = await gd.setPrivacy('example.com', false);
+    expect(off.success).toBe(false);
+    expect(off.message).toMatch(/free WHOIS privacy|Free DBP/i);
+    // it does not attempt a PATCH it can't satisfy
+    expect(calls.some(c => c.method === 'PATCH')).toBe(false);
+  });
+
+  it('domain forwarding is not supported (GoDaddy removed the API)', async () => {
+    const gd = godaddy();
+    expect(gd.supports(Feature.GetDomainForwarding)).toBe(false);
+    expect(gd.supports(Feature.SetDomainForwarding)).toBe(false);
+    await expect(gd.getDomainForwarding('example.com')).rejects.toBeInstanceOf(NotImplementedError);
+    await expect(gd.setDomainForwarding('example.com', [])).rejects.toBeInstanceOf(
+      NotImplementedError
+    );
+  });
 });
 
 describe('BaseRegistrar defaults', () => {
@@ -297,75 +328,6 @@ describe('BaseRegistrar defaults', () => {
     await expect(cf.getAuthCode('example.com')).rejects.toBeInstanceOf(NotImplementedError);
     await expect(cf.getDnssec('example.com')).rejects.toBeInstanceOf(NotImplementedError);
     await expect(cf.disableDnssec('example.com')).rejects.toBeInstanceOf(NotImplementedError);
-  });
-
-  // --- extended: domain forwarding ---
-
-  it('getDomainForwarding maps fqdn/type to host and forward type', async () => {
-    const gd = godaddy();
-    const calls = stubHttp(gd, () => [
-      { fqdn: 'example.com', type: 'REDIRECT_PERMANENT', url: 'https://a.com' },
-      { fqdn: 'blog.example.com', type: 'REDIRECT_TEMPORARY', url: 'https://b.com' },
-      { fqdn: 'app.example.com', type: 'MASKED', url: 'https://c.com' },
-    ]);
-    expect(await gd.getDomainForwarding('example.com')).toEqual([
-      { host: '@', url: 'https://a.com', type: 'permanent' },
-      { host: 'blog', url: 'https://b.com', type: 'temporary' },
-      // masked forwarding is reported as read-only `masked`
-      { host: 'app', url: 'https://c.com', type: 'masked' },
-    ]);
-    expect(calls[0]).toMatchObject({
-      path: '/v1/domains/forwards/example.com',
-      query: { includeSubs: true },
-    });
-  });
-
-  it('getDomainForwarding returns [] on a 404 (no forwarding configured)', async () => {
-    const gd = godaddy();
-    stubHttp(gd, () => {
-      throw new NotFoundError('not found');
-    });
-    expect(await gd.getDomainForwarding('example.com')).toEqual([]);
-  });
-
-  it('setDomainForwarding PUTs desired fqdns and deletes removed ones', async () => {
-    const gd = godaddy();
-    const calls = stubHttp(gd, req => {
-      if (req.method === undefined && String(req.path).includes('/forwards/')) {
-        // the read of current forwards
-        return [{ fqdn: 'old.example.com', type: 'REDIRECT_PERMANENT', url: 'https://old.com' }];
-      }
-      return undefined;
-    });
-    const res = await gd.setDomainForwarding('example.com', [
-      { host: '@', url: 'https://root.com', type: 'permanent' },
-      { host: 'app', url: 'https://app.com', type: 'temporary' },
-    ]);
-    expect(res.success).toBe(true);
-    const writes = calls.filter(c => c.method === 'PUT' || c.method === 'DELETE');
-    expect(writes.map(c => `${c.method} ${c.path}`)).toEqual([
-      'DELETE /v1/domains/forwards/old.example.com',
-      'PUT /v1/domains/forwards/example.com',
-      'PUT /v1/domains/forwards/app.example.com',
-    ]);
-    const put0 = writes.find(c => c.path === '/v1/domains/forwards/example.com');
-    expect(put0?.body).toEqual({ type: 'REDIRECT_PERMANENT', url: 'https://root.com' });
-    const put1 = writes.find(c => c.path === '/v1/domains/forwards/app.example.com');
-    expect(put1?.body).toEqual({ type: 'REDIRECT_TEMPORARY', url: 'https://app.com' });
-  });
-
-  it('setDomainForwarding with an empty list deletes existing forwards', async () => {
-    const gd = godaddy();
-    const calls = stubHttp(gd, req => {
-      if (req.method === undefined)
-        return [{ fqdn: 'example.com', type: 'REDIRECT_PERMANENT', url: 'x' }];
-      return undefined;
-    });
-    await gd.setDomainForwarding('example.com', []);
-    expect(
-      calls.some(c => c.method === 'DELETE' && c.path === '/v1/domains/forwards/example.com')
-    ).toBe(true);
-    expect(calls.some(c => c.method === 'PUT')).toBe(false);
   });
 });
 
