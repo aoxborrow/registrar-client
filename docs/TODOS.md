@@ -12,17 +12,15 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
       shapes, never run. (Dynadot, Gandi register+renew, Porkbun, and Namecheap
       register+renew are sandbox-verified; Namecheap and Gandi `transferIn` need an
       external domain + auth code, not reproducible in the sandbox.)
-- [ ] **GoDaddy** register/renew/transfer — v3 register (quote→execute) is paid
-      with **no v3 sandbox** (OTE is v1-only). The v1 purchase path is correct
-      (`POST /v1/domains/purchase/validate` returns 200 for our body) but OTE
-      returns `500 ERROR_UNKNOWN` on the actual purchase: OTE purchases require an
-      **API Reseller account** (a paid tier) with a Good as Gold balance, created
-      via the Reseller Control Center (reseller.godaddy.com → Settings → API Keys
-      → Test). A plain developer key can read/validate but not purchase. Blocked
-      until/unless a reseller account is set up; the client code is already
-      validated for this path.
-- [ ] **GoDaddy** `updateNameservers` (v3 PUT bare-array) — built + unit-tested;
-      not run live (would repoint a real domain's NS). Verify with a reversible swap.
+- [ ] **GoDaddy** `renewDomain` / `transferIn` — v3 has no endpoint for either
+      (v1-only), and there is **no v3 sandbox** (OTE is v1-only). Renew is paid and
+      irreversible; transfer needs an external domain + auth code. The v1 purchase
+      path validates (`POST /v1/domains/purchase/validate` returns 200 for our
+      body) but OTE returns `500 ERROR_UNKNOWN` on the actual purchase — OTE
+      purchases require an **API Reseller account** (a paid tier) with Good as Gold,
+      created via the Reseller Control Center (reseller.godaddy.com → Settings →
+      API Keys → Test). Blocked until a reseller account is set up.
+      (v3 `registerDomain` is now **live-verified** — see confirmed quirks below.)
 - [ ] `updateContacts` on **NameSilo, GoDaddy** — can trigger registrant-change
       verification / 60-day locks; reviewed only. (Dynadot, Gandi, and Namecheap
       are sandbox-verified.)
@@ -49,13 +47,35 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
   `CA`); web forwarding is subdomain-only (no apex) and `protocol: https` 500s in
   the sandbox. See `docs/registrars/gandi.md`.
 - **GoDaddy** is hybrid v3/v1 (v3 in prod with a PAT, v1 for management + all of
-  OTE, which has no v3). Live-confirmed: v3 availability wraps results in `items`
-  (not `domains`), prices are integer minor units (`value/100`), standard names
-  report `inventory:"REGISTRY"`, `pageSize` caps at 200 (domains) / 100 (dns),
-  DNS is per-record (no bulk PUT — `setDnsRecords` diffs), and the v3 zones
-  endpoint 404s for domains on external nameservers. A PAT authenticates v1 too
-  (GET 200 / PATCH 204); v1 PATCH is eventually-consistent (read-after-write lag).
-  See `docs/registrars/godaddy.md`.
+  OTE, which has no v3). Live-confirmed on a real prod domain (a $1.19 `.xyz`):
+  - **Availability/pricing**: v3 wraps results in `items` (not `domains`), prices
+    are integer minor units (`value/100`), standard names report
+    `inventory:"REGISTRY"`, `pageSize` caps at 200 (domains) / 100 (dns).
+  - **`registerDomain` (v3 quote→execute→poll) works** with a **minimal** body —
+    `{domain, period, quoteToken, consent:{agreementTypes, agreedAt}}`. Sending a
+    `profile` block (contacts/autoRenew/privacy) is rejected `INVALID_BODY`:
+    contacts come from the **account identity** (quote's
+    `resolved.contactSource:"ACCOUNT"`) and `agreedBy` is derived server-side.
+    `consent.acknowledgedFees` must be **omitted** unless the quote carried fees
+    (the array is `minItems:1`; `[]` is rejected). autoRenew/nameservers can't be
+    set at registration, so the client applies them as post-registration steps.
+  - **Idempotency-Key header is required** on the execute endpoints
+    `POST /v3/.../registrations` and `PUT /v3/.../nameservers` (400
+    `MISSING_VALUE` without it); the client sends a `crypto.randomUUID()`. DNS
+    record writes do **not** require it.
+  - **Premium/aftermarket domains are not registrable via the v3 API**
+    (`available:false` with no price / `422 UNSUPPORTED_AFTERMARKET_DOMAIN`) even
+    when for sale on the website — short numeric `.xyz` are premium; 10-digit
+    numeric `.xyz` are standard `REGISTRY` ($1.19).
+  - **DNS** is per-record (no bulk PUT — `setDnsRecords` diffs; add/remove
+    verified reversibly); the v3 zones endpoint 404s for domains on external NS.
+  - **`updateNameservers` (v3 PUT bare-array) verified** with a reversible swap.
+    GoDaddy **serializes** NS changes — overlapping PUTs clobber each other, so
+    space them out; propagation is ~8s.
+  - **`setAutoRenew` / `lock`·`unlock`** (v1-via-PAT) verified; a PAT
+    authenticates v1 too (GET 200 / PATCH 204). Reads are **eventually
+    consistent** across the v1-write / v3-read boundary — poll, don't assert
+    immediately. See `docs/registrars/godaddy.md`.
 - **Namecheap** `setAutoRenew` uses the undocumented-but-live `domains.setAutoRenew`
   (DomainName + IsAutoRenew; reads its inner `IsSuccess`). `getDomain`'s `locked`
   reads the dedicated `getRegistrarLock` command — getList's per-row `IsLocked`

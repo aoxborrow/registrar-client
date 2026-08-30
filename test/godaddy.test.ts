@@ -589,27 +589,72 @@ describe('GoDaddy v3 provider (production + PAT)', () => {
     const res = await gd.registerDomain('example.com', {
       years: 2,
       contacts: { registrant },
+      nameservers: ['ns1.example.net', 'ns2.example.net'],
       consent: { agreedBy: '203.0.113.7', agreedAt: '2026-01-01T00:00:00.000Z' },
     });
     expect(res.success).toBe(true);
     const register = calls.find(c => c.path === '/v3/domains/registrations');
     const body = register?.body as {
+      domain: string;
       quoteToken: string;
       period: number;
-      consent: { agreementTypes: string[]; acknowledgedFees: unknown[]; agreedBy: string };
-      profile: { contacts: { registrant: { firstName: string }; admin: { firstName: string } } };
+      consent: { agreementTypes: string[]; acknowledgedFees?: unknown[]; agreedBy?: string };
+      profile?: unknown;
     };
+    expect(body.domain).toBe('example.com');
     expect(body.quoteToken).toBe('QT');
     expect(body.period).toBe(2);
     expect(body.consent.agreementTypes).toEqual(['DNRA']);
+    // the quote carried fees, so they're echoed back verbatim
     expect(body.consent.acknowledgedFees).toEqual([
       { type: 'ICANN_FEE', fee: { currencyCode: 'USD', value: 18 } },
     ]);
-    expect(body.profile.contacts.registrant.firstName).toBe('Ada');
-    // omitted admin role falls back to the registrant
-    expect(body.profile.contacts.admin.firstName).toBe('Ada');
+    // v3 takes contacts from the account and derives agreedBy server-side:
+    // the minimal body carries no `profile` and no `consent.agreedBy`
+    expect(body.profile).toBeUndefined();
+    expect(body.consent.agreedBy).toBeUndefined();
+    // the Idempotency-Key header was sent
+    expect((register?.headers as Record<string, string>)['Idempotency-Key']).toBeTruthy();
     // the async operation was polled
     expect(calls.some(c => String(c.path).includes('/operations/OP1'))).toBe(true);
+    // post-registration: auto-renew asserted (defaults off) and nameservers applied
+    const patch = calls.find(c => c.method === 'PATCH' && c.path === '/v1/domains/example.com');
+    expect((patch?.body as { renewAuto: boolean }).renewAuto).toBe(false);
+    const ns = calls.find(c => c.path === '/v3/domains/domain-names/example.com/nameservers');
+    expect(ns?.body).toEqual(['ns1.example.net', 'ns2.example.net']);
+  });
+
+  it('registerDomain (v3) omits acknowledgedFees for a fee-less standard registration', async () => {
+    const gd = godaddyV3();
+    const calls = stubHttp(gd, req => {
+      if (req.path === '/v3/domains/registration-quotes') {
+        // standard REGISTRY quote: requiredAgreements but no fees
+        return { quoteToken: 'QT', requiredAgreements: [{ agreementType: 'API_DPA' }] };
+      }
+      if (req.path === '/v3/domains/registrations') return { operationId: 'OP', status: 'PENDING' };
+      if (String(req.path).includes('/operations/')) return { status: 'COMPLETED' };
+      return {};
+    });
+    const res = await gd.registerDomain('example.com', {
+      contacts: {
+        registrant: {
+          firstName: 'A',
+          lastName: 'B',
+          email: 'a@b.com',
+          phone: '+1.4805551234',
+          address1: 'x',
+          city: 'y',
+          postalCode: 'z',
+          country: 'US',
+        },
+      },
+      consent: { agreedBy: '203.0.113.7' },
+    });
+    expect(res.success).toBe(true);
+    const register = calls.find(c => c.path === '/v3/domains/registrations');
+    const body = register?.body as { consent: { acknowledgedFees?: unknown[] } };
+    // no quote fees → the field must be absent (the array is minItems:1)
+    expect('acknowledgedFees' in body.consent).toBe(false);
   });
 
   it('registerDomain (v3) rejects when consent is missing', async () => {
