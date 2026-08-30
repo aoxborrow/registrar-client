@@ -125,7 +125,8 @@ describe('capabilities / features', () => {
     expect(gd.features).toEqual(registrars.godaddy.features);
     expect(gd.supports(Feature.RegisterDomain)).toBe(true); // core
     expect(gd.supports(Feature.SetDomainForwarding)).toBe(true); // its extended
-    expect(gd.supports(Feature.GetAuthCode)).toBe(false); // not declared
+    expect(gd.supports(Feature.GetAuthCode)).toBe(true); // its extended
+    expect(gd.supports(Feature.GetDnssec)).toBe(false); // not declared
   });
 });
 

@@ -84,6 +84,16 @@ describe('NameBright provider', () => {
     expect(domain.expirationDate?.getUTCFullYear()).toBe(2027);
   });
 
+  it('getAuthCode reads AuthCode from the single-domain endpoint', async () => {
+    const nb = namebright();
+    const calls = stubHttp(nb, req => {
+      if (req.path.includes('auth/token')) return { access_token: 't', expires_in: 1800 };
+      return { DomainName: 'example.com', AuthCode: 'ab3de$gh1jk' };
+    });
+    expect(await nb.getAuthCode('example.com')).toBe('ab3de$gh1jk');
+    expect(calls.find(c => c.path === 'account/domains/example.com')).toBeTruthy();
+  });
+
   it('getNameservers reads the NameServers array', async () => {
     const nb = namebright();
     const calls = stubHttp(nb, req => {

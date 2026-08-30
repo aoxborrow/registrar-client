@@ -16,7 +16,7 @@ import type {
 import { createDomain, filterDomains } from '../utils';
 import { AuthenticationError, NotImplementedError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
-import type { RegistrarFeature } from '../features';
+import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
 import type { RequestConfig } from '../http';
 
@@ -46,6 +46,7 @@ interface NbDomain {
   AutoRenew?: boolean;
   Locked?: boolean;
   WhoIsPrivacy?: boolean;
+  AuthCode?: string;
 }
 
 // the paged wrapper GET account/domains returns
@@ -172,8 +173,9 @@ interface NbAvailability {
  * on each REST call.
  *
  * The read operations are implemented here (testConnection, listDomains,
- * getDomain, getNameservers, getContacts, getDnsRecords, checkAvailability).
- * `getPricing` throws NotImplementedError — NameBright has no per-TLD price table.
+ * getDomain, getNameservers, getContacts, getDnsRecords, checkAvailability,
+ * getAuthCode). `getPricing` throws NotImplementedError — NameBright has no
+ * per-TLD price table.
  *
  * Write operations verified against a live account: lock/unlock, setAutoRenew,
  * and setPrivacy all update the shared `PUT /account/domains/{domain}` endpoint
@@ -207,10 +209,10 @@ export class NameBrightRegistrar extends BaseRegistrar {
     { name: 'clientSecret', label: 'Client Secret', type: 'password', required: true },
   ];
   static readonly supportsSandbox = false; // NameBright has no sandbox environment
-  // REST/JSON API covering the core lifecycle; no DNSSEC, forwarding, webhooks,
-  // or standard auth-code retrieval (transfers are intra-account pushes), so no
-  // extended capabilities are declared.
-  static readonly extendedFeatures: readonly RegistrarFeature[] = [];
+  // REST/JSON API covering the core lifecycle plus transfer-out auth code (the
+  // `AuthCode` field on the domain-detail response). No DNSSEC, forwarding, or
+  // push webhooks.
+  static readonly extendedFeatures: readonly RegistrarFeature[] = [Feature.GetAuthCode];
 
   private token?: string;
   private tokenExpiresAt = 0;
@@ -312,6 +314,19 @@ export class NameBrightRegistrar extends BaseRegistrar {
       opts
     );
     return this.toDomain(d);
+  }
+
+  /**
+   * Transfer authorization (EPP) code. NameBright carries it as the `AuthCode`
+   * field on the domain-detail response (GET account/domains/{domain}), returned
+   * synchronously in the body — not email-only.
+   */
+  override async getAuthCode(domainName: string, opts?: RequestOptions): Promise<string> {
+    const d = await this.authed<NbDomain>(
+      { path: `account/domains/${encodeURIComponent(domainName)}` },
+      opts
+    );
+    return d.AuthCode ?? '';
   }
 
   override async getNameservers(domainName: string, opts?: RequestOptions): Promise<string[]> {
