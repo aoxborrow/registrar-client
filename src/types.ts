@@ -25,6 +25,15 @@ export interface ListDomainsOptions extends RequestOptions {
   // server-side where the API supports it (Namecheap `SearchTerm`, Gandi
   // `fqdn`) and client-side otherwise.
   search?: string;
+  // Fetch full per-domain detail after listing. Several providers' list
+  // endpoints return only a summary and omit fields like `nameservers`,
+  // `privacy`, or the transfer `locked` flag, which then read as their defaults
+  // (`[]` / `false`). With `detailed: true`, the client follows up with a
+  // `getDomain` call per domain (bounded concurrency) and merges the detail,
+  // so those fields are accurate. Costs one extra request per domain, so it is
+  // opt-in — leave it off for a fast summary listing. Honored by the
+  // `RegistrarClient` facade (and `listPortfolio` over facade sources).
+  detailed?: boolean;
 }
 
 // which API environment a provider targets. "sandbox" covers registrar test
