@@ -499,9 +499,9 @@ describe('Dynadot provider (RESTful v2)', () => {
         },
       })
     );
-    // stealth (masked) forwarding is unsupported; read back as a plain redirect
+    // stealth forwarding is reported as read-only `masked`
     expect(await stealth.getDomainForwarding('example.com')).toEqual([
-      { host: '@', url: 'https://example.com/b', type: 'redirect' },
+      { host: '@', url: 'https://example.com/b', type: 'masked' },
     ]);
   });
 
@@ -511,10 +511,10 @@ describe('Dynadot provider (RESTful v2)', () => {
     expect(await dy.getDomainForwarding('example.com')).toEqual([]);
   });
 
-  it('setDomainForwarding maps permanent/redirect to domain_forwarding', async () => {
+  it('setDomainForwarding maps permanent/temporary to domain_forwarding', async () => {
     for (const [type, is_temporary] of [
       ['permanent', false],
-      ['redirect', true],
+      ['temporary', true],
     ] as const) {
       const dy = dynadot();
       const calls = stubHttp(dy, () => ok({}));
@@ -522,6 +522,12 @@ describe('Dynadot provider (RESTful v2)', () => {
       expect(calls[0].path).toBe('/restful/v2/domains/example.com/domain_forwarding');
       expect(calls[0].body).toEqual({ forward_url: 'https://x.com', is_temporary });
     }
+    // masked forwarding is read-only: setting it is rejected
+    await expect(
+      dynadot().setDomainForwarding('example.com', [
+        { host: '@', url: 'https://x.com', type: 'masked' },
+      ])
+    ).rejects.toThrow(/masked/i);
   });
 
   it('setDomainForwarding clears by restoring default nameservers on an empty list', async () => {

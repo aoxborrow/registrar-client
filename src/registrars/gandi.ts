@@ -19,7 +19,7 @@ import type {
   TldPricing,
   TransferDomainInput,
 } from '../types';
-import { createDomain, filterDomains } from '../utils';
+import { createDomain, filterDomains, settableForwards } from '../utils';
 import { toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
@@ -138,14 +138,14 @@ interface GandiWebredir {
 }
 
 // map our DomainForwardType to Gandi's webredir `type`, and back.
-const GANDI_FORWARD_TYPE: Record<DomainForwardType, string> = {
+const GANDI_FORWARD_TYPE: Record<'temporary' | 'permanent', string> = {
   permanent: 'http301',
-  redirect: 'http302',
+  temporary: 'http302',
 };
 const GANDI_TYPE_TO_FORWARD: Record<string, DomainForwardType> = {
   http301: 'permanent',
-  http302: 'redirect',
-  cloak: 'redirect', // masked/cloaked forwarding is unsupported; read back as a redirect
+  http302: 'temporary',
+  cloak: 'masked', // read-only; setDomainForwarding rejects it
 };
 
 /**
@@ -634,7 +634,8 @@ export class GandiRegistrar extends BaseRegistrar {
     opts?: RequestOptions
   ): Promise<OperationResult> {
     try {
-      for (const f of forwards) {
+      const settable = settableForwards(forwards); // reject masked before any write
+      for (const f of settable) {
         if (!f.host || f.host === '@') {
           throw new Error(
             `${this.name}: web forwarding requires a subdomain host; Gandi cannot forward the apex ("@")`
@@ -647,7 +648,7 @@ export class GandiRegistrar extends BaseRegistrar {
 
       // delete current entries that are no longer wanted, or whose url/type changed
       for (const existing of current) {
-        if (!forwards.some(f => same(f, existing))) {
+        if (!settable.some(f => same(f, existing))) {
           await this.http.request({
             method: 'DELETE',
             path: `/domain/domains/${domainName}/webredirs/${gandiHostToFqdn(existing.host, domainName)}`,
@@ -656,7 +657,7 @@ export class GandiRegistrar extends BaseRegistrar {
         }
       }
       // create desired entries that aren't already present identically
-      for (const f of forwards) {
+      for (const f of settable) {
         if (!current.some(c => same(c, f))) {
           await this.http.request({
             method: 'POST',

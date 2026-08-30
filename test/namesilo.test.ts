@@ -406,7 +406,7 @@ describe('NameSilo provider', () => {
     const ns = namesilo();
     stubHttp(ns, () => OK({ forward_url: 'https://example.com/landing', forward_type: '302' }));
     expect(await ns.getDomainForwarding('example.com')).toEqual([
-      { host: '@', url: 'https://example.com/landing', type: 'redirect' },
+      { host: '@', url: 'https://example.com/landing', type: 'temporary' },
     ]);
   });
 

@@ -17,7 +17,7 @@ import type {
   TldPricing,
   TransferDomainInput,
 } from '../types';
-import { createDomain, filterDomains } from '../utils';
+import { createDomain, filterDomains, settableForwards } from '../utils';
 import {
   ConsentRequiredError,
   NotFoundError,
@@ -99,14 +99,14 @@ interface GoDaddyForward {
   mask?: { title?: string; description?: string; keywords?: string };
 }
 
-const GD_FORWARD_TYPE: Record<DomainForwardType, string> = {
+const GD_FORWARD_TYPE: Record<'temporary' | 'permanent', string> = {
   permanent: 'REDIRECT_PERMANENT',
-  redirect: 'REDIRECT_TEMPORARY',
+  temporary: 'REDIRECT_TEMPORARY',
 };
 const GD_TYPE_TO_FORWARD: Record<string, DomainForwardType> = {
   REDIRECT_PERMANENT: 'permanent',
-  REDIRECT_TEMPORARY: 'redirect',
-  MASKED: 'redirect', // masked/framed forwarding is unsupported; read back as a redirect
+  REDIRECT_TEMPORARY: 'temporary',
+  MASKED: 'masked', // read-only; setDomainForwarding rejects it
 };
 
 // a legal agreement GoDaddy requires consent to before registering a TLD
@@ -1004,8 +1004,9 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     opts?: RequestOptions
   ): Promise<OperationResult> {
     try {
+      const settable = settableForwards(forwards); // reject masked before any write
       const current = await this.getDomainForwarding(domainName, opts);
-      const desiredHosts = new Set(forwards.map(f => f.host || '@'));
+      const desiredHosts = new Set(settable.map(f => f.host || '@'));
 
       for (const existing of current) {
         if (!desiredHosts.has(existing.host)) {
@@ -1018,7 +1019,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
         }
       }
 
-      for (const f of forwards) {
+      for (const f of settable) {
         const fqdn = hostToFqdn(f.host || '@', domainName);
         const body: GoDaddyForward = { type: GD_FORWARD_TYPE[f.type], url: f.url };
         await this.http.request({

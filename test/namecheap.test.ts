@@ -419,9 +419,9 @@ describe('Namecheap provider', () => {
     const forwards = await nc.getDomainForwarding('example.com');
     expect(forwards).toEqual([
       { host: '@', url: 'https://example.org', type: 'permanent' },
-      // FRAME (masked) forwarding is unsupported; read back as a plain redirect
-      { host: 'shop', url: 'https://store.example.org', type: 'redirect' },
-      { host: 'old', url: 'https://new.example.org', type: 'redirect' },
+      // FRAME (masked) forwarding is reported as read-only `masked`
+      { host: 'shop', url: 'https://store.example.org', type: 'masked' },
+      { host: 'old', url: 'https://new.example.org', type: 'temporary' },
     ]);
   });
 

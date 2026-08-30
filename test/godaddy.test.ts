@@ -303,9 +303,9 @@ describe('BaseRegistrar defaults', () => {
     ]);
     expect(await gd.getDomainForwarding('example.com')).toEqual([
       { host: '@', url: 'https://a.com', type: 'permanent' },
-      { host: 'blog', url: 'https://b.com', type: 'redirect' },
-      // masked forwarding is unsupported; read back as a plain redirect
-      { host: 'app', url: 'https://c.com', type: 'redirect' },
+      { host: 'blog', url: 'https://b.com', type: 'temporary' },
+      // masked forwarding is reported as read-only `masked`
+      { host: 'app', url: 'https://c.com', type: 'masked' },
     ]);
     expect(calls[0]).toMatchObject({
       path: '/v1/domains/forwards/example.com',
@@ -332,7 +332,7 @@ describe('BaseRegistrar defaults', () => {
     });
     const res = await gd.setDomainForwarding('example.com', [
       { host: '@', url: 'https://root.com', type: 'permanent' },
-      { host: 'app', url: 'https://app.com', type: 'redirect' },
+      { host: 'app', url: 'https://app.com', type: 'temporary' },
     ]);
     expect(res.success).toBe(true);
     const writes = calls.filter(c => c.method === 'PUT' || c.method === 'DELETE');

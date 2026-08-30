@@ -156,28 +156,31 @@ sets:
 
 - **Domain (URL) forwarding** — `getDomainForwarding` / `setDomainForwarding`
   take `DomainForward[]` (`{ host, url, type }`). `host` is apex-relative (`@`,
-  `www`, …); `type` is `permanent` (301) or `redirect` (302). HTTPS targets work
+  `www`, …); `type` is `temporary` (302) or `permanent` (301). HTTPS targets work
   wherever the provider issues a certificate for the domain (all supported
   providers do).
 - **Email forwarding** — `getEmailForwarding` / `setEmailForwarding` take
   `EmailForward[]` (`{ alias, forwardTo }`). `alias` is the local part; `*` (or
   `@`) is the catch-all. This is alias→inbox **forwarding**, not mailbox hosting.
 
-**No masked/framed forwarding.** The library intentionally does not offer
-"cloaked" forwarding (where an iframe keeps the source URL in the address bar):
-it breaks HTTPS, SEO, and modern browser protections, and several providers
-(e.g. Cloudflare) can't do it at all. `DomainForwardType` is therefore
-`redirect | permanent` only. If a provider reports an existing masked forward on
-read, it is surfaced as a plain `redirect`.
+**Masked/framed forwarding is read-only.** `DomainForwardType` also has a
+`masked` value — a "cloaked" forward where an iframe keeps the source URL in the
+address bar. The library **never creates** one (`setDomainForwarding` rejects
+`masked`): it breaks HTTPS, SEO, and modern browser protections, and several
+providers (e.g. Cloudflare) can't do it at all. But `getDomainForwarding`
+**reports** `masked` truthfully when a provider already has one configured, so
+reading state stays accurate. (One consequence: reading a masked forward and
+writing the same array straight back is rejected — by design.)
 
 Providers that expose a native forwarding feature do this in one call.
 **Cloudflare** has no such primitive, so the provider composes it from other
 Cloudflare APIs: domain forwarding writes a Rules redirect plus a proxied
 placeholder DNS record so the edge can apply it, and email forwarding uses Email
 Routing (enabling it adds the required MX/SPF records). Email Routing
-destinations must be verified on the Cloudflare account beforehand — the API
-can't verify them for you. See
-[docs/registrars/cloudflare.md](docs/registrars/cloudflare.md).
+destinations must be verified on the Cloudflare account before a rule activates;
+where the token can manage addresses, `setEmailForwarding` adds any unknown
+destination (sending its verification email) and reports which are still
+pending. See [docs/registrars/cloudflare.md](docs/registrars/cloudflare.md).
 
 ## Registering & transferring domains
 

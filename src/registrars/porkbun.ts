@@ -17,7 +17,7 @@ import type {
   TldPricing,
   TransferDomainInput,
 } from '../types';
-import { createDomain, filterDomains, normalizeDomain } from '../utils';
+import { createDomain, filterDomains, normalizeDomain, settableForwards } from '../utils';
 import { NotFoundError, NotImplementedError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
@@ -103,15 +103,15 @@ interface PbDnssecResponse extends PbResponse {
   records?: Record<string, PbDnssecRecord> | null;
 }
 
-// map between our generic forward type and Porkbun's `type` value
-const FORWARD_TO_PB_TYPE: Record<DomainForwardType, string> = {
-  redirect: 'temporary', // 302
+// map between our generic (settable) forward type and Porkbun's `type` value
+const FORWARD_TO_PB_TYPE: Record<'temporary' | 'permanent', string> = {
+  temporary: 'temporary', // 302
   permanent: 'permanent', // 301
 };
 const PB_TYPE_TO_FORWARD: Record<string, DomainForwardType> = {
-  temporary: 'redirect',
+  temporary: 'temporary',
   permanent: 'permanent',
-  masked: 'redirect', // masked/cloaked forwarding is unsupported; read back as a redirect
+  masked: 'masked', // read-only; setDomainForwarding rejects it
 };
 
 // Porkbun's contact shape: phone is split into a national number plus a numeric
@@ -671,6 +671,7 @@ export class PorkbunRegistrar extends BaseRegistrar {
     opts?: RequestOptions
   ): Promise<OperationResult> {
     try {
+      const settable = settableForwards(forwards); // reject masked before any write
       const enc = encodeURIComponent(domainName);
       const existing = await this.call<PbUrlForwardResponse>(
         `/domain/getUrlForwarding/${enc}`,
@@ -687,7 +688,7 @@ export class PorkbunRegistrar extends BaseRegistrar {
         );
         if (!isOk(del)) return statusResult(del);
       }
-      for (const f of forwards) {
+      for (const f of settable) {
         const add = await this.call(
           `/domain/addUrlForward/${enc}`,
           {

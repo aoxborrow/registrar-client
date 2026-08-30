@@ -423,9 +423,9 @@ describe('Porkbun provider', () => {
     }));
     expect(await pb.getDomainForwarding('example.com')).toEqual([
       { host: '@', url: 'https://a.com', type: 'permanent' },
-      { host: 'shop', url: 'https://b.com', type: 'redirect' },
-      // masked forwarding is unsupported; read back as a plain redirect
-      { host: 'app', url: 'https://c.com', type: 'redirect' },
+      { host: 'shop', url: 'https://b.com', type: 'temporary' },
+      // masked forwarding is reported as read-only `masked`
+      { host: 'app', url: 'https://c.com', type: 'masked' },
     ]);
   });
 
@@ -442,7 +442,7 @@ describe('Porkbun provider', () => {
     });
     const res = await pb.setDomainForwarding('example.com', [
       { host: '@', url: 'https://new.com', type: 'permanent' },
-      { host: 'www', url: 'https://new.com', type: 'redirect' },
+      { host: 'www', url: 'https://new.com', type: 'temporary' },
     ]);
     expect(res.success).toBe(true);
     expect(calls.some(c => c.path === '/domain/deleteUrlForward/example.com/9')).toBe(true);

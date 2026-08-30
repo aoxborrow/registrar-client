@@ -65,9 +65,11 @@ other Cloudflare APIs (live-verified 2026-08-29). **Domain forwarding** = a Rule
 redirect (`http_request_dynamic_redirect`) plus a proxied `AAAA → 100::`
 placeholder record so the edge applies it; verified apex + `www` → `302` at the
 edge. **Email forwarding** = Email Routing (enabling it adds MX/SPF); catch-all
-verified live. Email Routing destinations must be verified on the account first —
-the token cannot manage destination addresses (403). Masked/framed forwarding is
-not offered for any provider.
+verified live. `setEmailForwarding` adds unknown destinations (sending the
+verification email) and reports which are still pending, where the token has the
+Email Routing Addresses scope; otherwise verification is done in the dashboard.
+Masked/framed forwarding is read-only for all providers: `getDomainForwarding`
+reports `masked`, `setDomainForwarding` rejects it.
 
 ### The Cloudflare caveat (read before trusting column CF)
 
@@ -146,15 +148,15 @@ webhooks, mailbox provisioning, and bulk settings. DNSSEC was narrowed from full
 key management to **read-status + disable** (`getDnssec` / `disableDnssec`);
 enabling DNSSEC is out of scope for this library for now.
 
-| `Feature`             | Declared by                | Notes                                                                                           |
-| --------------------- | -------------------------- | ----------------------------------------------------------------------------------------------- |
-| `GetAuthCode`         | DY, GA, SP                 | transfer-out EPP code; NameSilo emails it (can't return it); GD/NC gate it behind the dashboard |
-| `GetDnssec`           | DY, GA, NS, PB             | read whether DNSSEC is enabled (DS / key records)                                               |
-| `DisableDnssec`       | DY, GA, NS, PB             | turn DNSSEC off; no enable / key management (out of scope)                                      |
-| `GetEmailForwarding`  | CF, DY, GA, NC, NS         | read counterpart of `SetEmailForwarding`                                                        |
-| `SetEmailForwarding`  | CF, DY, GA, NC, NS         | alias redirect only — **distinct from a mailbox**; CF uses Email Routing                        |
-| `GetDomainForwarding` | CF, DY, GA, GD, NC, NS, PB | read counterpart of `SetDomainForwarding`                                                       |
-| `SetDomainForwarding` | CF, DY, GA, GD, NC, NS, PB | `redirect`/`permanent` only (no masking); Gandi `webredirs` (subdomain-only); CF via Rules      |
+| `Feature`             | Declared by                | Notes                                                                                                  |
+| --------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `GetAuthCode`         | DY, GA, SP                 | transfer-out EPP code; NameSilo emails it (can't return it); GD/NC gate it behind the dashboard        |
+| `GetDnssec`           | DY, GA, NS, PB             | read whether DNSSEC is enabled (DS / key records)                                                      |
+| `DisableDnssec`       | DY, GA, NS, PB             | turn DNSSEC off; no enable / key management (out of scope)                                             |
+| `GetEmailForwarding`  | CF, DY, GA, NC, NS         | read counterpart of `SetEmailForwarding`                                                               |
+| `SetEmailForwarding`  | CF, DY, GA, NC, NS         | alias redirect only — **distinct from a mailbox**; CF uses Email Routing                               |
+| `GetDomainForwarding` | CF, DY, GA, GD, NC, NS, PB | read counterpart of `SetDomainForwarding`                                                              |
+| `SetDomainForwarding` | CF, DY, GA, GD, NC, NS, PB | `temporary`/`permanent` only (`masked` is read-only); Gandi `webredirs` (subdomain-only); CF via Rules |
 
 **Implementation status:** every declared extended feature above is now
 implemented on its provider(s). **Dynadot**, **Gandi**, and **Porkbun** are

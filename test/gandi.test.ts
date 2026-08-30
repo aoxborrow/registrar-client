@@ -350,8 +350,8 @@ describe('Gandi provider', () => {
     ]);
     expect(await g.getDomainForwarding('example.com')).toEqual([
       { host: 'shop', url: 'https://a.com', type: 'permanent' },
-      // masked/cloaked forwarding is unsupported; read back as a plain redirect
-      { host: 'docs', url: 'https://b.com', type: 'redirect' },
+      // cloaked forwarding is reported as read-only `masked`
+      { host: 'docs', url: 'https://b.com', type: 'masked' },
     ]);
   });
 

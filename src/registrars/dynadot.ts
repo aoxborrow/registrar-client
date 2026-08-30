@@ -17,7 +17,7 @@ import type {
   TldPricing,
   TransferDomainInput,
 } from '../types';
-import { createDomain, filterDomains, requireConsent } from '../utils';
+import { createDomain, filterDomains, requireConsent, settableForwards } from '../utils';
 import { NotFoundError, NotImplementedError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
@@ -799,7 +799,7 @@ export class DynadotRegistrar extends BaseRegistrar {
    * forwards the whole domain, so this returns at most one rule at host "@":
    * REGISTRAR_FORWARDING is a 301/302 redirect (`forward_type`
    * permanently/temporarily). REGISTRAR_STEALTH_FORWARDING (a masked/framed
-   * redirect) is unsupported and read back as a plain "redirect".
+   * redirect) is reported as read-only `masked` — `setDomainForwarding` rejects it.
    */
   override async getDomainForwarding(
     domainName: string,
@@ -809,18 +809,18 @@ export class DynadotRegistrar extends BaseRegistrar {
     const type = (glue?.glue_type ?? '').toUpperCase();
     if (!glue?.forward_url) return [];
     if (type === 'REGISTRAR_STEALTH_FORWARDING') {
-      return [{ host: '@', url: glue.forward_url, type: 'redirect' }];
+      return [{ host: '@', url: glue.forward_url, type: 'masked' }];
     }
     if (type === 'REGISTRAR_FORWARDING') {
       const temporary = (glue.forward_type ?? '').toLowerCase().startsWith('temp');
-      return [{ host: '@', url: glue.forward_url, type: temporary ? 'redirect' : 'permanent' }];
+      return [{ host: '@', url: glue.forward_url, type: temporary ? 'temporary' : 'permanent' }];
     }
     return [];
   }
 
   /**
    * Set domain (URL) forwarding. Dynadot forwards the entire domain, so at most
-   * one rule (host "@") is accepted: `redirect`/`permanent` use standard
+   * one rule (host "@") is accepted: `temporary`/`permanent` use standard
    * forwarding (302 vs 301). An empty list clears forwarding — Dynadot has no
    * "off" for it, so we restore its default nameservers, which is the neutral
    * non-forwarding state.
@@ -843,7 +843,7 @@ export class DynadotRegistrar extends BaseRegistrar {
     if (forwards.length > 1) {
       throw new Error('Dynadot forwards the whole domain; only a single "@" rule is supported');
     }
-    const f = forwards[0];
+    const [f] = settableForwards(forwards); // reject masked before any write
     if (f.host && f.host !== '@') {
       throw new Error(
         'Dynadot forwards the whole domain; per-host forwarding is not supported (use host "@")'
@@ -852,7 +852,7 @@ export class DynadotRegistrar extends BaseRegistrar {
     return this.mutate(
       'PUT',
       `/restful/v2/domains/${enc}/domain_forwarding`,
-      { forward_url: f.url, is_temporary: f.type === 'redirect' },
+      { forward_url: f.url, is_temporary: f.type === 'temporary' },
       'Domain forwarding updated successfully',
       opts
     );

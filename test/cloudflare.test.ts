@@ -470,7 +470,7 @@ describe('Cloudflare provider', () => {
     });
     expect(await cf.getDomainForwarding('example.com')).toEqual([
       { host: '@', url: 'https://dest.com', type: 'permanent' },
-      { host: 'www', url: 'https://dest.com', type: 'redirect' },
+      { host: 'www', url: 'https://dest.com', type: 'temporary' },
     ]);
   });
 
@@ -495,7 +495,7 @@ describe('Cloudflare provider', () => {
     });
 
     const res = await cf.setDomainForwarding('example.com', [
-      { host: '@', url: 'https://dest.com', type: 'redirect' },
+      { host: '@', url: 'https://dest.com', type: 'temporary' },
       { host: 'www', url: 'https://dest.com', type: 'permanent' },
     ]);
     expect(res.success).toBe(true);
@@ -550,6 +550,18 @@ describe('Cloudflare provider', () => {
     expect(deletes).not.toContain('/zones/z1/dns_records/real'); // real record kept
   });
 
+  it('setDomainForwarding rejects masked forwarding before any write', async () => {
+    const cf = cloudflare();
+    const calls = stubHttp(cf, () => ({ success: true, result: {} }));
+    // the provider wraps errors into an OperationResult; the masked guard runs first
+    const res = await cf.setDomainForwarding('example.com', [
+      { host: '@', url: 'https://dest.com', type: 'masked' },
+    ]);
+    expect(res.success).toBe(false);
+    expect(res.message).toMatch(/masked/i);
+    expect(calls).toHaveLength(0); // failed fast, nothing written
+  });
+
   // --- email forwarding (Email Routing) ---
 
   it('getEmailForwarding maps forward rules + catch-all (skips drop/worker)', async () => {
@@ -597,6 +609,19 @@ describe('Cloudflare provider', () => {
       if (req.path === '/zones') return zoneList;
       if (req.path === '/zones/z1/email/routing')
         return { success: true, result: { enabled: false } };
+      if (
+        String(req.path).endsWith('/email/routing/addresses') &&
+        (req.method ?? 'GET') === 'GET'
+      ) {
+        // both destinations already verified on the account
+        return {
+          success: true,
+          result: [
+            { email: 's@x.com', verified: '2024-01-01T00:00:00Z' },
+            { email: 'c@x.com', verified: '2024-01-01T00:00:00Z' },
+          ],
+        };
+      }
       if (String(req.path).endsWith('/email/routing/rules') && (req.method ?? 'GET') === 'GET') {
         return {
           success: true,
@@ -640,5 +665,35 @@ describe('Cloudflare provider', () => {
       matchers: [{ type: 'all' }],
       actions: [{ type: 'forward', value: ['c@x.com'] }],
     });
+  });
+
+  it('setEmailForwarding adds an unknown destination and notes it awaits verification', async () => {
+    const cf = cloudflare();
+    const calls = stubHttp(cf, req => {
+      if (req.path === '/zones') return zoneList;
+      if (req.path === '/zones/z1/email/routing')
+        return { success: true, result: { enabled: true } };
+      if (
+        String(req.path).endsWith('/email/routing/addresses') &&
+        (req.method ?? 'GET') === 'GET'
+      ) {
+        return { success: true, result: [] }; // destination not on the account yet
+      }
+      if (String(req.path).endsWith('/email/routing/rules') && (req.method ?? 'GET') === 'GET') {
+        return { success: true, result: [] };
+      }
+      return { success: true, result: {} };
+    });
+
+    const res = await cf.setEmailForwarding('example.com', [
+      { alias: 'hi', forwardTo: 'new@dest.com' },
+    ]);
+    expect(res.success).toBe(true);
+    expect(res.message).toMatch(/awaiting verification of new@dest\.com/);
+    // the unknown destination was added (triggers Cloudflare's verification email)
+    const addrPost = calls.find(
+      c => c.method === 'POST' && c.path === '/accounts/acct-1/email/routing/addresses'
+    );
+    expect(addrPost?.body).toEqual({ email: 'new@dest.com' });
   });
 });

@@ -15,7 +15,7 @@ import type {
   RequestOptions,
   TldPricing,
 } from '../types';
-import { createDomain, filterDomains, normalizeDomain } from '../utils';
+import { createDomain, filterDomains, normalizeDomain, settableForwards } from '../utils';
 import { NotImplementedError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
@@ -551,7 +551,7 @@ export class CloudflareRegistrar extends BaseRegistrar {
       const host = hostFromExpression(rule.expression, zone.name);
       if (!url || host == null) continue;
       const status = rule.action_parameters?.from_value?.status_code;
-      forwards.push({ host, url, type: status === 301 ? 'permanent' : 'redirect' });
+      forwards.push({ host, url, type: status === 301 ? 'permanent' : 'temporary' });
     }
     return forwards;
   }
@@ -571,10 +571,11 @@ export class CloudflareRegistrar extends BaseRegistrar {
     opts?: RequestOptions
   ): Promise<OperationResult> {
     try {
+      const settable = settableForwards(forwards); // reject masked before any write
       const zone = await this.requireZone(domainName, opts);
       const existing = await this.getRedirectRuleset(zone.id, opts);
 
-      if (forwards.length === 0) {
+      if (settable.length === 0) {
         if (existing?.id) {
           await this.http.request<CfEnvelope<unknown>>({
             method: 'DELETE',
@@ -586,7 +587,7 @@ export class CloudflareRegistrar extends BaseRegistrar {
         return { success: true, message: 'Domain forwarding cleared successfully' };
       }
 
-      const rules = forwards.map(f => {
+      const rules = settable.map(f => {
         const fqdn = toFqdn(f.host || '@', zone.name);
         return {
           expression: `http.host eq "${fqdn}"`,
@@ -603,7 +604,7 @@ export class CloudflareRegistrar extends BaseRegistrar {
       });
 
       // ensure the edge sees traffic for each source host
-      for (const f of forwards) {
+      for (const f of settable) {
         await this.ensurePlaceholderRecord(zone.id, toFqdn(f.host || '@', zone.name), opts);
       }
 
@@ -741,9 +742,11 @@ export class CloudflareRegistrar extends BaseRegistrar {
    * Set Email Routing forwarding (replace-all). Enables Email Routing if needed
    * (which adds the required MX/SPF records), then rewrites the rules: each
    * `alias@domain -> forwardTo` becomes a routing rule, and an `alias` of "*"/"@"
-   * becomes the catch-all. Destination addresses must already be verified on the
-   * account — Cloudflare disables rules to unverified destinations, and verifying
-   * them is not possible through this token/API.
+   * becomes the catch-all. Destination addresses must be verified on the account
+   * before Cloudflare will activate a rule; where the token can manage addresses,
+   * any unknown destination is added (which sends its verification email) and the
+   * result message names the addresses still awaiting verification. If the token
+   * lacks the address-management scope, that pre-check is skipped.
    */
   override async setEmailForwarding(
     domainName: string,
@@ -772,6 +775,11 @@ export class CloudflareRegistrar extends BaseRegistrar {
           };
         }
       }
+
+      // ensure each destination is a verified account address (best-effort — the
+      // token may lack the address-management scope, in which case this is skipped)
+      const destinations = [...new Set(forwards.map(f => f.forwardTo))];
+      const unverified = await this.ensureDestinations(destinations, opts);
 
       // remove existing non-catch-all rules
       const existing = await this.http.request<CfEnvelope<CfEmailRule[]>>({
@@ -833,9 +841,47 @@ export class CloudflareRegistrar extends BaseRegistrar {
           message: ca.errors?.[0]?.message ?? 'Failed to set catch-all rule',
         };
       }
-      return { success: true, message: 'Email forwarding updated successfully' };
+      const note = unverified.length
+        ? ` — awaiting verification of ${unverified.join(', ')} (rules stay inactive until verified)`
+        : '';
+      return { success: true, message: `Email forwarding updated successfully${note}` };
     } catch (error) {
       return { success: false, message: toRegistrarError(error).message };
+    }
+  }
+
+  // ensure each destination is a verified Email Routing address on the account.
+  // Unknown addresses are added (which triggers Cloudflare's verification email).
+  // Best-effort: if the token can't manage addresses (403) the check is skipped
+  // and an empty list is returned. Returns the destinations not yet verified.
+  private async ensureDestinations(dests: string[], opts?: RequestOptions): Promise<string[]> {
+    if (dests.length === 0) return [];
+    const acct = encodeURIComponent(this.credentials.accountId);
+    try {
+      const res = await this.http.request<
+        CfEnvelope<{ email?: string; verified?: string | null }[]>
+      >({ path: `/accounts/${acct}/email/routing/addresses`, query: { per_page: 50 }, ...opts });
+      const byEmail = new Map(
+        (res.result ?? []).map(a => [(a.email ?? '').toLowerCase(), a.verified])
+      );
+      const unverified: string[] = [];
+      for (const dest of dests) {
+        const verified = byEmail.get(dest.toLowerCase());
+        if (verified) continue;
+        if (!byEmail.has(dest.toLowerCase())) {
+          await this.http.request<CfEnvelope<unknown>>({
+            method: 'POST',
+            path: `/accounts/${acct}/email/routing/addresses`,
+            body: { email: dest },
+            ...opts,
+          });
+        }
+        unverified.push(dest);
+      }
+      return unverified;
+    } catch (error) {
+      if (toRegistrarError(error).status === 403) return []; // no address scope; skip
+      throw error;
     }
   }
 

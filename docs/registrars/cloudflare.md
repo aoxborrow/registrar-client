@@ -38,12 +38,15 @@ the research table below predate this and are partly superseded by these finding
   placeholder records.
 - **`get/setEmailForwarding`** (extended) — Cloudflare Email Routing. `setEmailForwarding`
   enables routing if needed (adds MX/SPF), writes a routing rule per `alias@domain`, and
-  maps `*`/`@` to the catch-all. **Verified live**: wildcard catch-all on `namebot.dev`
-  forwarding to a verified destination, `enabled: true`. Destinations must already be
-  verified on the account — the token used here **cannot** manage destination addresses
-  (`/email/routing/addresses` → 403), so verification happens in the dashboard.
-- **Masked/framed forwarding is not offered** by the library for any provider (it breaks
-  HTTPS/SEO and Cloudflare can't do it); `DomainForwardType` is `redirect | permanent`.
+  maps `*`/`@` to the catch-all. It also pre-checks destination addresses: any unknown
+  destination is added (which sends Cloudflare's verification email) and the result names
+  the ones still awaiting verification (rules to them stay inactive until verified). This
+  needs the token's **Email Routing Addresses** scope — without it (`/email/routing/addresses`
+  → 403) the pre-check is skipped and verification is done in the dashboard. **Verified
+  live**: wildcard catch-all on `namebot.dev` to an already-verified destination.
+- **Masked/framed forwarding is read-only**: `DomainForwardType` is `temporary | permanent
+| masked`; `setDomainForwarding` rejects `masked`, `getDomainForwarding` reports it.
+  Cloudflare never produces `masked` (it can't cloak).
 
 **Not available via the API (confirmed, both `.uk` and gTLD `.dev`):**
 
