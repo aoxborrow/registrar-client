@@ -12,33 +12,25 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
       shapes, never run. (Dynadot, Gandi register+renew, Porkbun, and Namecheap
       register+renew are sandbox-verified; Namecheap and Gandi `transferIn` need an
       external domain + auth code, not reproducible in the sandbox.)
-- [ ] **GoDaddy** `renewDomain` / `transferIn` — v3 has no endpoint for either
-      (v1-only), and there is **no v3 sandbox** (OTE is v1-only). Renew is paid and
-      irreversible; transfer needs an external domain + auth code. The v1 purchase
-      path validates (`POST /v1/domains/purchase/validate` returns 200 for our
-      body) but OTE returns `500 ERROR_UNKNOWN` on the actual purchase — OTE
-      purchases require an **API Reseller account** (a paid tier) with Good as Gold,
-      created via the Reseller Control Center (reseller.godaddy.com → Settings →
-      API Keys → Test). Blocked until a reseller account is set up.
+- [ ] **GoDaddy** `renewDomain` / `transferIn` — both are **v1** endpoints
+      (`POST /v1/domains/{d}/renew`, `POST /v1/domains/{d}/transfer`), so OTE
+      _should_ apply — but OTE can't fund a purchase. The blocker is the
+      **unfunded sandbox**, not the API version: the v1 purchase path validates
+      (`POST /v1/domains/purchase/validate` returns 200) but the actual spend
+      (`POST /v1/domains/purchase`, and by extension renew/transfer) returns
+      `500 ERROR_UNKNOWN` on OTE. OTE spends draw on "Good as Gold" funds, which
+      only exist on a paid **API Reseller account** (reseller.godaddy.com →
+      Settings → API Keys → Test). So renew/transfer can only be exercised via a
+      **real paid action in prod** (as `registerDomain` was) or a funded Reseller
+      OTE account. Renew is paid but non-destructive (you keep the domain);
+      transfer needs an external domain + auth code and imposes a 60-day lock.
       (v3 `registerDomain` is now **live-verified** — see confirmed quirks below.)
-- [ ] `updateContacts` on **NameSilo, GoDaddy** — can trigger registrant-change
-      verification / 60-day locks; reviewed only. (Dynadot, Gandi, and Namecheap
-      are sandbox-verified.)
-- [ ] **GoDaddy** `setPrivacy` — disabling is a one-way DELETE (enabling is a paid
-      purchase, left `NotImplementedError`); not exercised.
-- [ ] **Extended features on GoDaddy / NameSilo** (DNSSEC read/disable, email +
-      domain forwarding) — built from docs only; add sandbox creds to
-      `.env.testing` and verify. (Dynadot, Gandi, and Porkbun are sandbox-verified;
-      GoDaddy forwarding is v1-only — check on a real domain. `getAuthCode` on
-      GoDaddy, NameBright, and Spaceship is now live-verified — see confirmed
-      quirks below.)
 - [ ] **NameBright** `updateNameservers` — coded from the documented endpoints; no
       safe way to test NS replacement on the live account, so unverified.
-- [ ] **Dynadot** DNSSEC enabled→disabled transition — `disableDnssec`/`getDnssec`
-      verified, but the sandbox rejects every DNSSEC _enable_ body, so the full
-      round-trip is untested.
-- [ ] **NameSilo** domain forwarding — apex-only read + clear-via-default-NS are
-      unverified; confirm the `domainForward` protocol/address split against a live reply.
+- [ ] **Dynadot / NameSilo** DNSSEC enabled→disabled transition — `getDnssec` (read)
+      verified live on both; `disableDnssec` remains untested because no provider
+      implements DNSSEC _enable_ (it needs DS-record generation), so there's no way
+      to get a domain into the enabled state through the client to then disable.
 
 ## Registrar quirks confirmed live (documented, not action items)
 
@@ -76,7 +68,16 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
   - **`setAutoRenew` / `lock`·`unlock`** (v1-via-PAT) verified; a PAT
     authenticates v1 too (GET 200 / PATCH 204). Reads are **eventually
     consistent** across the v1-write / v3-read boundary — poll, don't assert
-    immediately. See `docs/registrars/godaddy.md`.
+    immediately.
+  - **`updateContacts`** (v1 PATCH `/contacts`) verified with a reversible
+    non-identity round-trip (address change; a registrant name/org/email change
+    would trip the ICANN 60-day lock, so it wasn't exercised).
+  - **`setPrivacy(false)`** can't disable GoDaddy's **free privacy ("Free DBP")**:
+    `DELETE /privacy` returns 409 CONFLICTING_STATUS, and the only alternative —
+    `PATCH {exposeWhois:true}` — requires a full WHOIS-exposure **consent block**
+    (`agreedAt` + `agreedBy` IP + `agreementKeys`) that `setPrivacy` can't carry.
+    The client now returns a clear error pointing to the dashboard. Paid DBP still
+    cancels via the DELETE. See `docs/registrars/godaddy.md`.
 - **Namecheap** `setAutoRenew` uses the undocumented-but-live `domains.setAutoRenew`
   (DomainName + IsAutoRenew; reads its inner `IsSuccess`). `getDomain`'s `locked`
   reads the dedicated `getRegistrarLock` command — getList's per-row `IsLocked`
@@ -84,6 +85,18 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
   Namecheap DNS is a separate `dns.setDefault` command (setCustom rejects the
   BasicDNS hosts). `setPrivacy` genuinely toggles WhoisGuard (not a no-op). See
   `docs/registrars/namecheap.md`.
+- **NameSilo** (live-verified 2026-08-29): forwarding + contacts had latent bugs,
+  now fixed. `getDomainForwarding` must gate on `getDomainInfo.traffic_type`
+  (`"Forwarded"` vs `"Custom DNS"`) — NameSilo keeps the last `forward_url` after
+  forwarding is switched off, so reading `forward_url` alone reports a phantom
+  forward (it also returns `"N/A"` for never-forwarded domains). Clearing a forward
+  (`setDomainForwarding([])`) must re-point NS at the **DNS-hosting** servers
+  (`ns1/2/3.dnsowl.com`), NOT the parking servers `ns1/2.namesilo.com` — the
+  parking servers leave the domain forwarded. `getEmailForwarding` must fetch
+  `listEmailForwards` as **XML** (`type=json` silently drops the alias, returning
+  only nested `forwards_to` arrays). `updateContacts` works but creates a **new
+  account contact** on every call (`contactAdd` + associate; no cleanup). See
+  `docs/registrars/namesilo.md`.
 - **Cloudflare** (live-verified 2026-08-29): registration is a real beta API —
   `checkAvailability`/`getPricing` use `POST domain-check` (authoritative;
   `domain-search` over-reports premium names as registrable), and `registerDomain`
@@ -120,6 +133,14 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
 - [ ] **NameBright** `transferIn` — NameBright's REST API has no transfer-in endpoint.
 - [ ] **NameSilo** `getAuthCode` — `retrieveAuthCode` only emails the EPP code to
       the registrant; it can't be returned synchronously (declaration dropped).
+- [ ] **GoDaddy** domain forwarding — removed from the reachable API (verified live
+      2026-08-29). The v1 `/v1/domains/forwards/{fqdn}` routes now 404 ("no method
+      to handle request"); the replacement lives under the **reseller-only** v2
+      `/v2/customers/{customerId}/domains/forwards/{fqdn}`, which returns
+      **403 ACCESS_DENIED** for standard ("non-API-Users") accounts regardless of
+      auth (PAT or sso-key) or customerId. The client no longer declares the
+      forwarding features (they reject with `NotImplementedError`). Revisit only
+      for reseller/API-Users accounts.
 
 ## Deferred capabilities (pruned; revisit later)
 

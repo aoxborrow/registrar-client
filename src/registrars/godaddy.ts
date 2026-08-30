@@ -4,8 +4,6 @@ import type {
   Contact,
   ContactSet,
   DnsRecord,
-  DomainForward,
-  DomainForwardType,
   Domain,
   DomainAvailability,
   ListDomainsOptions,
@@ -17,13 +15,8 @@ import type {
   TldPricing,
   TransferDomainInput,
 } from '../types';
-import { createDomain, filterDomains, settableForwards } from '../utils';
-import {
-  ConsentRequiredError,
-  NotFoundError,
-  NotImplementedError,
-  toRegistrarError,
-} from '../errors';
+import { createDomain, filterDomains } from '../utils';
+import { ConsentRequiredError, NotImplementedError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
@@ -89,26 +82,6 @@ interface GoDaddyRecord {
   weight?: number;
   port?: number;
 }
-
-// GoDaddy models forwarding as a per-fqdn resource under /v1/domains/forwards.
-// `type` is REDIRECT_PERMANENT (301) / REDIRECT_TEMPORARY (302) / MASKED (frame);
-// `mask` is only meaningful for MASKED.
-interface GoDaddyForward {
-  fqdn?: string;
-  type?: string;
-  url?: string;
-  mask?: { title?: string; description?: string; keywords?: string };
-}
-
-const GD_FORWARD_TYPE: Record<'temporary' | 'permanent', string> = {
-  permanent: 'REDIRECT_PERMANENT',
-  temporary: 'REDIRECT_TEMPORARY',
-};
-const GD_TYPE_TO_FORWARD: Record<string, DomainForwardType> = {
-  REDIRECT_PERMANENT: 'permanent',
-  REDIRECT_TEMPORARY: 'temporary',
-  MASKED: 'masked', // read-only; setDomainForwarding rejects it
-};
 
 // a legal agreement GoDaddy requires consent to before registering a TLD
 interface GoDaddyAgreement {
@@ -270,15 +243,15 @@ export class GoDaddyRegistrar extends BaseRegistrar {
   ];
   // GoDaddy's OTE ("Operational Test Environment") is its sandbox
   static readonly supportsSandbox = true;
-  // Beyond core: domain forwarding and transfer-out auth code (the `authCode`
-  // field on the v1 domain-detail response). DNSSEC has no dedicated endpoint
-  // (DS records go through the generic DNS API), and there's no glue-record,
-  // email, or push-webhook API.
-  static readonly extendedFeatures: readonly RegistrarFeature[] = [
-    Feature.GetDomainForwarding,
-    Feature.SetDomainForwarding,
-    Feature.GetAuthCode,
-  ];
+  // Beyond core: transfer-out auth code (the `authCode` field on the v1
+  // domain-detail response). Domain forwarding is NOT reachable and was dropped:
+  // the v1 /v1/domains/forwards routes now 404 ("no method to handle request"),
+  // and the replacement lives under the reseller-only v2 /v2/customers/{id}/
+  // domains/forwards, which returns 403 ACCESS_DENIED for non-"API Users"
+  // accounts — verified live 2026-08-29. DNSSEC has no dedicated endpoint (DS
+  // records go through the generic DNS API), and there's no glue-record, email,
+  // or push-webhook API.
+  static readonly extendedFeatures: readonly RegistrarFeature[] = [Feature.GetAuthCode];
 
   // true → prefer the v3 API (production + PAT). false → all calls use v1
   // (sso-key auth, or OTE/sandbox where v3 does not exist).
@@ -806,11 +779,35 @@ export class GoDaddyRegistrar extends BaseRegistrar {
           'only disabling privacy is supported via the API'
       );
     }
-    return this.mutate(
-      { method: 'DELETE', path: `/v1/domains/${encodeURIComponent(domainName)}/privacy` },
-      'Privacy disabled successfully',
-      opts
-    );
+    const encoded = encodeURIComponent(domainName);
+    try {
+      await this.http.request({
+        method: 'DELETE',
+        path: `/v1/domains/${encoded}/privacy`,
+        ...opts,
+      });
+      return { success: true, message: 'Privacy disabled successfully' };
+    } catch (error) {
+      const err = toRegistrarError(error);
+      // GoDaddy's free privacy ("Free DBP") can't be canceled via DELETE — it
+      // returns 409 CONFLICTING_STATUS. The only way to turn it off is to expose
+      // the WHOIS via a domain PATCH (`exposeWhois: true`), but GoDaddy requires a
+      // full legal consent block on that PATCH (`agreedAt` + `agreedBy` = the
+      // consenting party's IP + `agreementKeys`) — the same consent as a
+      // registration. setPrivacy can't carry that (and this client is edge-safe
+      // with no reliable IP source), so surface a clear, actionable error instead
+      // of silently failing. Paid DBP still cancels through the DELETE above.
+      if (err.status === 409) {
+        return {
+          success: false,
+          message:
+            `${this.name}: this domain uses free WHOIS privacy (Free DBP), which the API ` +
+            'only disables by exposing the WHOIS via a consent block (agreedAt + agreedBy IP ' +
+            '+ agreementKeys) that setPrivacy cannot supply; disable it in the GoDaddy dashboard.',
+        };
+      }
+      return { success: false, message: err.message };
+    }
   }
 
   override async getContacts(domainName: string, opts?: RequestOptions): Promise<ContactSet> {
@@ -983,77 +980,6 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     return d.authCode ?? '';
   }
 
-  /**
-   * Read URL forwarding via GET /domains/forwards/{fqdn}?includeSubs=true.
-   * GoDaddy keys forwarding by fqdn (the domain or a subdomain), so each entry
-   * maps to a DomainForward whose `host` is relative to the apex ("@" = domain).
-   * A domain with no forwarding returns 404, which we treat as an empty list.
-   */
-  override async getDomainForwarding(
-    domainName: string,
-    opts?: RequestOptions
-  ): Promise<DomainForward[]> {
-    let forwards: GoDaddyForward[];
-    try {
-      forwards = await this.http.request<GoDaddyForward[]>({
-        path: `/v1/domains/forwards/${encodeURIComponent(domainName)}`,
-        query: { includeSubs: true },
-        ...opts,
-      });
-    } catch (error) {
-      if (error instanceof NotFoundError) return [];
-      throw error;
-    }
-    return (forwards ?? []).map(f => ({
-      host: fqdnToHost(f.fqdn ?? domainName, domainName),
-      url: f.url ?? '',
-      type: GD_TYPE_TO_FORWARD[(f.type ?? '').toUpperCase()] ?? 'permanent',
-    }));
-  }
-
-  /**
-   * Replace URL forwarding (full replace; an empty list clears it). GoDaddy has
-   * no bulk endpoint — forwarding is a per-fqdn PUT/DELETE — so we read the
-   * current forwards, DELETE any fqdn no longer wanted, then PUT each desired
-   * rule to /domains/forwards/{fqdn}.
-   */
-  override async setDomainForwarding(
-    domainName: string,
-    forwards: DomainForward[],
-    opts?: RequestOptions
-  ): Promise<OperationResult> {
-    try {
-      const settable = settableForwards(forwards); // reject masked before any write
-      const current = await this.getDomainForwarding(domainName, opts);
-      const desiredHosts = new Set(settable.map(f => f.host || '@'));
-
-      for (const existing of current) {
-        if (!desiredHosts.has(existing.host)) {
-          const fqdn = hostToFqdn(existing.host, domainName);
-          await this.http.request({
-            method: 'DELETE',
-            path: `/v1/domains/forwards/${encodeURIComponent(fqdn)}`,
-            ...opts,
-          });
-        }
-      }
-
-      for (const f of settable) {
-        const fqdn = hostToFqdn(f.host || '@', domainName);
-        const body: GoDaddyForward = { type: GD_FORWARD_TYPE[f.type], url: f.url };
-        await this.http.request({
-          method: 'PUT',
-          path: `/v1/domains/forwards/${encodeURIComponent(fqdn)}`,
-          body,
-          ...opts,
-        });
-      }
-      return { success: true, message: 'Domain forwarding updated successfully' };
-    } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
-    }
-  }
-
   // map a v1 GoDaddy domain payload to the normalized Domain shape
   private toDomain(d: GoDaddyDomain): Domain {
     return createDomain({
@@ -1140,17 +1066,6 @@ function toGoDaddyContact(c: Contact): GoDaddyContact {
       country: c.country,
     },
   };
-}
-
-// resolve a forwarding host relative to the apex into a full fqdn, and back.
-// "@" (or "") denotes the apex domain itself.
-function hostToFqdn(host: string, domain: string): string {
-  return !host || host === '@' ? domain : `${host}.${domain}`;
-}
-function fqdnToHost(fqdn: string, domain: string): string {
-  if (fqdn === domain) return '@';
-  const suffix = `.${domain}`;
-  return fqdn.endsWith(suffix) ? fqdn.slice(0, -suffix.length) : fqdn;
 }
 
 // --- v3 helpers ------------------------------------------------------------
