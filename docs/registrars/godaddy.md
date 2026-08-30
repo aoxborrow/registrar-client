@@ -41,16 +41,42 @@ at **200** for domain-names and **100** for dns-records; DNS is per-record
 POST/PUT/DELETE (no bulk PUT — `setDnsRecords` diffs); registration is async
 (202 → poll `/v3/domains/operations/{id}`); nameserver PUT body is a bare array.
 
-**Verified live**: v3 read surface (testConnection, listDomains, getDomain,
-checkAvailability incl. price conversion, getPricing, getDnsRecords) and v3
-`setDnsRecords` (reversible TXT round-trip on a GoDaddy-hosted zone). v1-via-PAT
-read + reversible auto-renew toggle. OTE v1 (testConnection, listDomains,
-checkAvailability). **Not run**: v3 register (paid, no v3 sandbox — only the
-quote step is free) and v1 register/renew/transfer on OTE. The v1 purchase body
-passes GoDaddy's own `POST /v1/domains/purchase/validate` (200), but OTE
-purchases require an **API Reseller account** (a paid tier) with Good as Gold —
-a plain developer key returns `500 ERROR_UNKNOWN` on purchase. See
-`docs/TODOS.md`.
+**v3 registration** (verified live by registering a real $1.19 `.xyz`): the
+execute body must be **minimal** — `{ domain, period, quoteToken, consent:{
+agreementTypes, agreedAt } }`. Hard-won gotchas:
+
+- **No `profile` block.** Sending one (contacts / autoRenew / privacy /
+  nameServers) is rejected `INVALID_BODY`. Contacts come from the **account
+  identity** (the quote's `resolved.contactSource: "ACCOUNT"`), and `agreedBy`
+  is derived server-side from the token + caller IP. `registerDomainV3` therefore
+  applies `autoRenew` (always, since GoDaddy registers with the account default —
+  typically ON) and `nameservers` as **post-registration** steps.
+- **`consent.acknowledgedFees` must be omitted** for a standard REGISTRY
+  registration — the array is `minItems: 1`, so `[]` is rejected. Include it only
+  when the quote returned a non-empty `fees` array (premium), echoed verbatim.
+- **`Idempotency-Key` header is required** on the execute endpoints
+  `POST /v3/domains/registrations` and `PUT /v3/domains/domain-names/{d}/nameservers`
+  (400 `MISSING_VALUE` without it); the client sends a `crypto.randomUUID()`.
+  DNS record writes do not require it.
+- **Premium / aftermarket domains are not registrable via the v3 API**
+  (`available:false` with no price, or `422 UNSUPPORTED_AFTERMARKET_DOMAIN`) even
+  when for sale on the website. Short numeric `.xyz` are premium; 10-digit numeric
+  `.xyz` fall into standard `REGISTRY` at $1.19.
+
+**Verified live** (prod + PAT, against a real domain): full v3 read surface
+(testConnection, listDomains, getDomain, checkAvailability incl. price
+conversion, getPricing, getDnsRecords); v3 `registerDomain` (quote→execute→poll,
+a real purchase); v3 `setDnsRecords` (reversible TXT add/remove) and
+`updateNameservers` (reversible swap — note GoDaddy **serializes** NS changes, so
+overlapping PUTs clobber each other; propagation ~8s); and v1-via-PAT
+`setAutoRenew` + `lock`/`unlock` + `getContacts`. Reads are **eventually
+consistent** across the v1-write / v3-read boundary, so management assertions must
+poll rather than read back immediately. OTE v1 (testConnection, listDomains,
+checkAvailability) also verified. **Not run**: `renewDomain` / `transferIn`
+(v1-only, paid/irreversible, and OTE purchases need a paid API Reseller account
+with Good as Gold — a plain developer key returns `500 ERROR_UNKNOWN`);
+`updateContacts` (skipped — a registrant change triggers the ICANN verification /
+60-day-lock workflow) and `setPrivacy`. See `docs/TODOS.md`.
 
 ## Authentication
 
