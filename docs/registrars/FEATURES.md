@@ -42,7 +42,7 @@ folder ([cloudflare](cloudflare.md) · [dynadot](dynadot.md) · [gandi](gandi.md
 | 17  | DNSSEC management                | ✗   | ✓   | ✓   | ~   | ✗   | ✗   | 2 / 3           |
 | 18  | Glue / host records              | ✗   | ✓   | ✓   | ✗   | ~   | ✓   | 3 / 4           |
 | 19  | Email forwarding / mailbox       | ✓³  | ~   | ✓   | ✗   | ~   | ✗   | 2 / 4           |
-| 20  | Domain forwarding / URL redirect | ✓³  | ✓   | ✓   | ✗⁴  | ✓   | ✗   | 4 / 4           |
+| 20  | Domain forwarding / URL redirect | ✓³  | ✓   | ✓   | ✓⁴  | ✓   | ✗   | 5 / 5           |
 | 21  | Webhooks / event notifications   | ✗   | ✓   | ✗   | ~   | ✗   | ✗   | 1 / 2           |
 
 ¹ Cloudflare _does_ offer world-class DNS record management — but through its
@@ -71,11 +71,15 @@ Email Routing Addresses scope; otherwise verification is done in the dashboard.
 Masked/framed forwarding is read-only for all providers: `getDomainForwarding`
 reports `masked`, `setDomainForwarding` rejects it.
 
-⁴ GoDaddy domain forwarding is **no longer reachable via API** (verified live
-2026-08-29): the v1 `/v1/domains/forwards/{fqdn}` routes 404 ("no method to handle
-request"), and the v2 replacement `/v2/customers/{customerId}/domains/forwards/{fqdn}`
-returns 403 ACCESS_DENIED for standard accounts (it's gated behind GoDaddy's
-reseller / "API Users" program). The provider no longer declares the feature.
+⁴ GoDaddy domain forwarding uses the **v2 customer-scoped** route
+`/v2/customers/{customerId}/domains/forwards/{fqdn}` (verified live 2026-08-29 with
+a full set→read→clear round-trip; the old v1 `/v1/domains/forwards/{fqdn}` routes
+now 404). It works on a standard account with a PAT or an sso-key — the earlier
+"reseller-only 403" was from passing the numeric **shopper ID** where the API wants
+the customer **UUID**. The provider takes `customerId` as either the UUID (used
+directly) or a numeric shopper ID it resolves via `GET /v1/shoppers/{id}?includes=customerId`
+(**sso-key only**). Write enum `REDIRECT_PERMANENT`/`REDIRECT_TEMPORARY`; reads
+return `PERMANENT_REDIRECT`/`TEMPORARY_REDIRECT`; `MASKED` read-only.
 
 ### The Cloudflare caveat (read before trusting column CF)
 
