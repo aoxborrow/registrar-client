@@ -36,13 +36,13 @@ folder ([cloudflare](cloudflare.md) · [dynadot](dynadot.md) · [gandi](gandi.md
 | 11  | Update nameservers               | ✗   | ✓   | ✓   | ✓   | ✓   | ✓   | 5 / 5           |
 | 12  | Get nameservers                  | ✓   | ✓   | ✓   | ✓   | ✓   | ~   | 5 / 6           |
 | 13  | Lock / unlock (transfer lock)    | ✗²  | ✓   | ~   | ✓   | ✓   | ✓   | 4 / 5           |
-| 14  | Get / set WHOIS privacy          | ✓   | ✓   | ~   | ✓   | ✓   | ✓   | 5 / 6           |
+| 14  | Get / set WHOIS privacy          | ✓   | ✓   | ~   | ~   | ✓   | ✓   | 4 / 6           |
 | 15  | Update contact info              | ✗   | ✓   | ✓   | ✓   | ✓   | ✓   | 5 / 5           |
 | 16  | DNS record management            | ✓¹  | ✓   | ✓   | ✓   | ✓   | ✓   | 6 / 6           |
 | 17  | DNSSEC management                | ✗   | ✓   | ✓   | ~   | ✗   | ✗   | 2 / 3           |
 | 18  | Glue / host records              | ✗   | ✓   | ✓   | ✗   | ~   | ✓   | 3 / 4           |
 | 19  | Email forwarding / mailbox       | ✓³  | ~   | ✓   | ✗   | ~   | ✗   | 2 / 4           |
-| 20  | Domain forwarding / URL redirect | ✓³  | ✓   | ✓   | ✓   | ✓   | ✗   | 5 / 5           |
+| 20  | Domain forwarding / URL redirect | ✓³  | ✓   | ✓   | ✗⁴  | ✓   | ✗   | 4 / 4           |
 | 21  | Webhooks / event notifications   | ✗   | ✓   | ✗   | ~   | ✗   | ✗   | 1 / 2           |
 
 ¹ Cloudflare _does_ offer world-class DNS record management — but through its
@@ -70,6 +70,12 @@ verification email) and reports which are still pending, where the token has the
 Email Routing Addresses scope; otherwise verification is done in the dashboard.
 Masked/framed forwarding is read-only for all providers: `getDomainForwarding`
 reports `masked`, `setDomainForwarding` rejects it.
+
+⁴ GoDaddy domain forwarding is **no longer reachable via API** (verified live
+2026-08-29): the v1 `/v1/domains/forwards/{fqdn}` routes 404 ("no method to handle
+request"), and the v2 replacement `/v2/customers/{customerId}/domains/forwards/{fqdn}`
+returns 403 ACCESS_DENIED for standard accounts (it's gated behind GoDaddy's
+reseller / "API Users" program). The provider no longer declares the feature.
 
 ### The Cloudflare caveat (read before trusting column CF)
 
@@ -148,15 +154,15 @@ webhooks, mailbox provisioning, and bulk settings. DNSSEC was narrowed from full
 key management to **read-status + disable** (`getDnssec` / `disableDnssec`);
 enabling DNSSEC is out of scope for this library for now.
 
-| `Feature`             | Declared by                | Notes                                                                                                   |
-| --------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `GetAuthCode`         | DY, GA, GD, NB, SP         | transfer-out EPP code returned synchronously; NameSilo/NC only email it; Porkbun gates it behind the UI |
-| `GetDnssec`           | DY, GA, NS, PB             | read whether DNSSEC is enabled (DS / key records)                                                       |
-| `DisableDnssec`       | DY, GA, NS, PB             | turn DNSSEC off; no enable / key management (out of scope)                                              |
-| `GetEmailForwarding`  | CF, DY, GA, NC, NS         | read counterpart of `SetEmailForwarding`                                                                |
-| `SetEmailForwarding`  | CF, DY, GA, NC, NS         | alias redirect only — **distinct from a mailbox**; CF uses Email Routing                                |
-| `GetDomainForwarding` | CF, DY, GA, GD, NC, NS, PB | read counterpart of `SetDomainForwarding`                                                               |
-| `SetDomainForwarding` | CF, DY, GA, GD, NC, NS, PB | `temporary`/`permanent` only (`masked` is read-only); Gandi `webredirs` (subdomain-only); CF via Rules  |
+| `Feature`             | Declared by            | Notes                                                                                                   |
+| --------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------- |
+| `GetAuthCode`         | DY, GA, GD, NB, SP     | transfer-out EPP code returned synchronously; NameSilo/NC only email it; Porkbun gates it behind the UI |
+| `GetDnssec`           | DY, GA, NS, PB         | read whether DNSSEC is enabled (DS / key records)                                                       |
+| `DisableDnssec`       | DY, GA, NS, PB         | turn DNSSEC off; no enable / key management (out of scope)                                              |
+| `GetEmailForwarding`  | CF, DY, GA, NC, NS     | read counterpart of `SetEmailForwarding`                                                                |
+| `SetEmailForwarding`  | CF, DY, GA, NC, NS     | alias redirect only — **distinct from a mailbox**; CF uses Email Routing                                |
+| `GetDomainForwarding` | CF, DY, GA, NC, NS, PB | read counterpart of `SetDomainForwarding`                                                               |
+| `SetDomainForwarding` | CF, DY, GA, NC, NS, PB | `temporary`/`permanent` only (`masked` is read-only); Gandi `webredirs` (subdomain-only); CF via Rules  |
 
 **Implementation status:** every declared extended feature above is now
 implemented on its provider(s). **Dynadot**, **Gandi**, and **Porkbun** are
@@ -193,10 +199,10 @@ registrars.dynadot.features; // full set: core + Dynadot's extended
 registrars.dynadot.extendedFeatures; // just the extras
 CORE_FEATURES.includes(Feature.GetDnsRecords); // true
 
-const p = createRegistrar('godaddy', creds);
+const p = createRegistrar('namesilo', creds);
 p.supports(Feature.RegisterDomain); // true (core)
 p.supports(Feature.SetDomainForwarding); // true (its extended)
-p.supports(Feature.GetAuthCode); // false
+p.supports(Feature.GetAuthCode); // false (not declared)
 ```
 
 - **`Feature`** — the constant for every capability id (use instead of strings).

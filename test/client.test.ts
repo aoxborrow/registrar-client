@@ -124,9 +124,12 @@ describe('capabilities / features', () => {
     const gd = createRegistrar('godaddy', {});
     expect(gd.features).toEqual(registrars.godaddy.features);
     expect(gd.supports(Feature.RegisterDomain)).toBe(true); // core
-    expect(gd.supports(Feature.SetDomainForwarding)).toBe(true); // its extended
     expect(gd.supports(Feature.GetAuthCode)).toBe(true); // its extended
+    expect(gd.supports(Feature.SetDomainForwarding)).toBe(false); // forwarding dropped (v1 gone, v2 reseller-only)
     expect(gd.supports(Feature.GetDnssec)).toBe(false); // not declared
+    // a provider that declares an extended feature reports it as supported
+    const ns = createRegistrar('namesilo', { apiKey: 'k' });
+    expect(ns.supports(Feature.SetDomainForwarding)).toBe(true);
   });
 });
 

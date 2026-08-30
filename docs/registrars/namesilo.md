@@ -108,6 +108,30 @@ NameSilo offers a single, free, comprehensive HTTP API: every operation is invok
 - **Auth/EPP code delivered out-of-band** — `retrieveAuthCode` triggers an email to the registrant rather than returning the code inline in the API response, a deliberate anti-hijacking measure that differs from registrars that return the code directly.
 - **No webhooks** — anything event-driven (transfer completion, expiration, etc.) must be built on top of polling (`checkTransferStatus`, `listDomains`/`getDomainInfo` with expiry fields), which has implications for how a multi-provider client should model "notifications" across registrars.
 
+## Live-verified quirks (2026-08-29)
+
+Forwarding and contacts were exercised on a real domain and surfaced several
+latent bugs, now fixed in the client:
+
+- **Domain-forwarding reads need `traffic_type`, not `forward_url`.**
+  `getDomainInfo` keeps the last `forward_url` even after forwarding is switched
+  off (and returns the literal `"N/A"` for never-forwarded domains), so reading
+  `forward_url` alone reports a phantom forward. Gate on `traffic_type`:
+  `"Forwarded"` = active, `"Custom DNS"` = off.
+- **Clearing a forward must re-point NS at DNS hosting, not parking.** There is no
+  "stop forwarding" command; you switch nameservers. Setting a `domainForward`
+  flips `traffic_type` to `"Forwarded"`; pointing NS back at the **DNS-hosting**
+  servers `ns1/2/3.dnsowl.com` flips it to `"Custom DNS"` (forwarding off). The
+  parking servers `ns1/2.namesilo.com` do **not** clear it.
+- **`listEmailForwards` must be read as XML.** With `type=json`, NameSilo's output
+  is lossy — it drops the alias (`<email>`) and returns only nested `forwards_to`
+  arrays (`[["a@x.com"],["b@y.com"]]`), making aliases unrecoverable. Fetch this
+  one call with `type=xml`. Writes (`configureEmailForward`/`deleteEmailForward`)
+  are fine over JSON.
+- **`updateContacts` creates a new account contact every call.** It runs
+  `contactAdd` then `contactDomainAssociate`; the old contact records are not
+  cleaned up, so repeated calls accumulate orphan contacts in the account.
+
 ## Auth / Access Notes for Implementors
 
 - API keys are self-service: generate from the account's API Manager page (`www.namesilo.com/account/api-manager`); the key is shown once at creation and cannot be retrieved again if lost (must regenerate).
