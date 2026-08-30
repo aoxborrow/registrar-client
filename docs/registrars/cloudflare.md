@@ -28,6 +28,22 @@ the research table below predate this and are partly superseded by these finding
   works and persists (toggled `true→false→true`, reversible).
 - **`setDnsRecords`** — Zones API replace-all (delete existing, recreate). **Verified on
   the clean `namebot.dev` zone**: set A/TXT/MX, read-back matched, restored to empty.
+- **`get/setDomainForwarding`** (extended) — composed from the Rules API + a proxied
+  placeholder DNS record (there is no native Registrar forwarding). `setDomainForwarding`
+  writes one static redirect rule per host to the `http_request_dynamic_redirect` phase
+  ruleset (301 `permanent` / 302 `redirect`) and ensures a proxied `AAAA → 100::`
+  placeholder on each source host so the edge applies the redirect. HTTPS works via
+  Universal SSL. **Verified live** on a gTLD test zone: apex + `www` → an external
+  HTTPS target both return `302` at the edge. Clearing removes the rules and the
+  placeholder records.
+- **`get/setEmailForwarding`** (extended) — Cloudflare Email Routing. `setEmailForwarding`
+  enables routing if needed (adds MX/SPF), writes a routing rule per `alias@domain`, and
+  maps `*`/`@` to the catch-all. **Verified live**: wildcard catch-all on `namebot.dev`
+  forwarding to a verified destination, `enabled: true`. Destinations must already be
+  verified on the account — the token used here **cannot** manage destination addresses
+  (`/email/routing/addresses` → 403), so verification happens in the dashboard.
+- **Masked/framed forwarding is not offered** by the library for any provider (it breaks
+  HTTPS/SEO and Cloudflare can't do it); `DomainForwardType` is `redirect | permanent`.
 
 **Not available via the API (confirmed, both `.uk` and gTLD `.dev`):**
 

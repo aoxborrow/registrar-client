@@ -41,8 +41,8 @@ folder ([cloudflare](cloudflare.md) · [dynadot](dynadot.md) · [gandi](gandi.md
 | 16  | DNS record management            | ✓¹  | ✓   | ✓   | ✓   | ✓   | ✓   | 6 / 6           |
 | 17  | DNSSEC management                | ✗   | ✓   | ✓   | ~   | ✗   | ✗   | 2 / 3           |
 | 18  | Glue / host records              | ✗   | ✓   | ✓   | ✗   | ~   | ✓   | 3 / 4           |
-| 19  | Email forwarding / mailbox       | ✗   | ~   | ✓   | ✗   | ~   | ✗   | 1 / 3           |
-| 20  | Domain forwarding / URL redirect | ✗   | ✓   | ✓   | ✓   | ✓   | ✗   | 4 / 4           |
+| 19  | Email forwarding / mailbox       | ✓³  | ~   | ✓   | ✗   | ~   | ✗   | 2 / 4           |
+| 20  | Domain forwarding / URL redirect | ✓³  | ✓   | ✓   | ✓   | ✓   | ✗   | 5 / 5           |
 | 21  | Webhooks / event notifications   | ✗   | ✓   | ✗   | ~   | ✗   | ✗   | 1 / 2           |
 
 ¹ Cloudflare _does_ offer world-class DNS record management — but through its
@@ -50,15 +50,24 @@ separate DNS/Zones API, not the Registrar API. DNS is a **headline feature** of
 this library, so the Cloudflare provider routes `getDnsRecords`/`setDnsRecords`
 through the Zones API — **implemented and live-verified 2026-08-29**
 (`setDnsRecords` is a replace-all; it fails only when Cloudflare Email Routing
-locks the zone's managed MX/DKIM/SPF records, surfaced cleanly). Same approach
-would apply to email forwarding (Email Routing) and redirects (Bulk Redirects)
-if/when those are wired up.
+locks the zone's managed MX/DKIM/SPF records, surfaced cleanly). The same
+Cloudflare-APIs-outside-the-Registrar-API approach now also powers email
+forwarding (Email Routing) and domain forwarding (Rules) — see ³.
 
 ² **Verified impossible via the API, not just unimplemented** (2026-08-29): the
 legacy `PUT registrar/domains/{name}` returns 422 "not allowed to perform this
 action" for `auto_renew`/`locked` — on **both** a `.uk` and a gTLD (`.dev`), so
 it is API-wide, not TLD-specific — and the new `registrations` resource has no
 update endpoint. These are settable **only at registration**.
+
+³ Cloudflare has no native forwarding primitive; the provider composes it from
+other Cloudflare APIs (live-verified 2026-08-29). **Domain forwarding** = a Rules
+redirect (`http_request_dynamic_redirect`) plus a proxied `AAAA → 100::`
+placeholder record so the edge applies it; verified apex + `www` → `302` at the
+edge. **Email forwarding** = Email Routing (enabling it adds MX/SPF); catch-all
+verified live. Email Routing destinations must be verified on the account first —
+the token cannot manage destination addresses (403). Masked/framed forwarding is
+not offered for any provider.
 
 ### The Cloudflare caveat (read before trusting column CF)
 
@@ -137,15 +146,15 @@ webhooks, mailbox provisioning, and bulk settings. DNSSEC was narrowed from full
 key management to **read-status + disable** (`getDnssec` / `disableDnssec`);
 enabling DNSSEC is out of scope for this library for now.
 
-| `Feature`             | Declared by            | Notes                                                                                           |
-| --------------------- | ---------------------- | ----------------------------------------------------------------------------------------------- |
-| `GetAuthCode`         | DY, GA, SP             | transfer-out EPP code; NameSilo emails it (can't return it); GD/NC gate it behind the dashboard |
-| `GetDnssec`           | DY, GA, NS, PB         | read whether DNSSEC is enabled (DS / key records)                                               |
-| `DisableDnssec`       | DY, GA, NS, PB         | turn DNSSEC off; no enable / key management (out of scope)                                      |
-| `GetEmailForwarding`  | DY, GA, NC, NS         | read counterpart of `SetEmailForwarding`                                                        |
-| `SetEmailForwarding`  | DY, GA, NC, NS         | alias redirect only — **distinct from a mailbox**                                               |
-| `GetDomainForwarding` | DY, GA, GD, NC, NS, PB | read counterpart of `SetDomainForwarding`                                                       |
-| `SetDomainForwarding` | DY, GA, GD, NC, NS, PB | some model it as `URL`/`URL301`/`FRAME` DNS records; Gandi uses `webredirs` (subdomain-only)    |
+| `Feature`             | Declared by                | Notes                                                                                           |
+| --------------------- | -------------------------- | ----------------------------------------------------------------------------------------------- |
+| `GetAuthCode`         | DY, GA, SP                 | transfer-out EPP code; NameSilo emails it (can't return it); GD/NC gate it behind the dashboard |
+| `GetDnssec`           | DY, GA, NS, PB             | read whether DNSSEC is enabled (DS / key records)                                               |
+| `DisableDnssec`       | DY, GA, NS, PB             | turn DNSSEC off; no enable / key management (out of scope)                                      |
+| `GetEmailForwarding`  | CF, DY, GA, NC, NS         | read counterpart of `SetEmailForwarding`                                                        |
+| `SetEmailForwarding`  | CF, DY, GA, NC, NS         | alias redirect only — **distinct from a mailbox**; CF uses Email Routing                        |
+| `GetDomainForwarding` | CF, DY, GA, GD, NC, NS, PB | read counterpart of `SetDomainForwarding`                                                       |
+| `SetDomainForwarding` | CF, DY, GA, GD, NC, NS, PB | `redirect`/`permanent` only (no masking); Gandi `webredirs` (subdomain-only); CF via Rules      |
 
 **Implementation status:** every declared extended feature above is now
 implemented on its provider(s). **Dynadot**, **Gandi**, and **Porkbun** are

@@ -6,6 +6,8 @@ import type {
   DnsRecord,
   Domain,
   DomainAvailability,
+  DomainForward,
+  EmailForward,
   ListDomainsOptions,
   OperationResult,
   RegisterDomainInput,
@@ -16,7 +18,7 @@ import type {
 import { createDomain, filterDomains, normalizeDomain } from '../utils';
 import { NotImplementedError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
-import type { RegistrarFeature } from '../features';
+import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
 
 // Cloudflare's standard response envelope
@@ -100,6 +102,43 @@ interface CfRegistration {
   reason?: string;
 }
 
+// a rule in the http_request_dynamic_redirect phase ruleset (Single Redirects).
+// A domain forward is a static redirect: action "redirect" with a literal
+// target_url.value and a host-matching expression.
+interface CfRedirectRule {
+  id?: string;
+  expression?: string;
+  description?: string;
+  action?: string;
+  action_parameters?: {
+    from_value?: {
+      target_url?: { value?: string; expression?: string };
+      status_code?: number;
+      preserve_query_string?: boolean;
+    };
+  };
+}
+
+interface CfRuleset {
+  id?: string;
+  rules?: CfRedirectRule[];
+}
+
+// an Email Routing rule: a matcher (literal "to" address, or "all" for the
+// catch-all) paired with a forward action carrying the destination address(es).
+interface CfEmailRule {
+  id?: string;
+  name?: string;
+  enabled?: boolean;
+  matchers?: { type: string; field?: string; value?: string }[];
+  actions?: { type: string; value?: string[] }[];
+}
+
+interface CfEmailSettings {
+  enabled?: boolean;
+  status?: string;
+}
+
 // a DNS record from the Cloudflare Zones DNS API. For SRV records, weight/port
 // are carried on a nested `data` object; `content` holds the primary value for
 // every type, and `priority` is populated for MX/SRV.
@@ -151,7 +190,16 @@ export class CloudflareRegistrar extends BaseRegistrar {
   // renew, and contact updates are not — Cloudflare's API has no post-registration
   // update endpoint and the legacy edit endpoint (EOL 2026-09-27) rejects those
   // fields. Those methods stay `NotImplementedError`. See docs/registrars/cloudflare.md.
-  static readonly extendedFeatures: readonly RegistrarFeature[] = [];
+  // Domain forwarding (URL redirects via the Rules/Rulesets API + a proxied
+  // placeholder DNS record) and email forwarding (Email Routing) are supported
+  // through Cloudflare APIs outside the Registrar API. Masked/framed forwarding
+  // is not offered by the library. See docs/registrars/cloudflare.md.
+  static readonly extendedFeatures: readonly RegistrarFeature[] = [
+    Feature.GetDomainForwarding,
+    Feature.SetDomainForwarding,
+    Feature.GetEmailForwarding,
+    Feature.SetEmailForwarding,
+  ];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
     super(
@@ -466,6 +514,331 @@ export class CloudflareRegistrar extends BaseRegistrar {
     return res.result?.find(z => z.name === domainName) ?? null;
   }
 
+  // resolve a domain to its zone or throw a helpful error (forwarding requires
+  // the domain to be an active zone in the account).
+  private async requireZone(domainName: string, opts?: RequestOptions): Promise<CfZone> {
+    const zone = await this.findZone(domainName, opts);
+    if (!zone) {
+      throw new Error(
+        `${this.name}: ${domainName} is not a zone in this account; forwarding is managed ` +
+          'through the Rules and Email Routing APIs, which require the domain to be an active zone'
+      );
+    }
+    return zone;
+  }
+
+  // --- domain (URL) forwarding: Rules/Rulesets API + a proxied placeholder DNS
+  // record so Cloudflare's edge can apply the redirect --------------------------
+
+  /**
+   * Read URL forwarding from the zone's `http_request_dynamic_redirect` phase
+   * ruleset. Each static redirect rule (action `redirect`, a literal target URL,
+   * and a single `http.host eq "..."` match) maps to one DomainForward. Rules
+   * with dynamic (expression) targets or multi-condition matches are skipped —
+   * they are richer than the generic forwarding model. Returns [] when no
+   * redirect ruleset exists.
+   */
+  override async getDomainForwarding(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<DomainForward[]> {
+    const zone = await this.requireZone(domainName, opts);
+    const ruleset = await this.getRedirectRuleset(zone.id, opts);
+    const forwards: DomainForward[] = [];
+    for (const rule of ruleset?.rules ?? []) {
+      if (rule.action !== 'redirect') continue;
+      const url = rule.action_parameters?.from_value?.target_url?.value;
+      const host = hostFromExpression(rule.expression, zone.name);
+      if (!url || host == null) continue;
+      const status = rule.action_parameters?.from_value?.status_code;
+      forwards.push({ host, url, type: status === 301 ? 'permanent' : 'redirect' });
+    }
+    return forwards;
+  }
+
+  /**
+   * Set URL forwarding (replace-all). For each rule this (1) ensures a proxied
+   * placeholder DNS record exists on the source host so Cloudflare's edge handles
+   * the request, and (2) writes a static redirect rule to the zone's
+   * `http_request_dynamic_redirect` ruleset (301 for `permanent`, 302 for
+   * `redirect`). HTTPS works automatically via Cloudflare's Universal SSL. An
+   * empty list clears forwarding: the redirect rules and the placeholder records
+   * are removed.
+   */
+  override async setDomainForwarding(
+    domainName: string,
+    forwards: DomainForward[],
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    try {
+      const zone = await this.requireZone(domainName, opts);
+      const existing = await this.getRedirectRuleset(zone.id, opts);
+
+      if (forwards.length === 0) {
+        if (existing?.id) {
+          await this.http.request<CfEnvelope<unknown>>({
+            method: 'DELETE',
+            path: `/zones/${encodeURIComponent(zone.id)}/rulesets/${encodeURIComponent(existing.id)}`,
+            ...opts,
+          });
+        }
+        await this.removePlaceholderRecords(zone.id, opts);
+        return { success: true, message: 'Domain forwarding cleared successfully' };
+      }
+
+      const rules = forwards.map(f => {
+        const fqdn = toFqdn(f.host || '@', zone.name);
+        return {
+          expression: `http.host eq "${fqdn}"`,
+          description: `forward ${fqdn}`,
+          action: 'redirect',
+          action_parameters: {
+            from_value: {
+              target_url: { value: f.url },
+              status_code: f.type === 'permanent' ? 301 : 302,
+              preserve_query_string: false,
+            },
+          },
+        };
+      });
+
+      // ensure the edge sees traffic for each source host
+      for (const f of forwards) {
+        await this.ensurePlaceholderRecord(zone.id, toFqdn(f.host || '@', zone.name), opts);
+      }
+
+      const body = { name: 'default', kind: 'zone', phase: PHASE_DYNAMIC_REDIRECT, rules };
+      const res = existing?.id
+        ? await this.http.request<CfEnvelope<CfRuleset>>({
+            method: 'PUT',
+            path: `/zones/${encodeURIComponent(zone.id)}/rulesets/${encodeURIComponent(existing.id)}`,
+            body,
+            ...opts,
+          })
+        : await this.http.request<CfEnvelope<CfRuleset>>({
+            method: 'POST',
+            path: `/zones/${encodeURIComponent(zone.id)}/rulesets`,
+            body,
+            ...opts,
+          });
+      return res.success
+        ? { success: true, message: 'Domain forwarding updated successfully' }
+        : {
+            success: false,
+            message: res.errors?.[0]?.message ?? 'Failed to update domain forwarding',
+          };
+    } catch (error) {
+      return { success: false, message: toRegistrarError(error).message };
+    }
+  }
+
+  // GET the dynamic-redirect phase entry-point ruleset, or null when none exists
+  // (the API returns 404 with code 10003 in that case).
+  private async getRedirectRuleset(
+    zoneId: string,
+    opts?: RequestOptions
+  ): Promise<CfRuleset | null> {
+    try {
+      const res = await this.http.request<CfEnvelope<CfRuleset>>({
+        path: `/zones/${encodeURIComponent(zoneId)}/rulesets/phases/${PHASE_DYNAMIC_REDIRECT}/entrypoint`,
+        ...opts,
+      });
+      return res.result ?? null;
+    } catch (error) {
+      if (toRegistrarError(error).status === 404) return null;
+      throw error;
+    }
+  }
+
+  // ensure a proxied placeholder A/AAAA/CNAME exists for `fqdn` so Cloudflare's
+  // edge receives the request. Creates a proxied AAAA -> 100:: (a reserved
+  // originless address) only when the host has no A/AAAA/CNAME record yet; an
+  // existing record is left untouched (it must be proxied for the redirect to
+  // fire).
+  private async ensurePlaceholderRecord(
+    zoneId: string,
+    fqdn: string,
+    opts?: RequestOptions
+  ): Promise<void> {
+    const list = await this.http.request<CfEnvelope<CfDnsRecord[]>>({
+      path: `/zones/${encodeURIComponent(zoneId)}/dns_records`,
+      query: { name: fqdn },
+      ...opts,
+    });
+    const hasAddress = (list.result ?? []).some(r =>
+      ['A', 'AAAA', 'CNAME'].includes((r.type ?? '').toUpperCase())
+    );
+    if (hasAddress) return;
+    await this.http.request<CfEnvelope<unknown>>({
+      method: 'POST',
+      path: `/zones/${encodeURIComponent(zoneId)}/dns_records`,
+      body: { type: 'AAAA', name: fqdn, content: PLACEHOLDER_AAAA, proxied: true, ttl: 1 },
+      ...opts,
+    });
+  }
+
+  // delete the proxied placeholder records this provider creates for forwarding
+  // (identified by their reserved sentinel content), leaving real records alone.
+  private async removePlaceholderRecords(zoneId: string, opts?: RequestOptions): Promise<void> {
+    const list = await this.http.request<CfEnvelope<CfDnsRecord[]>>({
+      path: `/zones/${encodeURIComponent(zoneId)}/dns_records`,
+      query: { per_page: 200 },
+      ...opts,
+    });
+    for (const r of list.result ?? []) {
+      if (r.id && PLACEHOLDER_CONTENT.has((r.content ?? '').toLowerCase())) {
+        await this.http.request<CfEnvelope<unknown>>({
+          method: 'DELETE',
+          path: `/zones/${encodeURIComponent(zoneId)}/dns_records/${encodeURIComponent(r.id)}`,
+          ...opts,
+        });
+      }
+    }
+  }
+
+  // --- email forwarding: Email Routing (zone rules + catch-all) ----------------
+
+  /**
+   * Read Email Routing forwarding rules. Each rule/catch-all with a `forward`
+   * action maps to one EmailForward: the local part of the matched address is the
+   * `alias` ("*" for the catch-all), and the first forward destination is
+   * `forwardTo`. Non-forward actions (drop / Worker) are skipped.
+   */
+  override async getEmailForwarding(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<EmailForward[]> {
+    const zone = await this.requireZone(domainName, opts);
+    const zid = encodeURIComponent(zone.id);
+    const forwards: EmailForward[] = [];
+
+    const rules = await this.http.request<CfEnvelope<CfEmailRule[]>>({
+      path: `/zones/${zid}/email/routing/rules`,
+      ...opts,
+    });
+    for (const rule of rules.result ?? []) {
+      const dest = forwardAction(rule);
+      if (!dest) continue;
+      const matcher = rule.matchers?.[0];
+      if (matcher?.type === 'all') continue; // catch-all handled below
+      const value = matcher?.value ?? '';
+      const alias = value.includes('@') ? value.slice(0, value.indexOf('@')) : value;
+      forwards.push({ alias, forwardTo: dest });
+    }
+
+    const catchAll = await this.http.request<CfEnvelope<CfEmailRule>>({
+      path: `/zones/${zid}/email/routing/rules/catch_all`,
+      ...opts,
+    });
+    if (catchAll.result?.enabled) {
+      const dest = forwardAction(catchAll.result);
+      if (dest) forwards.push({ alias: '*', forwardTo: dest });
+    }
+    return forwards;
+  }
+
+  /**
+   * Set Email Routing forwarding (replace-all). Enables Email Routing if needed
+   * (which adds the required MX/SPF records), then rewrites the rules: each
+   * `alias@domain -> forwardTo` becomes a routing rule, and an `alias` of "*"/"@"
+   * becomes the catch-all. Destination addresses must already be verified on the
+   * account — Cloudflare disables rules to unverified destinations, and verifying
+   * them is not possible through this token/API.
+   */
+  override async setEmailForwarding(
+    domainName: string,
+    forwards: EmailForward[],
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    try {
+      const zone = await this.requireZone(domainName, opts);
+      const zid = encodeURIComponent(zone.id);
+
+      const settings = await this.http.request<CfEnvelope<CfEmailSettings>>({
+        path: `/zones/${zid}/email/routing`,
+        ...opts,
+      });
+      if (!settings.result?.enabled) {
+        const enabled = await this.http.request<CfEnvelope<CfEmailSettings>>({
+          method: 'POST',
+          path: `/zones/${zid}/email/routing/enable`,
+          body: {},
+          ...opts,
+        });
+        if (!enabled.success) {
+          return {
+            success: false,
+            message: enabled.errors?.[0]?.message ?? 'Failed to enable Email Routing',
+          };
+        }
+      }
+
+      // remove existing non-catch-all rules
+      const existing = await this.http.request<CfEnvelope<CfEmailRule[]>>({
+        path: `/zones/${zid}/email/routing/rules`,
+        ...opts,
+      });
+      for (const rule of existing.result ?? []) {
+        if (rule.matchers?.[0]?.type === 'all' || !rule.id) continue;
+        await this.http.request<CfEnvelope<unknown>>({
+          method: 'DELETE',
+          path: `/zones/${zid}/email/routing/rules/${encodeURIComponent(rule.id)}`,
+          ...opts,
+        });
+      }
+
+      let catchAllDest: string | undefined;
+      for (const f of forwards) {
+        const alias = f.alias.trim();
+        if (alias === '*' || alias === '@' || alias === '') {
+          catchAllDest = f.forwardTo;
+          continue;
+        }
+        const create = await this.http.request<CfEnvelope<CfEmailRule>>({
+          method: 'POST',
+          path: `/zones/${zid}/email/routing/rules`,
+          body: {
+            enabled: true,
+            name: `forward ${alias}@${zone.name}`,
+            matchers: [{ type: 'literal', field: 'to', value: `${alias}@${zone.name}` }],
+            actions: [{ type: 'forward', value: [f.forwardTo] }],
+          },
+          ...opts,
+        });
+        if (!create.success) {
+          return {
+            success: false,
+            message: create.errors?.[0]?.message ?? `Failed to create rule for ${alias}`,
+          };
+        }
+      }
+
+      // catch-all: forward when a wildcard was given, otherwise reset to drop
+      const catchAllBody = catchAllDest
+        ? {
+            enabled: true,
+            matchers: [{ type: 'all' }],
+            actions: [{ type: 'forward', value: [catchAllDest] }],
+          }
+        : { enabled: false, matchers: [{ type: 'all' }], actions: [{ type: 'drop' }] };
+      const ca = await this.http.request<CfEnvelope<CfEmailRule>>({
+        method: 'PUT',
+        path: `/zones/${zid}/email/routing/rules/catch_all`,
+        body: catchAllBody,
+        ...opts,
+      });
+      if (!ca.success) {
+        return {
+          success: false,
+          message: ca.errors?.[0]?.message ?? 'Failed to set catch-all rule',
+        };
+      }
+      return { success: true, message: 'Email forwarding updated successfully' };
+    } catch (error) {
+      return { success: false, message: toRegistrarError(error).message };
+    }
+  }
+
   /**
    * Register a domain via POST /registrar/registrations (Registrar API, beta).
    * Cloudflare registers onto the account's default WHOIS contact unless a
@@ -638,6 +1011,35 @@ export class CloudflareRegistrar extends BaseRegistrar {
       return { success: false, message: toRegistrarError(error).message };
     }
   }
+}
+
+// the Rules phase that holds Single Redirects (URL forwarding) rules.
+const PHASE_DYNAMIC_REDIRECT = 'http_request_dynamic_redirect';
+// reserved originless AAAA target for proxied placeholder records (see
+// https://developers.cloudflare.com/dns/manage-dns-records/how-to/create-dns-records/#originless-setups)
+const PLACEHOLDER_AAAA = '100::';
+// sentinel contents this provider writes for forwarding placeholder records, so
+// they can be recognized and cleaned up without touching real records.
+const PLACEHOLDER_CONTENT = new Set(['100::', '192.0.2.0', '192.0.2.1']);
+
+// extract the single host from a `http.host eq "FQDN"` expression, returned
+// relative to the zone apex ("@"). Returns null when the expression is not a
+// simple single-host match (e.g. a dynamic or multi-condition rule).
+function hostFromExpression(expression: string | undefined, zoneName: string): string | null {
+  if (!expression) return null;
+  const m = /^\(?\s*http\.host eq "([^"]+)"\s*\)?$/.exec(expression.trim());
+  if (!m) return null;
+  const fqdn = m[1].replace(/\.$/, '');
+  const zone = zoneName.replace(/\.$/, '');
+  if (fqdn === zone) return '@';
+  if (fqdn.endsWith(`.${zone}`)) return fqdn.slice(0, -(zone.length + 1));
+  return fqdn;
+}
+
+// the first forward destination on an Email Routing rule, or undefined when the
+// rule has no forward action (e.g. drop or Worker).
+function forwardAction(rule: CfEmailRule): string | undefined {
+  return rule.actions?.find(a => a.type === 'forward')?.value?.[0];
 }
 
 // map a Cloudflare DNS record to the generic DnsRecord shape. `content` holds

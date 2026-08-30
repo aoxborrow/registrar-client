@@ -243,8 +243,13 @@ export interface EmailForward {
 // The redirect style for a DomainForward:
 //   - "redirect"  temporary (302) redirect; the destination URL shows in the bar
 //   - "permanent" permanent (301) redirect; the destination URL shows in the bar
-//   - "frame"     masked/framed redirect; the source URL stays in the bar
-export type DomainForwardType = 'redirect' | 'permanent' | 'frame';
+//
+// Masked/framed/"cloaked" forwarding (where the source URL stays in the bar via
+// an iframe) is deliberately not supported: it breaks HTTPS, SEO, and modern
+// browser protections, and several registrars (e.g. Cloudflare) can't do it at
+// all. When a provider reports an existing masked forward, it is read back as
+// "redirect".
+export type DomainForwardType = 'redirect' | 'permanent';
 
 // A URL/domain forwarding rule: requests to `host` at the domain are redirected
 // to `url`.

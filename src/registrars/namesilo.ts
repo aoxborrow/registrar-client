@@ -901,14 +901,14 @@ const NAMESILO_DEFAULT_NS = ['ns1.namesilo.com', 'ns2.namesilo.com'];
 const NS_FORWARD_METHOD: Record<DomainForwardType, string> = {
   permanent: '301',
   redirect: '302',
-  frame: 'cloaked',
 };
 
-// interpret NameSilo's read-side forward_type into our generic type
+// interpret NameSilo's read-side forward_type into our generic type. Masked/
+// cloaked forwarding is unsupported and read back as a plain "redirect".
 function nsForwardType(v: string | undefined): DomainForwardType {
   const s = (v ?? '').toLowerCase();
   if (s.includes('302') || s.includes('temp')) return 'redirect';
-  if (s.includes('cloak') || s.includes('frame') || s.includes('mask')) return 'frame';
+  if (s.includes('cloak') || s.includes('frame') || s.includes('mask')) return 'redirect';
   return 'permanent';
 }
 

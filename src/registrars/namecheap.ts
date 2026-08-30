@@ -774,12 +774,11 @@ export class NamecheapRegistrar extends BaseRegistrar {
 const NC_URL_TYPE_TO_FORWARD: Record<string, DomainForwardType> = {
   URL: 'redirect',
   URL301: 'permanent',
-  FRAME: 'frame',
+  FRAME: 'redirect', // masked/framed forwarding is unsupported; read back as a redirect
 };
 const NC_FORWARD_TO_URL_TYPE: Record<DomainForwardType, string> = {
   redirect: 'URL',
   permanent: 'URL301',
-  frame: 'FRAME',
 };
 
 // whether a host-record type is one of Namecheap's URL-forwarding pseudo-records

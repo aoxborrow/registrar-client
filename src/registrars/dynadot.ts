@@ -798,7 +798,8 @@ export class DynadotRegistrar extends BaseRegistrar {
    * Read domain (URL) forwarding from domain_info's inline `glue_info`. Dynadot
    * forwards the whole domain, so this returns at most one rule at host "@":
    * REGISTRAR_FORWARDING is a 301/302 redirect (`forward_type`
-   * permanently/temporarily), REGISTRAR_STEALTH_FORWARDING is a framed redirect.
+   * permanently/temporarily). REGISTRAR_STEALTH_FORWARDING (a masked/framed
+   * redirect) is unsupported and read back as a plain "redirect".
    */
   override async getDomainForwarding(
     domainName: string,
@@ -808,7 +809,7 @@ export class DynadotRegistrar extends BaseRegistrar {
     const type = (glue?.glue_type ?? '').toUpperCase();
     if (!glue?.forward_url) return [];
     if (type === 'REGISTRAR_STEALTH_FORWARDING') {
-      return [{ host: '@', url: glue.forward_url, type: 'frame' }];
+      return [{ host: '@', url: glue.forward_url, type: 'redirect' }];
     }
     if (type === 'REGISTRAR_FORWARDING') {
       const temporary = (glue.forward_type ?? '').toLowerCase().startsWith('temp');
@@ -819,10 +820,10 @@ export class DynadotRegistrar extends BaseRegistrar {
 
   /**
    * Set domain (URL) forwarding. Dynadot forwards the entire domain, so at most
-   * one rule (host "@") is accepted: `frame` uses stealth forwarding, `redirect`/
-   * `permanent` use standard forwarding (302 vs 301). An empty list clears
-   * forwarding — Dynadot has no "off" for it, so we restore its default
-   * nameservers, which is the neutral non-forwarding state.
+   * one rule (host "@") is accepted: `redirect`/`permanent` use standard
+   * forwarding (302 vs 301). An empty list clears forwarding — Dynadot has no
+   * "off" for it, so we restore its default nameservers, which is the neutral
+   * non-forwarding state.
    */
   override async setDomainForwarding(
     domainName: string,
@@ -846,15 +847,6 @@ export class DynadotRegistrar extends BaseRegistrar {
     if (f.host && f.host !== '@') {
       throw new Error(
         'Dynadot forwards the whole domain; per-host forwarding is not supported (use host "@")'
-      );
-    }
-    if (f.type === 'frame') {
-      return this.mutate(
-        'PUT',
-        `/restful/v2/domains/${enc}/stealth_forwarding`,
-        { stealth_url: f.url, stealth_title: '' },
-        'Domain forwarding updated successfully',
-        opts
       );
     }
     return this.mutate(

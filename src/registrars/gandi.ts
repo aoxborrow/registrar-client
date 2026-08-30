@@ -141,12 +141,11 @@ interface GandiWebredir {
 const GANDI_FORWARD_TYPE: Record<DomainForwardType, string> = {
   permanent: 'http301',
   redirect: 'http302',
-  frame: 'cloak',
 };
 const GANDI_TYPE_TO_FORWARD: Record<string, DomainForwardType> = {
   http301: 'permanent',
   http302: 'redirect',
-  cloak: 'frame',
+  cloak: 'redirect', // masked/cloaked forwarding is unsupported; read back as a redirect
 };
 
 /**

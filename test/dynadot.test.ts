@@ -470,7 +470,7 @@ describe('Dynadot provider (RESTful v2)', () => {
     expect(calls[0].body).toMatchObject({ email_forward_type: 'mtype_none', email_alias_list: [] });
   });
 
-  it('getDomainForwarding maps standard (permanent) and stealth (frame) glue', async () => {
+  it('getDomainForwarding maps standard (permanent) and stealth (-> redirect) glue', async () => {
     const perm = dynadot();
     stubHttp(perm, () =>
       ok({
@@ -499,8 +499,9 @@ describe('Dynadot provider (RESTful v2)', () => {
         },
       })
     );
+    // stealth (masked) forwarding is unsupported; read back as a plain redirect
     expect(await stealth.getDomainForwarding('example.com')).toEqual([
-      { host: '@', url: 'https://example.com/b', type: 'frame' },
+      { host: '@', url: 'https://example.com/b', type: 'redirect' },
     ]);
   });
 
@@ -510,7 +511,7 @@ describe('Dynadot provider (RESTful v2)', () => {
     expect(await dy.getDomainForwarding('example.com')).toEqual([]);
   });
 
-  it('setDomainForwarding maps permanent/redirect to domain_forwarding, frame to stealth', async () => {
+  it('setDomainForwarding maps permanent/redirect to domain_forwarding', async () => {
     for (const [type, is_temporary] of [
       ['permanent', false],
       ['redirect', true],
@@ -521,14 +522,6 @@ describe('Dynadot provider (RESTful v2)', () => {
       expect(calls[0].path).toBe('/restful/v2/domains/example.com/domain_forwarding');
       expect(calls[0].body).toEqual({ forward_url: 'https://x.com', is_temporary });
     }
-
-    const frame = dynadot();
-    const calls = stubHttp(frame, () => ok({}));
-    await frame.setDomainForwarding('example.com', [
-      { host: '@', url: 'https://x.com', type: 'frame' },
-    ]);
-    expect(calls[0].path).toBe('/restful/v2/domains/example.com/stealth_forwarding');
-    expect(calls[0].body).toEqual({ stealth_url: 'https://x.com', stealth_title: '' });
   });
 
   it('setDomainForwarding clears by restoring default nameservers on an empty list', async () => {

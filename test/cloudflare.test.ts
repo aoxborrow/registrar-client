@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createRegistrar, NotImplementedError } from '../src/index';
+import { createRegistrar, NotFoundError, NotImplementedError } from '../src/index';
 import type { RequestConfig } from '../src/http';
 
 // Stub the provider's HttpClient. `handler` receives each RequestConfig and
@@ -421,5 +421,224 @@ describe('Cloudflare provider', () => {
       NotImplementedError
     );
     await expect(cf.renewDomain('example.com')).rejects.toBeInstanceOf(NotImplementedError);
+  });
+
+  // --- domain forwarding (Rulesets + placeholder DNS) ---
+
+  const zoneList = { success: true, result: [{ id: 'z1', name: 'example.com' }] };
+
+  it('getDomainForwarding maps static redirect rules to forwards (skips dynamic)', async () => {
+    const cf = cloudflare();
+    stubHttp(cf, req => {
+      if (req.path === '/zones') return zoneList;
+      if (String(req.path).endsWith('/entrypoint')) {
+        return {
+          success: true,
+          result: {
+            id: 'rs1',
+            rules: [
+              {
+                expression: 'http.host eq "example.com"',
+                action: 'redirect',
+                action_parameters: {
+                  from_value: { target_url: { value: 'https://dest.com' }, status_code: 301 },
+                },
+              },
+              {
+                expression: 'http.host eq "www.example.com"',
+                action: 'redirect',
+                action_parameters: {
+                  from_value: { target_url: { value: 'https://dest.com' }, status_code: 302 },
+                },
+              },
+              // dynamic target (expression, not a literal value) -> skipped
+              {
+                expression: 'http.host eq "x.example.com"',
+                action: 'redirect',
+                action_parameters: {
+                  from_value: {
+                    target_url: { expression: 'concat("https://", "x")' },
+                    status_code: 302,
+                  },
+                },
+              },
+            ],
+          },
+        };
+      }
+      return { success: true, result: {} };
+    });
+    expect(await cf.getDomainForwarding('example.com')).toEqual([
+      { host: '@', url: 'https://dest.com', type: 'permanent' },
+      { host: 'www', url: 'https://dest.com', type: 'redirect' },
+    ]);
+  });
+
+  it('getDomainForwarding returns [] when no redirect ruleset exists (404)', async () => {
+    const cf = cloudflare();
+    stubHttp(cf, req => {
+      if (req.path === '/zones') return zoneList;
+      throw new NotFoundError('no entrypoint');
+    });
+    expect(await cf.getDomainForwarding('example.com')).toEqual([]);
+  });
+
+  it('setDomainForwarding creates the ruleset and proxied placeholder records', async () => {
+    const cf = cloudflare();
+    const calls = stubHttp(cf, req => {
+      if (req.path === '/zones') return zoneList;
+      if (String(req.path).endsWith('/entrypoint')) throw new NotFoundError('none'); // no ruleset yet
+      if (String(req.path).endsWith('/dns_records') && (req.method ?? 'GET') === 'GET') {
+        return { success: true, result: [] }; // no existing record on the host
+      }
+      return { success: true, result: { id: 'rs1' } };
+    });
+
+    const res = await cf.setDomainForwarding('example.com', [
+      { host: '@', url: 'https://dest.com', type: 'redirect' },
+      { host: 'www', url: 'https://dest.com', type: 'permanent' },
+    ]);
+    expect(res.success).toBe(true);
+
+    // two proxied AAAA 100:: placeholders created (apex + www)
+    const dnsPosts = calls.filter(
+      c => c.method === 'POST' && String(c.path).endsWith('/dns_records')
+    );
+    expect(dnsPosts.map(c => c.body)).toEqual([
+      { type: 'AAAA', name: 'example.com', content: '100::', proxied: true, ttl: 1 },
+      { type: 'AAAA', name: 'www.example.com', content: '100::', proxied: true, ttl: 1 },
+    ]);
+
+    // ruleset created via POST with a redirect rule per host
+    const rsPost = calls.find(c => c.method === 'POST' && c.path === '/zones/z1/rulesets');
+    const body = rsPost?.body as {
+      phase: string;
+      rules: { expression: string; action_parameters: { from_value: { status_code: number } } }[];
+    };
+    expect(body.phase).toBe('http_request_dynamic_redirect');
+    expect(body.rules.map(r => [r.expression, r.action_parameters.from_value.status_code])).toEqual(
+      [
+        ['http.host eq "example.com"', 302],
+        ['http.host eq "www.example.com"', 301],
+      ]
+    );
+  });
+
+  it('setDomainForwarding on an empty list deletes the ruleset and placeholder records only', async () => {
+    const cf = cloudflare();
+    const calls = stubHttp(cf, req => {
+      if (req.path === '/zones') return zoneList;
+      if (String(req.path).endsWith('/entrypoint'))
+        return { success: true, result: { id: 'rs1', rules: [] } };
+      if (String(req.path).endsWith('/dns_records') && (req.method ?? 'GET') === 'GET') {
+        return {
+          success: true,
+          result: [
+            { id: 'ph', type: 'AAAA', name: 'example.com', content: '100::' }, // our placeholder
+            { id: 'real', type: 'A', name: 'example.com', content: '203.0.113.9' }, // real record
+          ],
+        };
+      }
+      return { success: true, result: {} };
+    });
+
+    const res = await cf.setDomainForwarding('example.com', []);
+    expect(res.success).toBe(true);
+    const deletes = calls.filter(c => c.method === 'DELETE').map(c => c.path);
+    expect(deletes).toContain('/zones/z1/rulesets/rs1');
+    expect(deletes).toContain('/zones/z1/dns_records/ph'); // placeholder removed
+    expect(deletes).not.toContain('/zones/z1/dns_records/real'); // real record kept
+  });
+
+  // --- email forwarding (Email Routing) ---
+
+  it('getEmailForwarding maps forward rules + catch-all (skips drop/worker)', async () => {
+    const cf = cloudflare();
+    stubHttp(cf, req => {
+      if (req.path === '/zones') return zoneList;
+      if (String(req.path).endsWith('/email/routing/rules')) {
+        return {
+          success: true,
+          result: [
+            {
+              id: 'r1',
+              matchers: [{ type: 'literal', field: 'to', value: 'hi@example.com' }],
+              actions: [{ type: 'forward', value: ['a@b.com'] }],
+            },
+            {
+              id: 'r2',
+              matchers: [{ type: 'literal', field: 'to', value: 'trash@example.com' }],
+              actions: [{ type: 'drop' }],
+            },
+          ],
+        };
+      }
+      if (String(req.path).endsWith('/catch_all')) {
+        return {
+          success: true,
+          result: {
+            enabled: true,
+            matchers: [{ type: 'all' }],
+            actions: [{ type: 'forward', value: ['c@d.com'] }],
+          },
+        };
+      }
+      return { success: true, result: {} };
+    });
+    expect(await cf.getEmailForwarding('example.com')).toEqual([
+      { alias: 'hi', forwardTo: 'a@b.com' },
+      { alias: '*', forwardTo: 'c@d.com' },
+    ]);
+  });
+
+  it('setEmailForwarding enables routing, replaces rules, and sets the catch-all', async () => {
+    const cf = cloudflare();
+    const calls = stubHttp(cf, req => {
+      if (req.path === '/zones') return zoneList;
+      if (req.path === '/zones/z1/email/routing')
+        return { success: true, result: { enabled: false } };
+      if (String(req.path).endsWith('/email/routing/rules') && (req.method ?? 'GET') === 'GET') {
+        return {
+          success: true,
+          result: [
+            {
+              id: 'old',
+              matchers: [{ type: 'literal', value: 'x@example.com' }],
+              actions: [{ type: 'forward', value: ['x@y.com'] }],
+            },
+          ],
+        };
+      }
+      return { success: true, result: {} };
+    });
+
+    const res = await cf.setEmailForwarding('example.com', [
+      { alias: 'sales', forwardTo: 's@x.com' },
+      { alias: '*', forwardTo: 'c@x.com' },
+    ]);
+    expect(res.success).toBe(true);
+
+    // routing enabled, old rule deleted, new rule created, catch-all forwarded
+    expect(
+      calls.some(c => c.method === 'POST' && c.path === '/zones/z1/email/routing/enable')
+    ).toBe(true);
+    expect(
+      calls.some(c => c.method === 'DELETE' && c.path === '/zones/z1/email/routing/rules/old')
+    ).toBe(true);
+
+    const rulePost = calls.find(
+      c => c.method === 'POST' && c.path === '/zones/z1/email/routing/rules'
+    );
+    expect(rulePost?.body).toMatchObject({
+      matchers: [{ type: 'literal', field: 'to', value: 'sales@example.com' }],
+      actions: [{ type: 'forward', value: ['s@x.com'] }],
+    });
+
+    const catchAll = calls.find(c => c.method === 'PUT' && String(c.path).endsWith('/catch_all'));
+    expect(catchAll?.body).toMatchObject({
+      enabled: true,
+      matchers: [{ type: 'all' }],
+      actions: [{ type: 'forward', value: ['c@x.com'] }],
+    });
   });
 });

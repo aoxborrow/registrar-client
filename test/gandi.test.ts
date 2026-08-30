@@ -342,7 +342,7 @@ describe('Gandi provider', () => {
     expect(post?.body).toEqual({ source: 'new', destinations: ['c@z.com'] });
   });
 
-  it('getDomainForwarding maps webredirs to apex-relative hosts and types', async () => {
+  it('getDomainForwarding maps webredirs to apex-relative hosts and types (cloak -> redirect)', async () => {
     const g = gandi();
     stubHttp(g, () => [
       { host: 'shop.example.com', type: 'http301', url: 'https://a.com', protocol: 'http' },
@@ -350,7 +350,8 @@ describe('Gandi provider', () => {
     ]);
     expect(await g.getDomainForwarding('example.com')).toEqual([
       { host: 'shop', url: 'https://a.com', type: 'permanent' },
-      { host: 'docs', url: 'https://b.com', type: 'frame' },
+      // masked/cloaked forwarding is unsupported; read back as a plain redirect
+      { host: 'docs', url: 'https://b.com', type: 'redirect' },
     ]);
   });
 

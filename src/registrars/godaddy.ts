@@ -102,12 +102,11 @@ interface GoDaddyForward {
 const GD_FORWARD_TYPE: Record<DomainForwardType, string> = {
   permanent: 'REDIRECT_PERMANENT',
   redirect: 'REDIRECT_TEMPORARY',
-  frame: 'MASKED',
 };
 const GD_TYPE_TO_FORWARD: Record<string, DomainForwardType> = {
   REDIRECT_PERMANENT: 'permanent',
   REDIRECT_TEMPORARY: 'redirect',
-  MASKED: 'frame',
+  MASKED: 'redirect', // masked/framed forwarding is unsupported; read back as a redirect
 };
 
 // a legal agreement GoDaddy requires consent to before registering a TLD
@@ -1022,7 +1021,6 @@ export class GoDaddyRegistrar extends BaseRegistrar {
       for (const f of forwards) {
         const fqdn = hostToFqdn(f.host || '@', domainName);
         const body: GoDaddyForward = { type: GD_FORWARD_TYPE[f.type], url: f.url };
-        if (f.type === 'frame') body.mask = { title: '', description: '', keywords: '' };
         await this.http.request({
           method: 'PUT',
           path: `/v1/domains/forwards/${encodeURIComponent(fqdn)}`,

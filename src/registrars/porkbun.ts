@@ -107,12 +107,11 @@ interface PbDnssecResponse extends PbResponse {
 const FORWARD_TO_PB_TYPE: Record<DomainForwardType, string> = {
   redirect: 'temporary', // 302
   permanent: 'permanent', // 301
-  frame: 'masked', // cloaked/framed
 };
 const PB_TYPE_TO_FORWARD: Record<string, DomainForwardType> = {
   temporary: 'redirect',
   permanent: 'permanent',
-  masked: 'frame',
+  masked: 'redirect', // masked/cloaked forwarding is unsupported; read back as a redirect
 };
 
 // Porkbun's contact shape: phone is split into a national number plus a numeric
