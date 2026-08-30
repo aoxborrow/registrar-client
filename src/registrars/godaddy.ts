@@ -219,23 +219,6 @@ interface GdV3Operation {
   error?: { code?: string; message?: string };
 }
 
-// a v3 contact (register-time profile). Field names differ from v1's contact.
-interface GdV3Contact {
-  firstName?: string;
-  lastName?: string;
-  organization?: string;
-  email?: string;
-  phone?: string;
-  address?: {
-    line1?: string;
-    line2?: string;
-    city?: string;
-    state?: string;
-    postalCode?: string;
-    countryCode?: string;
-  };
-}
-
 /**
  * GoDaddy Registrar
  * API docs: https://developer.godaddy.com/en/docs/api-users/domains
@@ -263,9 +246,11 @@ interface GdV3Contact {
  *
  * `registerDomain` / `transferIn` spend real money. In v3, register uses the
  * quote-then-execute flow (price-locked via `quoteToken`, agreements
- * acknowledged in the consent block). In v1 (OTE), register uses the legacy
- * purchase flow. Both require per-call `consent` with `agreedBy` = the
- * consenting party's IP; callers omitting it get a `ConsentRequiredError`.
+ * acknowledged in the consent block); v3 takes the contact profile from the
+ * account identity and derives `agreedBy` server-side, so only `consent` (the
+ * agreement acknowledgement) is required. In v1 (OTE), register uses the legacy
+ * purchase flow and requires `consent.agreedBy` = the consenting party's IP.
+ * Callers omitting `consent` entirely get a `ConsentRequiredError`.
  */
 export class GoDaddyRegistrar extends BaseRegistrar {
   readonly name = 'godaddy';
@@ -513,7 +498,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     if (!registrant) {
       throw new Error(`${this.name}: registration requires at least a registrant contact`);
     }
-    if (this.useV3) return this.registerDomainV3(domainName, input, registrant, opts);
+    if (this.useV3) return this.registerDomainV3(domainName, input, opts);
     const tld = domainName.slice(domainName.indexOf('.') + 1);
     const privacy = input.privacy ?? false;
     const consent = await this.buildConsent(input.consent, tld, privacy, false, opts);
@@ -549,17 +534,11 @@ export class GoDaddyRegistrar extends BaseRegistrar {
   private async registerDomainV3(
     domainName: string,
     input: RegisterDomainInput,
-    registrant: Contact,
     opts?: RequestOptions
   ): Promise<OperationResult> {
     if (!input.consent) {
       throw new ConsentRequiredError(
         `${this.name}: registration requires \`consent\` (accepting the registration agreements)`
-      );
-    }
-    if (!input.consent.agreedBy) {
-      throw new ConsentRequiredError(
-        `${this.name}: consent.agreedBy is required and must be the consenting party's IP address`
       );
     }
     const period = input.years ?? 1;
@@ -572,42 +551,53 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     if (!quote.quoteToken) {
       throw new Error(`${this.name}: registration quote did not return a quoteToken`);
     }
+    // v3 wants a MINIMAL body for a standard REGISTRY registration:
+    // `{ domain, period, quoteToken, consent }`. Two hard-won gotchas:
+    //  - No `profile` block. Sending one (even just autoRenew/privacy) is
+    //    rejected `INVALID_BODY`. Contacts come from the account identity
+    //    (the quote's `resolved.contactSource: "ACCOUNT"`), and autoRenew /
+    //    nameservers are applied as post-registration steps below.
+    //  - `acknowledgedFees` must be OMITTED unless the quote carried fees
+    //    (the array is `minItems: 1`, so `[]` is rejected). `agreedBy` is
+    //    resolved server-side from the token + caller IP, so it's not sent.
     const consent = {
       agreementTypes: (quote.requiredAgreements ?? []).map(a => a.agreementType),
-      acknowledgedFees: quote.fees ?? [],
       agreedAt: input.consent.agreedAt ?? new Date().toISOString(),
-      agreedBy: input.consent.agreedBy,
+      ...(quote.fees && quote.fees.length ? { acknowledgedFees: quote.fees } : {}),
     };
-    const contacts: Record<string, GdV3Contact> = {
-      registrant: toV3Contact(registrant),
-      admin: toV3Contact(input.contacts.admin ?? registrant),
-      tech: toV3Contact(input.contacts.tech ?? registrant),
-      billing: toV3Contact(input.contacts.billing ?? registrant),
-    };
-    const body = {
-      domain: domainName,
-      period,
-      quoteToken: quote.quoteToken,
-      consent,
-      profile: {
-        contacts,
-        autoRenew: input.autoRenew ?? false,
-        privacy: input.privacy ?? false,
-        ...(input.nameservers ? { nameServers: input.nameservers } : {}),
-      },
-    };
+    const body = { domain: domainName, period, quoteToken: quote.quoteToken, consent };
     try {
       const reg = await this.http.request<GdV3Registration>({
         method: 'POST',
         path: '/v3/domains/registrations',
         body,
+        // v3 requires an Idempotency-Key on every execute endpoint; a retry
+        // with the same key returns the original result instead of double-buying
+        headers: { 'Idempotency-Key': crypto.randomUUID() },
         ...opts,
       });
       if (reg.operationId) await this.pollOperation(reg.operationId, opts);
-      return { success: true, message: `Domain ${domainName} registered successfully` };
     } catch (error) {
       return { success: false, message: toRegistrarError(error).message };
     }
+    // Post-registration: the minimal body can't carry these, so apply the
+    // caller's intent now. GoDaddy registers with the account's default
+    // auto-renew (typically ON), so always assert the requested value.
+    const warnings: string[] = [];
+    try {
+      await this.setAutoRenew(domainName, input.autoRenew ?? false, opts);
+    } catch (error) {
+      warnings.push(`auto-renew not applied (${toRegistrarError(error).message})`);
+    }
+    if (input.nameservers) {
+      try {
+        await this.updateNameservers(domainName, input.nameservers, opts);
+      } catch (error) {
+        warnings.push(`nameservers not applied (${toRegistrarError(error).message})`);
+      }
+    }
+    const suffix = warnings.length ? ` (registered, but ${warnings.join('; ')})` : '';
+    return { success: true, message: `Domain ${domainName} registered successfully${suffix}` };
   }
 
   /**
@@ -751,11 +741,13 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     }
     if (this.useV3) {
       // v3 replaces nameservers with a dedicated PUT; the body is a bare array.
+      // Like /registrations, this execute endpoint requires an Idempotency-Key.
       return this.mutate(
         {
           method: 'PUT',
           path: `/v3/domains/domain-names/${encodeURIComponent(domainName)}/nameservers`,
           body: nameservers,
+          headers: { 'Idempotency-Key': crypto.randomUUID() },
         },
         'Nameservers updated successfully',
         opts
@@ -1079,7 +1071,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
   }
 
   private async mutate(
-    req: { method: string; path: string; body?: unknown },
+    req: { method: string; path: string; body?: unknown; headers?: Record<string, string> },
     successMessage: string,
     opts?: RequestOptions
   ): Promise<OperationResult> {
@@ -1195,9 +1187,11 @@ function toV3Record(r: DnsRecord): GdV3DnsRecord {
   return out;
 }
 
-// identity of a record for full-replace diffing: type + name + value
+// identity of a record for full-replace diffing: type + name + value, joined by
+// a unit-separator (U+001F) that can't appear in a hostname or record value —
+// avoids collisions without embedding a NUL (which would make the file binary).
 function dnsKeyV3(r: GdV3DnsRecord): string {
-  return `${r.type.toUpperCase()} ${r.name || '@'} ${r.data}`;
+  return `${r.type.toUpperCase()}\u001f${r.name || '@'}\u001f${r.data}`;
 }
 
 // whether two records that share a key differ in a mutable field (TTL/priority/
@@ -1211,21 +1205,7 @@ function dnsFieldsDiffer(a: GdV3DnsRecord, b: GdV3DnsRecord): boolean {
   );
 }
 
-// map a normalized Contact to a v3 register-time contact
-function toV3Contact(c: Contact): GdV3Contact {
-  return {
-    firstName: c.firstName,
-    lastName: c.lastName,
-    organization: c.organization,
-    email: c.email,
-    phone: c.phone,
-    address: {
-      line1: c.address1,
-      line2: c.address2,
-      city: c.city,
-      state: c.state ?? '',
-      postalCode: c.postalCode,
-      countryCode: c.country,
-    },
-  };
-}
+// NOTE: v3 registration takes contacts from the account identity (the quote's
+// `resolved.contactSource: "ACCOUNT"`) and rejects a `profile.contacts` block,
+// so there is no v3 contact mapper — see `registerDomainV3`. v1 uses
+// `toGoDaddyContact` above.
