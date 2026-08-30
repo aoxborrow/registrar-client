@@ -18,7 +18,7 @@ import type {
   TldPricing,
   TransferDomainInput,
 } from '../types';
-import { createDomain, filterDomains } from '../utils';
+import { createDomain, filterDomains, settableForwards } from '../utils';
 import { NotFoundError, toRegistrarError } from '../errors';
 import { ensureArray } from '../xml';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
@@ -607,7 +607,7 @@ export class NameSiloRegistrar extends BaseRegistrar {
     if (forwards.length > 1) {
       throw new Error('NameSilo supports a single apex ("@") forward via this interface');
     }
-    const f = forwards[0];
+    const [f] = settableForwards(forwards); // reject masked before any write
     if (f.host && f.host !== '@') {
       throw new Error(
         'NameSilo per-subdomain forwards are not listable, so only the apex ("@") forward is supported'
@@ -801,7 +801,7 @@ function text(v: unknown): string {
 function dnsKey(type: string, host: string, value: string, distance: number | undefined): string {
   const t = type.toUpperCase();
   const dist = t === 'MX' && Number.isFinite(distance) ? String(distance) : '';
-  return [t, host || '@', value, dist].join(' ');
+  return [t, host || '@', value, dist].join('\x00');
 }
 
 // map the normalized Contact to NameSilo's contactAdd parameters (fn/ln/ad/…)
@@ -897,18 +897,18 @@ function isYes(v: unknown): boolean {
 // (there is no dedicated "stop forwarding" command).
 const NAMESILO_DEFAULT_NS = ['ns1.namesilo.com', 'ns2.namesilo.com'];
 
-// map our generic forward type to NameSilo's domainForward `method`
-const NS_FORWARD_METHOD: Record<DomainForwardType, string> = {
+// map our generic (settable) forward type to NameSilo's domainForward `method`
+const NS_FORWARD_METHOD: Record<'temporary' | 'permanent', string> = {
   permanent: '301',
-  redirect: '302',
-  frame: 'cloaked',
+  temporary: '302',
 };
 
-// interpret NameSilo's read-side forward_type into our generic type
+// interpret NameSilo's read-side forward_type into our generic type. A masked/
+// cloaked forward is reported as read-only `masked` (setDomainForwarding rejects it).
 function nsForwardType(v: string | undefined): DomainForwardType {
   const s = (v ?? '').toLowerCase();
-  if (s.includes('302') || s.includes('temp')) return 'redirect';
-  if (s.includes('cloak') || s.includes('frame') || s.includes('mask')) return 'frame';
+  if (s.includes('cloak') || s.includes('frame') || s.includes('mask')) return 'masked';
+  if (s.includes('302') || s.includes('temp')) return 'temporary';
   return 'permanent';
 }
 

@@ -1,9 +1,25 @@
-import type { Domain, DomainInput, RegistrationConsent } from './types';
+import type { DomainForward, Domain, DomainInput, RegistrationConsent } from './types';
 import { ConsentRequiredError } from './errors';
 
 // sleep helper for retry backoff
 export function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// a DomainForward that is safe to write: masked/framed forwarding is read-only.
+export type SettableDomainForward = DomainForward & { type: 'temporary' | 'permanent' };
+
+export const MASKED_FORWARD_UNSUPPORTED =
+  'masked/framed forwarding is not supported by this library; use "temporary" or "permanent"';
+
+// Guard for `setDomainForwarding`: reject any masked/framed forward up front (so
+// no partial write happens) and narrow the list to the settable types. Providers
+// call this before writing.
+export function settableForwards(forwards: DomainForward[]): SettableDomainForward[] {
+  for (const f of forwards) {
+    if (f.type === 'masked') throw new Error(MASKED_FORWARD_UNSUPPORTED);
+  }
+  return forwards as SettableDomainForward[];
 }
 
 // guard for register/transfer: registration forms a legal contract with the

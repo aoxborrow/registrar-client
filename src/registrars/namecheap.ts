@@ -17,7 +17,13 @@ import type {
   TldPricing,
   TransferDomainInput,
 } from '../types';
-import { createDomain, filterDomains, normalizeDomain, requireConsent } from '../utils';
+import {
+  createDomain,
+  filterDomains,
+  normalizeDomain,
+  requireConsent,
+  settableForwards,
+} from '../utils';
 import { toRegistrarError } from '../errors';
 import { ensureArray, parseXml } from '../xml';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
@@ -759,10 +765,11 @@ export class NamecheapRegistrar extends BaseRegistrar {
     forwards: DomainForward[],
     opts?: RequestOptions
   ): Promise<OperationResult> {
+    const settable = settableForwards(forwards); // reject masked before any write
     const existing = await this.getDnsRecords(domainName, opts);
     const kept = existing.filter(r => !isUrlRecordType(r.type));
-    const urlRecords: DnsRecord[] = forwards.map(f => ({
-      type: NC_FORWARD_TO_URL_TYPE[f.type] ?? 'URL',
+    const urlRecords: DnsRecord[] = settable.map(f => ({
+      type: NC_FORWARD_TO_URL_TYPE[f.type],
       name: f.host || '@',
       value: f.url,
     }));
@@ -772,14 +779,13 @@ export class NamecheapRegistrar extends BaseRegistrar {
 
 // Namecheap URL host-record types <-> the normalized DomainForward.type
 const NC_URL_TYPE_TO_FORWARD: Record<string, DomainForwardType> = {
-  URL: 'redirect',
+  URL: 'temporary',
   URL301: 'permanent',
-  FRAME: 'frame',
+  FRAME: 'masked', // read-only; setDomainForwarding rejects it
 };
-const NC_FORWARD_TO_URL_TYPE: Record<DomainForwardType, string> = {
-  redirect: 'URL',
+const NC_FORWARD_TO_URL_TYPE: Record<'temporary' | 'permanent', string> = {
+  temporary: 'URL',
   permanent: 'URL301',
-  frame: 'FRAME',
 };
 
 // whether a host-record type is one of Namecheap's URL-forwarding pseudo-records

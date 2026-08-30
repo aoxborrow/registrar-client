@@ -285,15 +285,11 @@ describe('BaseRegistrar defaults', () => {
     await expect(cf.transferIn('example.com', { authCode: 'x' })).rejects.toBeInstanceOf(
       NotImplementedError
     );
-    // extended methods default to NotImplementedError too, unless a provider declares them
-    await expect(cf.getEmailForwarding('example.com')).rejects.toBeInstanceOf(NotImplementedError);
-    await expect(cf.setEmailForwarding('example.com', [])).rejects.toBeInstanceOf(
-      NotImplementedError
-    );
-    await expect(cf.getDomainForwarding('example.com')).rejects.toBeInstanceOf(NotImplementedError);
-    await expect(cf.setDomainForwarding('example.com', [])).rejects.toBeInstanceOf(
-      NotImplementedError
-    );
+    // extended methods default to NotImplementedError too, unless a provider
+    // declares them (Cloudflare declares email/domain forwarding but not these)
+    await expect(cf.getAuthCode('example.com')).rejects.toBeInstanceOf(NotImplementedError);
+    await expect(cf.getDnssec('example.com')).rejects.toBeInstanceOf(NotImplementedError);
+    await expect(cf.disableDnssec('example.com')).rejects.toBeInstanceOf(NotImplementedError);
   });
 
   // --- extended: domain forwarding ---
@@ -307,8 +303,9 @@ describe('BaseRegistrar defaults', () => {
     ]);
     expect(await gd.getDomainForwarding('example.com')).toEqual([
       { host: '@', url: 'https://a.com', type: 'permanent' },
-      { host: 'blog', url: 'https://b.com', type: 'redirect' },
-      { host: 'app', url: 'https://c.com', type: 'frame' },
+      { host: 'blog', url: 'https://b.com', type: 'temporary' },
+      // masked forwarding is reported as read-only `masked`
+      { host: 'app', url: 'https://c.com', type: 'masked' },
     ]);
     expect(calls[0]).toMatchObject({
       path: '/v1/domains/forwards/example.com',
@@ -335,7 +332,7 @@ describe('BaseRegistrar defaults', () => {
     });
     const res = await gd.setDomainForwarding('example.com', [
       { host: '@', url: 'https://root.com', type: 'permanent' },
-      { host: 'app', url: 'https://app.com', type: 'frame' },
+      { host: 'app', url: 'https://app.com', type: 'temporary' },
     ]);
     expect(res.success).toBe(true);
     const writes = calls.filter(c => c.method === 'PUT' || c.method === 'DELETE');
@@ -347,9 +344,7 @@ describe('BaseRegistrar defaults', () => {
     const put0 = writes.find(c => c.path === '/v1/domains/forwards/example.com');
     expect(put0?.body).toEqual({ type: 'REDIRECT_PERMANENT', url: 'https://root.com' });
     const put1 = writes.find(c => c.path === '/v1/domains/forwards/app.example.com');
-    const body1 = put1?.body as { type: string; url: string; mask?: object };
-    expect(body1).toMatchObject({ type: 'MASKED', url: 'https://app.com' });
-    expect(body1.mask).toBeTypeOf('object');
+    expect(put1?.body).toEqual({ type: 'REDIRECT_TEMPORARY', url: 'https://app.com' });
   });
 
   it('setDomainForwarding with an empty list deletes existing forwards', async () => {
