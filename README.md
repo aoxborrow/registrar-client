@@ -17,8 +17,8 @@ supported providers is [below](#providers).
 class and overriding the operations that provider's API supports (see
 [Adding a provider](#adding-a-provider)).
 
-Powers **[DomBot](https://dombot.ai)**, a desktop app for managing a domain
-portfolio spread across many registrars from one place.
+Powers **[DomBot](https://dombot.ai)**, a desktop app and MCP server for managing
+a domain portfolio spread across many registrars from one place.
 
 Portable by design: its single runtime dependency
 ([`fast-xml-parser`](https://github.com/NaturalIntelligence/fast-xml-parser),
