@@ -18,7 +18,7 @@ import type {
   TransferDomainInput,
 } from '../types';
 import { createDomain, filterDomains, requireConsent, settableForwards } from '../utils';
-import { NotFoundError, toRegistrarError } from '../errors';
+import { NotFoundError, NotImplementedError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
@@ -414,21 +414,18 @@ export class DynadotRegistrar extends BaseRegistrar {
   }
 
   /**
-   * Pricing derived from `bulk_search` with pricing, which only quotes a name
-   * that is *available to register*. So a specific available domain prices that
-   * name directly (premium included), but an already-owned name returns no
-   * prices — passing it back is pointless. For a bare TLD (or to read a TLD's
-   * standard rate), we probe a throwaway, almost-certainly-unregistered name in
-   * that TLD instead; v2 has no standalone per-TLD price endpoint.
+   * Pricing for a specific domain (may be premium), derived from a `bulk_search`
+   * with pricing. Needs a full domain (e.g. "example.com"); a bare TLD throws,
+   * since v2 has no standalone TLD-price endpoint.
    */
   override async getPricing(tldOrDomain: string, opts?: RequestOptions): Promise<TldPricing> {
-    const hasDot = tldOrDomain.includes('.');
-    const tld = (hasDot ? tldOrDomain.slice(tldOrDomain.indexOf('.') + 1) : tldOrDomain)
-      .replace(/^\.+/, '')
-      .toLowerCase();
-    // A bare TLD can't be priced directly; synthesize an available probe name.
-    const query = hasDot ? tldOrDomain : `price-probe-${Date.now().toString(36)}.${tld}`;
-    const list = encodeURIComponent(query);
+    if (!tldOrDomain.includes('.')) {
+      throw new NotImplementedError(
+        `${this.name}: getPricing needs a full domain (e.g. "example.com"); ` +
+          'Dynadot v2 has no standalone per-TLD price endpoint'
+      );
+    }
+    const list = encodeURIComponent(tldOrDomain);
     const data = await this.read<{ domain_result_list?: V2SearchResult[] }>(
       'GET',
       `/restful/v2/domains/bulk_search?domain_name_list=${list}&show_price=true`,
@@ -437,6 +434,7 @@ export class DynadotRegistrar extends BaseRegistrar {
     );
     const result = (data.domain_result_list ?? [])[0];
     const price = oneYearPrice(result?.price_list);
+    const tld = tldOrDomain.slice(tldOrDomain.indexOf('.') + 1);
     return {
       tld,
       currency: price?.currency ?? 'USD',

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createHmac } from 'node:crypto';
-import { createRegistrar, ConsentRequiredError } from '../src/index';
+import { createRegistrar, ConsentRequiredError, NotImplementedError } from '../src/index';
 import type { RequestConfig } from '../src/http';
 
 // Stub the provider's HttpClient so no network calls happen. `handler` receives
@@ -217,7 +217,7 @@ describe('Dynadot provider (RESTful v2)', () => {
     ]);
   });
 
-  it('getPricing prices a full domain and maps register/renew/transfer', async () => {
+  it('getPricing needs a full domain and maps register/renew/transfer', async () => {
     const dy = dynadot();
     stubHttp(dy, () =>
       ok({
@@ -244,38 +244,7 @@ describe('Dynadot provider (RESTful v2)', () => {
       renewal: 12.99,
       transfer: 9.5,
     });
-  });
-
-  it('getPricing probes an available name for a bare TLD (owned names carry no price)', async () => {
-    const dy = dynadot();
-    const calls = stubHttp(dy, () =>
-      ok({
-        domain_result_list: [
-          {
-            price_list: [
-              {
-                currency: 'USD',
-                unit: '(price/1 year)',
-                registration_price: '32.00',
-                renewal_price: '32.00',
-                transfer_price: '32.00',
-              },
-            ],
-          },
-        ],
-      })
-    );
-    expect(await dy.getPricing('io')).toEqual({
-      tld: 'io',
-      currency: 'USD',
-      registration: 32,
-      renewal: 32,
-      transfer: 32,
-    });
-    // It queried bulk_search with a synthesized available probe name in the TLD.
-    expect(calls[0].path).toMatch(
-      /bulk_search\?domain_name_list=price-probe-[a-z0-9]+\.io&show_price=true/
-    );
+    await expect(dy.getPricing('com')).rejects.toBeInstanceOf(NotImplementedError);
   });
 
   it('setDnsRecords POSTs the DNS glue body (apex/sub split, MX in record_value2)', async () => {
