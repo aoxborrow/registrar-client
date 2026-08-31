@@ -217,10 +217,39 @@ describe('Dynadot provider (RESTful v2)', () => {
     ]);
   });
 
-  it('getPricing needs a full domain and maps register/renew/transfer', async () => {
+  it('getPricing uses the renew price-check for an owned domain (premium included)', async () => {
     const dy = dynadot();
-    stubHttp(dy, () =>
-      ok({
+    const calls = stubHttp(dy, req => {
+      if (req.path.startsWith('/api3.json')) {
+        return {
+          RenewResponse: {
+            ResponseCode: '3',
+            Status: 'price_check_success',
+            PriceInfo: 'Renew Fee: 108.90 in USD, Total: 108.90 in USD, The domain is premium',
+            DomainName: 'proxy.fast',
+          },
+        };
+      }
+      throw new Error(`unexpected bulk_search fallback: ${req.path}`);
+    });
+    expect(await dy.getPricing('proxy.fast')).toEqual({
+      tld: 'fast',
+      currency: 'USD',
+      renewal: 108.9,
+    });
+    // The price check is the classic api3 renew command with price_check=1.
+    expect(calls[0].path).toMatch(/\/api3\.json\?.*command=renew.*price_check=1/);
+    expect(calls[0].path).toContain('domain=proxy.fast');
+  });
+
+  it('getPricing falls back to bulk_search when the domain is not in the account', async () => {
+    const dy = dynadot();
+    stubHttp(dy, req => {
+      // price_check fails for a name not in the account -> fall through.
+      if (req.path.startsWith('/api3.json')) {
+        return { RenewResponse: { ResponseCode: '-1', Status: 'error', Error: 'could not find domain in your account' } };
+      }
+      return ok({
         domain_result_list: [
           {
             domain_name: 'example.com',
@@ -235,8 +264,8 @@ describe('Dynadot provider (RESTful v2)', () => {
             ],
           },
         ],
-      })
-    );
+      });
+    });
     expect(await dy.getPricing('example.com')).toEqual({
       tld: 'com',
       currency: 'USD',
