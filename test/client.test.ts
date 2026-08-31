@@ -57,6 +57,12 @@ describe('normalizeNameservers', () => {
   it('extracts ServerName from objects (Dynadot shape)', () => {
     expect(normalizeNameservers([{ ServerName: 'a.ns.com' }])).toEqual(['a.ns.com']);
   });
+  it('lowercases and trims hostnames, dropping blanks', () => {
+    expect(normalizeNameservers(['  NS1.Example.COM ', 'ns2.EXAMPLE.com', '', '   '])).toEqual([
+      'ns1.example.com',
+      'ns2.example.com',
+    ]);
+  });
 });
 
 describe('createDomain', () => {

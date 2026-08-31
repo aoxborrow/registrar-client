@@ -83,8 +83,12 @@ export function parseDate(value: Date | string | number | null | undefined): Dat
 // normalize nameservers into a flat array of hostname strings.
 // accepts: string[], { hosts: string[] } (Spaceship), or objects with a
 // ServerName property (Dynadot), falling back to String() for anything else.
+// Hostnames are trimmed and lowercased (they're case-insensitive, but providers
+// return mixed case), and blanks are dropped.
 export function normalizeNameservers(nameservers: unknown): string[] {
   if (!nameservers) return [];
+
+  let raw: unknown[];
 
   // object with a `hosts` array (Spaceship shape)
   if (
@@ -92,20 +96,23 @@ export function normalizeNameservers(nameservers: unknown): string[] {
     !Array.isArray(nameservers) &&
     Array.isArray((nameservers as { hosts?: unknown }).hosts)
   ) {
-    return (nameservers as { hosts: unknown[] }).hosts.map(String);
+    raw = (nameservers as { hosts: unknown[] }).hosts;
+  } else if (Array.isArray(nameservers)) {
+    raw = nameservers;
+  } else {
+    return [];
   }
 
-  if (Array.isArray(nameservers)) {
-    return nameservers.map(ns => {
+  return raw
+    .map(ns => {
       if (typeof ns === 'string') return ns;
       if (ns && typeof ns === 'object' && 'ServerName' in ns) {
-        return String((ns as { ServerName: unknown }).ServerName);
+        return String(ns.ServerName);
       }
       return String(ns);
-    });
-  }
-
-  return [];
+    })
+    .map(host => host.trim().toLowerCase())
+    .filter(Boolean);
 }
 
 // build a normalized Domain from loose provider input:

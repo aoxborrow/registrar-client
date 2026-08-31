@@ -1,4 +1,4 @@
-import { normalizeDomain } from './utils';
+import { normalizeDomain, normalizeNameservers } from './utils';
 import type {
   ConnectionResult,
   ContactSet,
@@ -51,7 +51,9 @@ export class RegistrarClient {
           // on the domain detail — fetch them separately when still empty.
           if (merged.nameservers.length === 0) {
             try {
-              const nameservers = await this.provider.getNameservers(name, opts);
+              const nameservers = normalizeNameservers(
+                await this.provider.getNameservers(name, opts)
+              );
               if (nameservers.length > 0) merged = { ...merged, nameservers };
             } catch {
               // leave nameservers empty if this provider can't supply them
@@ -116,8 +118,10 @@ export class RegistrarClient {
     return this.provider.updateNameservers(normalizeDomain(domainName), nameservers, opts);
   }
 
-  getNameservers(domainName: string, opts?: RequestOptions): Promise<string[]> {
-    return this.provider.getNameservers(normalizeDomain(domainName), opts);
+  async getNameservers(domainName: string, opts?: RequestOptions): Promise<string[]> {
+    return normalizeNameservers(
+      await this.provider.getNameservers(normalizeDomain(domainName), opts)
+    );
   }
 
   lockDomain(domainName: string, opts?: RequestOptions): Promise<OperationResult> {
