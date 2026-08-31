@@ -23,7 +23,12 @@ access**.
   NameBright) have no sandbox and are therefore **not** part of automated CI.
 - **Registration / renewal / transfer: manual scripts only.** These are run via
   specific, deliberate scripts — **never in CI or anything automated** — because
-  they cost money and move real domains.
+  they cost money and move real domains. Where a registrar has a **funded
+  sandbox**, the same script can exercise register/renew for free against the
+  test environment. **NameSilo** now has one:
+  `scripts/ote/namesilo-lifecycle.ts` runs the full read/write lifecycle
+  (including `registerDomain`) against the OTE sandbox — see the NameSilo row
+  below and `docs/registrars/namesilo.md`.
 
 ## Consolidation & transfer rules
 
@@ -83,10 +88,16 @@ transfer**, so a full register→renew→transfer cycle costs about a dollar.
 | Namecheap  | yes                     | numeric `.xyz`                                                          | numeric domain        | numeric domain                                                 |
 | Gandi      | yes                     | numeric `.xyz`                                                          | numeric domain        | numeric domain                                                 |
 | Porkbun    | yes                     | numeric `.xyz`                                                          | numeric domain        | numeric domain                                                 |
-| NameSilo   | yes                     | numeric `.xyz`                                                          | numeric domain        | numeric domain                                                 |
+| NameSilo   | yes                     | **OTE sandbox ✓** (`registerDomain`, 2026-08-30)                        | numeric domain †      | numeric domain                                                 |
 | Spaceship  | no                      | numeric `.xyz`                                                          | numeric domain        | numeric domain                                                 |
 | NameBright | no (API access pending) | numeric `.xyz`                                                          | numeric domain        | numeric domain                                                 |
 | Cloudflare | no                      | n/a — Registrar API mid-migration (no register/renew/transfer endpoint) | n/a                   | n/a                                                            |
+
+† **NameSilo renew is _not_ sandbox-verified.** The OTE gateway 504s the
+transactional `renewDomain` endpoint (along with `dnsSecListRecords`,
+`domainForward`, and `contactAdd`), so renew couldn't be exercised there and
+still needs a paid run or a cooperative OTE window. See
+`docs/registrars/namesilo.md`.
 
 ## Transfers will be limited for a while
 

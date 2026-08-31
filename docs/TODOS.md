@@ -7,11 +7,16 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
 
 ## Needs live testing (built + unit-tested, not executed)
 
-- [ ] `registerDomain` / `renewDomain` / `transferIn` on **NameSilo** (and
-      NameBright register/renew) — paid/irreversible; built to documented
-      shapes, never run. (Dynadot, Gandi register+renew, Porkbun, and Namecheap
-      register+renew are sandbox-verified; Namecheap and Gandi `transferIn` need an
-      external domain + auth code, not reproducible in the sandbox.)
+- [ ] `renewDomain` / `transferIn` on **NameSilo**, and `registerDomain` /
+      `renewDomain` on **NameBright** — paid/irreversible; built to documented
+      shapes. **NameSilo `registerDomain` is now sandbox-verified** on the OTE
+      (`ote.namesilo.com`, 2026-08-30 — see below). NameSilo `renewDomain`
+      couldn't be exercised there: OTE's gateway 504s that transactional endpoint
+      (along with `dnsSecListRecords`, `domainForward`, and `contactAdd`), so it
+      and `transferIn` (needs an external domain + auth code) remain unrun.
+      (Dynadot, Gandi register+renew, Porkbun, and Namecheap register+renew are
+      sandbox-verified; Namecheap and Gandi `transferIn` need an external domain +
+      auth code, not reproducible in the sandbox.)
 - [ ] **GoDaddy** `renewDomain` / `transferIn` — both are **v1** endpoints
       (`POST /v1/domains/{d}/renew`, `POST /v1/domains/{d}/transfer`), so OTE
       _should_ apply — but OTE can't fund a purchase. The blocker is the
@@ -110,6 +115,18 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
   only nested `forwards_to` arrays). `updateContacts` works but creates a **new
   account contact** on every call (`contactAdd` + associate; no cleanup). See
   `docs/registrars/namesilo.md`.
+- **NameSilo OTE sandbox** (verified 2026-08-30): NameSilo issued OTE sandbox
+  credentials, so the full read/write surface — **`registerDomain`** (previously
+  never run), availability, pricing, `getDomain`, `listDomains`, nameserver
+  get/update, lock/unlock, auto-renew, privacy, DNS records add/replace/delete,
+  email forwarding, and contacts read — now passes against `ote.namesilo.com`
+  via `scripts/ote/namesilo-lifecycle.ts` (22 ops, 0 failures). Sandbox caveats:
+  only `NS1..8.NAMESILO.COM` resolve; registrations are permanent (no delete
+  endpoint). The OTE gateway intermittently **504s** `dnsSecListRecords`,
+  `domainForward`, `contactAdd`, and `renewDomain` (renew once returned a
+  spurious `500 "version is not specified"`) — an OTE infra quirk, not a client
+  bug; the first three are already prod-verified above, and `renewDomain`
+  remains unrun. See `docs/registrars/namesilo.md`.
 - **Cloudflare** (live-verified 2026-08-29): registration is a real beta API —
   `checkAvailability`/`getPricing` use `POST domain-check` (authoritative;
   `domain-search` over-reports premium names as registrable), and `registerDomain`
