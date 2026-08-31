@@ -5,6 +5,8 @@ import type {
   DnsRecord,
   Domain,
   DomainAvailability,
+  DomainForward,
+  EmailForward,
   ListDomainsOptions,
   OperationResult,
   Registrar,
@@ -162,5 +164,37 @@ export class RegistrarClient {
     opts?: RequestOptions
   ): Promise<OperationResult> {
     return this.provider.setDnsRecords(normalizeDomain(domainName), records, opts);
+  }
+
+  // --- extended: forwarding ---
+  //
+  // Opt-in per provider (gate on `provider.supports(Feature.…)`); providers that
+  // don't declare the feature reject with NotImplementedError. Email forwarding
+  // (alias → address) and URL/domain forwarding (host → URL redirect) are
+  // unrelated capabilities with separate feature flags. Each `set…` is a full
+  // replace: any rule omitted is removed, an empty array clears forwarding.
+
+  getEmailForwarding(domainName: string, opts?: RequestOptions): Promise<EmailForward[]> {
+    return this.provider.getEmailForwarding(normalizeDomain(domainName), opts);
+  }
+
+  setEmailForwarding(
+    domainName: string,
+    forwards: EmailForward[],
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    return this.provider.setEmailForwarding(normalizeDomain(domainName), forwards, opts);
+  }
+
+  getDomainForwarding(domainName: string, opts?: RequestOptions): Promise<DomainForward[]> {
+    return this.provider.getDomainForwarding(normalizeDomain(domainName), opts);
+  }
+
+  setDomainForwarding(
+    domainName: string,
+    forwards: DomainForward[],
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    return this.provider.setDomainForwarding(normalizeDomain(domainName), forwards, opts);
   }
 }

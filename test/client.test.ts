@@ -167,6 +167,56 @@ describe('RegistrarClient listDomains detailed enrichment', () => {
   });
 });
 
+describe('RegistrarClient forwarding passthrough', () => {
+  // Records the domain each forwarding method receives, so we can assert the
+  // facade normalizes it and delegates the payload unchanged.
+  function forwardingProvider() {
+    const seen: { method: string; domain: string; forwards?: unknown }[] = [];
+    const provider = {
+      name: 'fake',
+      getEmailForwarding: (domain: string) => {
+        seen.push({ method: 'getEmailForwarding', domain });
+        return Promise.resolve([{ alias: 'hello', forwardTo: 'a@b.com' }]);
+      },
+      setEmailForwarding: (domain: string, forwards: unknown) => {
+        seen.push({ method: 'setEmailForwarding', domain, forwards });
+        return Promise.resolve({ success: true });
+      },
+      getDomainForwarding: (domain: string) => {
+        seen.push({ method: 'getDomainForwarding', domain });
+        return Promise.resolve([{ host: '@', url: 'https://b.com', type: 'permanent' }]);
+      },
+      setDomainForwarding: (domain: string, forwards: unknown) => {
+        seen.push({ method: 'setDomainForwarding', domain, forwards });
+        return Promise.resolve({ success: true });
+      },
+    } as unknown as Registrar;
+    return { client: new RegistrarClient(provider), seen };
+  }
+
+  it('normalizes the domain and delegates for reads', async () => {
+    const { client, seen } = forwardingProvider();
+    await client.getEmailForwarding('  Example.COM.  ');
+    await client.getDomainForwarding('  Example.COM.  ');
+    expect(seen).toEqual([
+      { method: 'getEmailForwarding', domain: 'example.com' },
+      { method: 'getDomainForwarding', domain: 'example.com' },
+    ]);
+  });
+
+  it('normalizes the domain and passes forwards through for writes', async () => {
+    const { client, seen } = forwardingProvider();
+    const emails = [{ alias: 'hi', forwardTo: 'x@y.com' }];
+    const urls = [{ host: 'www', url: 'https://y.com', type: 'temporary' as const }];
+    await client.setEmailForwarding('EXAMPLE.com', emails);
+    await client.setDomainForwarding('EXAMPLE.com', urls);
+    expect(seen).toEqual([
+      { method: 'setEmailForwarding', domain: 'example.com', forwards: emails },
+      { method: 'setDomainForwarding', domain: 'example.com', forwards: urls },
+    ]);
+  });
+});
+
 describe('capabilities / features', () => {
   it('core and extended partition the full feature catalog with no overlap', () => {
     const core = new Set<string>(CORE_FEATURES);
