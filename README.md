@@ -1,13 +1,23 @@
 # @aoxborrow/registrar-client
 
-A fully-typed, **browser- and edge-safe** client for domain registrar APIs, with a
-pluggable multi-provider interface. Speaks both JSON and XML registrar APIs.
+**One consistent, fully-typed TypeScript interface to many domain registrar
+APIs.** Nine registrars — Cloudflare, Dynadot, Gandi, GoDaddy, NameBright,
+Namecheap, NameSilo, Porkbun, and Spaceship — sit behind a single pluggable
+`Registrar` contract, so your code talks to one typed API instead of nine
+different ones. It speaks both JSON and XML registrar APIs and normalizes every
+provider's responses to the same shared models.
 
-Runs anywhere `fetch` is available: modern Node.js (20+), browsers, Cloudflare
-Workers, Deno, Bun, and other edge runtimes. Its one runtime dependency —
-[`fast-xml-parser`](https://github.com/NaturalIntelligence/fast-xml-parser)
-(pure JS, no Node built-ins) — is used to parse XML registrar responses and is
-itself edge-safe.
+**PRs for additional registrars are welcome** — adding one means extending a base
+class and overriding the operations that provider's API supports (see
+[Adding a provider](#adding-a-provider)).
+
+Powers **[DomBot](https://dombot.ai)**, a desktop app for managing a domain
+portfolio spread across many registrars from one place.
+
+Portable by design: its single runtime dependency
+([`fast-xml-parser`](https://github.com/NaturalIntelligence/fast-xml-parser),
+pure JS) uses no Node built-ins, so it runs anywhere `fetch` is available —
+Node 20+, Deno, Bun, browsers, and edge runtimes.
 
 > **Status:** nine registrar providers implement the full 18-method core
 > contract, plus their extended capabilities (auth code, DNSSEC, forwarding).
@@ -377,6 +387,8 @@ static `displayName` / `configFields` / `helpText` metadata, override the
 operations the API supports (mapping payloads to the shared types in
 `src/types.ts`), and add the class to `src/registrars/index.ts`. The existing
 providers under `src/registrars/` are working references.
+
+**New providers are welcome** — if you've wired up a registrar, open a PR.
 
 ## Errors
 
