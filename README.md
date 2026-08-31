@@ -1,11 +1,17 @@
-# @aoxborrow/registrar-client
+# registrar-client
 
-**One consistent, fully-typed TypeScript interface to many domain registrar
-APIs.** Nine registrars — Cloudflare, Dynadot, Gandi, GoDaddy, NameBright,
-Namecheap, NameSilo, Porkbun, and Spaceship — sit behind a single pluggable
-`Registrar` contract, so your code talks to one typed API instead of nine
-different ones. It speaks both JSON and XML registrar APIs and normalizes every
-provider's responses to the same shared models.
+[![npm version](https://img.shields.io/npm/v/@aoxborrow/registrar-client.svg)](https://www.npmjs.com/package/@aoxborrow/registrar-client)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg)](https://nodejs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue.svg)](https://www.typescriptlang.org)
+
+> One consistent, fully-typed TypeScript interface to many domain registrar APIs.
+
+Talk to GoDaddy, Cloudflare, Namecheap, Spaceship, Dynadot, Porkbun, and more
+through a single pluggable `Registrar` contract — one typed API instead of a
+different one for every registrar. It speaks both JSON and XML registrar APIs and
+normalizes every provider's responses to the same shared models. The full list of
+supported providers is [below](#providers).
 
 **PRs for additional registrars are welcome** — adding one means extending a base
 class and overriding the operations that provider's API supports (see
@@ -19,7 +25,7 @@ Portable by design: its single runtime dependency
 pure JS) uses no Node built-ins, so it runs anywhere `fetch` is available —
 Node 20+, Deno, Bun, browsers, and edge runtimes.
 
-> **Status:** nine registrar providers implement the full 18-method core
+> **Status:** every bundled provider implements the full 18-method core
 > contract, plus their extended capabilities (auth code, DNSSEC, forwarding).
 > Where a registrar's API genuinely can't do something, that method throws
 > `NotImplementedError` with a specific reason — see
@@ -86,7 +92,7 @@ contract is `testConnection`, `listDomains`, `getDomain`, `checkAvailability`,
 `getPricing`, `registerDomain`, `renewDomain`, `setAutoRenew`, `transferIn`,
 `updateNameservers`, `getNameservers`, `lockDomain`, `unlockDomain`,
 `setPrivacy`, `getContacts`, `updateContacts`, `getDnsRecords`, and
-`setDnsRecords`. All nine providers implement it; where a registrar's API can't
+`setDnsRecords`. Every provider implements it; where a registrar's API can't
 express a given method, that method throws `NotImplementedError` with a specific
 reason (see [Supported functionality](#supported-functionality)). The gaps are
 API limits, not missing work — e.g. **Cloudflare** has no post-registration write
@@ -313,7 +319,7 @@ the registrant); Namecheap requires all four roles; Dynadot and Porkbun use the
 account's default WHOIS contact. Transfers carry over the existing contacts, so
 most providers need only the auth code (`TransferDomainInput`).
 
-> `registerDomain` is implemented for **all nine providers**, and `transferIn`
+> `registerDomain` is implemented for **every bundled provider**, and `transferIn`
 > for every one whose API has a transfer endpoint (all except **Cloudflare** and
 > **NameBright**). `registerDomain` has been exercised live against several
 > sandboxes and one real account (a live Cloudflare `.dev` registration), but since
