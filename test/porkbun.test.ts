@@ -143,16 +143,47 @@ describe('Porkbun provider', () => {
     });
   });
 
-  it('getPricing picks the requested TLD from the full table (major USD units)', async () => {
+  it('getPricing prices a full domain by its exact renewal (premium included) via checkDomain', async () => {
     const pb = porkbun();
     const calls = stubHttp(pb, () => ({
       status: SUCCESS,
-      pricing: {
-        com: { registration: '9.68', renewal: '9.68', transfer: '9.68' },
-        dev: { registration: '12.00', renewal: '12.00', transfer: '12.00' },
+      response: {
+        avail: 'no',
+        type: 'registration',
+        price: '10.81', // first-year registration promo — NOT the renewal
+        regularPrice: '34.50',
+        premium: 'no',
+        additional: {
+          renewal: { type: 'renewal', price: '34.50', regularPrice: '34.50' },
+          transfer: { type: 'transfer', price: '34.50', regularPrice: '34.50' },
+        },
       },
     }));
-    const pricing = await pb.getPricing('example.com');
+    const pricing = await pb.getPricing('based.domains');
+    // per-name renewal check, not the generic pricing/get table
+    expect(calls[0]).toMatchObject({ method: 'POST', path: '/domain/checkDomain/based.domains' });
+    expect(calls[0].body).toMatchObject({ priceType: 'renewal' });
+    expect(pricing).toEqual({ tld: 'domains', currency: 'USD', renewal: 34.5 });
+  });
+
+  it('getPricing returns no renewal for a full domain when the check cannot price it (no generic fallback)', async () => {
+    const pb = porkbun();
+    // e.g. a rate-limit / error response — must NOT substitute the per-TLD rate
+    const calls = stubHttp(pb, () => ({ status: 'ERROR', message: 'RATE_LIMIT_EXCEEDED' }));
+    const pricing = await pb.getPricing('based.domains');
+    expect(pricing).toEqual({ tld: 'domains', currency: 'USD' });
+    expect(pricing.renewal).toBeUndefined();
+    // never falls through to /pricing/get
+    expect(calls.every(c => c.path !== '/pricing/get')).toBe(true);
+  });
+
+  it('getPricing accepts a bare TLD from the per-TLD table and throws when it is missing', async () => {
+    const pb = porkbun();
+    const calls = stubHttp(pb, () => ({
+      status: SUCCESS,
+      pricing: { com: { registration: '9.68', renewal: '9.68', transfer: '9.68' } },
+    }));
+    const pricing = await pb.getPricing('com');
     expect(calls[0]).toMatchObject({ method: 'POST', path: '/pricing/get' });
     expect(pricing).toEqual({
       tld: 'com',
@@ -161,14 +192,6 @@ describe('Porkbun provider', () => {
       renewal: 9.68,
       transfer: 9.68,
     });
-  });
-
-  it('getPricing accepts a bare TLD and throws when it is missing', async () => {
-    const pb = porkbun();
-    stubHttp(pb, () => ({ status: SUCCESS, pricing: { com: { registration: '9.68' } } }));
-    const pricing = await pb.getPricing('com');
-    expect(pricing.tld).toBe('com');
-    expect(pricing.registration).toBe(9.68);
     await expect(pb.getPricing('nope')).rejects.toThrow(/pricing/i);
   });
 
