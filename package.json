@@ -1,9 +1,15 @@
 {
   "name": "@aoxborrow/registrar-client",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Fully-typed, browser- and edge-safe client for domain registrar APIs with a pluggable multi-provider interface",
-  "author": "Aaron Oxborrow <aaron@oxborrow.com>",
+  "author": {
+    "name": "Aaron Oxborrow",
+    "url": "https://github.com/aoxborrow"
+  },
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "homepage": "https://github.com/aoxborrow/registrar-client",
   "repository": {
     "type": "git",
