@@ -306,7 +306,7 @@ most providers need only the auth code (`TransferDomainInput`).
 > `registerDomain` is implemented for **all nine providers**, and `transferIn`
 > for every one whose API has a transfer endpoint (all except **Cloudflare** and
 > **NameBright**). `registerDomain` has been exercised live against several
-> sandboxes and one real account (Cloudflare `example.dev`), but since
+> sandboxes and one real account (a live Cloudflare `.dev` registration), but since
 > these operations spend real money, treat any path you haven't run yourself as
 > documented-but-unverified. Known gap: Namecheap registration doesn't yet send
 > per-TLD extended attributes, so TLDs that require them (`.us`, `.eu`, …) aren't
