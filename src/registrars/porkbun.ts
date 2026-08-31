@@ -131,7 +131,10 @@ interface PbContact {
   country: string;
 }
 
-// domain/checkDomain response — availability sits under `response`
+// domain/checkDomain response — availability sits under `response`. With
+// `priceType: "renewal"`, per-operation prices appear under `additional`
+// (`additional.renewal.price` is the exact renewal, premium included). The
+// top-level `price` stays the first-year registration price regardless.
 interface PbCheckResponse extends PbResponse {
   response?: {
     avail?: string; // "yes" | "no"
@@ -139,6 +142,10 @@ interface PbCheckResponse extends PbResponse {
     price?: string;
     regularPrice?: string;
     premium?: string; // "yes" | "no"
+    additional?: {
+      renewal?: { type?: string; price?: string; regularPrice?: string };
+      transfer?: { type?: string; price?: string; regularPrice?: string };
+    };
   };
 }
 
@@ -339,12 +346,38 @@ export class PorkbunRegistrar extends BaseRegistrar {
   }
 
   /**
-   * pricing/get returns every TLD's price points at once (as strings in major USD
-   * units), so this fetches the table and picks the requested TLD. A full domain
-   * is reduced to its TLD. Throws NotFoundError when the TLD isn't in the table.
+   * Renewal price for a specific name (premium included) when given a full
+   * domain; the standard per-TLD price table when given a bare TLD.
+   *
+   * For a full domain, `checkDomain` with `priceType: "renewal"` returns the
+   * exact renewal fee for that exact name under `additional.renewal.price` —
+   * elevated for premium names — and it works whether or not the domain is in the
+   * account. `pricing/get` only has the generic per-TLD rate, which misses
+   * premium renewals, so we deliberately do NOT fall back to it here: if the
+   * per-name check can't price the domain we return no renewal, leaving the
+   * caller to fill from its own base pricing.
+   *
+   * For a bare TLD (as the renew/transfer write flows pass), there is no specific
+   * name to price, so this returns the `pricing/get` table entry directly.
    */
   override async getPricing(tldOrDomain: string, opts?: RequestOptions): Promise<TldPricing> {
-    const tld = extractTld(tldOrDomain);
+    // A dot means a full domain (e.g. "example.com"); a bare label is a TLD.
+    if (tldOrDomain.includes('.')) {
+      const tld = extractTld(tldOrDomain);
+      const checked = await this.renewPriceCheck(tldOrDomain, opts);
+      return checked
+        ? { tld, currency: checked.currency, renewal: checked.renewal }
+        : { tld, currency: 'USD' };
+    }
+    return this.tldPricing(tldOrDomain, opts);
+  }
+
+  /**
+   * The standard per-TLD price points from `pricing/get` (strings in major USD
+   * units). Throws NotFoundError when the TLD isn't in the table. Used by the
+   * renew/transfer flows and by `getPricing` for a bare TLD.
+   */
+  private async tldPricing(tld: string, opts?: RequestOptions): Promise<TldPricing> {
     const res = await this.call<PbPricingResponse>('/pricing/get', {}, opts);
     if (!isOk(res)) throw new Error(res.message ?? 'API request failed');
     const price = res.pricing?.[tld];
@@ -358,6 +391,32 @@ export class PorkbunRegistrar extends BaseRegistrar {
       renewal: toPrice(price.renewal),
       transfer: toPrice(price.transfer),
     };
+  }
+
+  /**
+   * The exact renewal fee for a specific name via `checkDomain` +
+   * `priceType: "renewal"`, read from `additional.renewal.price` (premium
+   * included). Returns null when the name can't be priced (error, rate limit, or
+   * a missing renewal figure) so `getPricing` can fall back. Note: Porkbun
+   * rate-limits `checkDomain` to one call per ~10s; the shared HTTP layer retries
+   * on the 429 (honoring Retry-After).
+   */
+  private async renewPriceCheck(
+    domain: string,
+    opts?: RequestOptions
+  ): Promise<{ renewal: number; currency: string } | null> {
+    try {
+      const res = await this.call<PbCheckResponse>(
+        `/domain/checkDomain/${encodeURIComponent(domain)}`,
+        { priceType: 'renewal' },
+        opts
+      );
+      if (!isOk(res)) return null;
+      const renewal = toPrice(res.response?.additional?.renewal?.price);
+      return renewal != null ? { renewal, currency: 'USD' } : null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -460,7 +519,7 @@ export class PorkbunRegistrar extends BaseRegistrar {
     _years = 1,
     opts?: RequestOptions
   ): Promise<OperationResult> {
-    const pricing = await this.getPricing(extractTld(domainName), opts);
+    const pricing = await this.tldPricing(extractTld(domainName), opts);
     if (pricing.renewal == null) {
       throw new Error(`${this.name}: could not determine the renewal price for ${domainName}`);
     }
@@ -503,7 +562,7 @@ export class PorkbunRegistrar extends BaseRegistrar {
     input: TransferDomainInput,
     opts?: RequestOptions
   ): Promise<OperationResult> {
-    const pricing = await this.getPricing(extractTld(domainName), opts);
+    const pricing = await this.tldPricing(extractTld(domainName), opts);
     if (pricing.transfer == null) {
       throw new Error(`${this.name}: could not determine the transfer price for ${domainName}`);
     }
