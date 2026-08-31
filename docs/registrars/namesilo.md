@@ -132,6 +132,39 @@ latent bugs, now fixed in the client:
   `contactAdd` then `contactDomainAssociate`; the old contact records are not
   cleaned up, so repeated calls accumulate orphan contacts in the account.
 
+## OTE sandbox verification (2026-08-30)
+
+NameSilo issued OTE (Operational Test Environment) sandbox credentials
+(`ote.namesilo.com/api`, seeded with $5000 of sandbox credit). A full read/write
+lifecycle was exercised against a throwaway `.com` via
+`scripts/ote/namesilo-lifecycle.ts` — **22 operations passed**:
+
+- **`registerDomain`** — previously never run (paid/irreversible in prod); now
+  sandbox-verified. Registers against the account's default contact profile;
+  `private` / `auto_renew` / initial nameservers are honored.
+- `checkAvailability`, `getPricing`, `getDomain`, `listDomains`, `getContacts`.
+- `updateNameservers` / `getNameservers` — the sandbox only resolves
+  `NS1..8.NAMESILO.COM`, so tests use those hosts.
+- `lockDomain` / `unlockDomain`, `setAutoRenew`, `setPrivacy` (both directions,
+  idempotent).
+- `setDnsRecords` (add / replace-diff / delete) + `getDnsRecords`.
+- `setEmailForwarding` (set / clear) + `getEmailForwarding`.
+
+**The OTE gateway is unreliable on a subset of endpoints.** `dnsSecListRecords`
+(`getDnssec` / `disableDnssec`), `domainForward` (`setDomainForwarding`),
+`contactAdd` (`updateContacts`), and the transactional `renewDomain`
+intermittently return HTTP 504 gateway timeouts (renew once returned a spurious
+`500 "version is not specified"` despite `version=1` being sent) from the sandbox
+infrastructure — often for long stretches. This is an OTE-side infra issue, not
+a client bug: `getDnssec`, `updateContacts`, and domain forwarding are all
+already prod-verified (2026-08-29, above). **`renewDomain` still has no
+successful run anywhere** — OTE never completed it — so it remains unverified.
+
+The script soft-skips those flaky endpoints (retries, then reports `SKIP`) and
+treats only a genuine non-gateway error as a failure. Sandbox registrations are
+permanent (NameSilo exposes no delete endpoint), so each run leaves a
+`rc-ote-*.com` in the sandbox account.
+
 ## Auth / Access Notes for Implementors
 
 - API keys are self-service: generate from the account's API Manager page (`www.namesilo.com/account/api-manager`); the key is shown once at creation and cannot be retrieved again if lost (must regenerate).
