@@ -414,9 +414,16 @@ export class DynadotRegistrar extends BaseRegistrar {
   }
 
   /**
-   * Pricing for a specific domain (may be premium), derived from a `bulk_search`
-   * with pricing. Needs a full domain (e.g. "example.com"); a bare TLD throws,
-   * since v2 has no standalone TLD-price endpoint.
+   * Pricing for a specific domain (may be premium). Needs a full domain (e.g.
+   * "example.com"); a bare TLD throws, since v2 has no standalone TLD-price
+   * endpoint.
+   *
+   * For a domain **already in the account**, the classic `renew` command with
+   * `price_check=1` returns the exact renewal fee — premium names included —
+   * without renewing. `bulk_search` (the v2 pricing path) only quotes names
+   * *available to register*, so it can't price an owned domain's renewal. We try
+   * the price check first and fall back to `bulk_search` for names not in the
+   * account (e.g. pricing a domain before registering it).
    */
   override async getPricing(tldOrDomain: string, opts?: RequestOptions): Promise<TldPricing> {
     if (!tldOrDomain.includes('.')) {
@@ -425,6 +432,16 @@ export class DynadotRegistrar extends BaseRegistrar {
           'Dynadot v2 has no standalone per-TLD price endpoint'
       );
     }
+    const tld = tldOrDomain.slice(tldOrDomain.indexOf('.') + 1);
+
+    // Owned domain: the price-check renew quote is the exact renewal (premium
+    // included). Skips bulk_search, which returns nothing for a registered name.
+    const checked = await this.renewPriceCheck(tldOrDomain, opts);
+    if (checked) {
+      return { tld, currency: checked.currency, renewal: checked.renewal };
+    }
+
+    // Not in the account — fall back to bulk_search for available-name pricing.
     const list = encodeURIComponent(tldOrDomain);
     const data = await this.read<{ domain_result_list?: V2SearchResult[] }>(
       'GET',
@@ -434,7 +451,6 @@ export class DynadotRegistrar extends BaseRegistrar {
     );
     const result = (data.domain_result_list ?? [])[0];
     const price = oneYearPrice(result?.price_list);
-    const tld = tldOrDomain.slice(tldOrDomain.indexOf('.') + 1);
     return {
       tld,
       currency: price?.currency ?? 'USD',
@@ -442,6 +458,41 @@ export class DynadotRegistrar extends BaseRegistrar {
       renewal: price?.renewal,
       transfer: price?.transfer,
     };
+  }
+
+  /**
+   * Renewal price for a domain already in the account, via the classic
+   * `/api3.json?command=renew&price_check=1` quote (the RESTful v2 renew endpoint
+   * executes immediately and has no price-only mode). Authenticates with the same
+   * API key as a query parameter — the classic command is unsigned. `PriceInfo`
+   * reads e.g. "Renew Fee: 108.90 in USD, Total: 108.90 in USD, The domain is
+   * premium". Returns null when the domain isn't in the account or the fee can't
+   * be parsed, so the caller can fall back.
+   */
+  private async renewPriceCheck(
+    domain: string,
+    opts?: RequestOptions
+  ): Promise<{ renewal: number; currency: string } | null> {
+    const params = new URLSearchParams({
+      key: this.credentials.apiKey,
+      command: 'renew',
+      domain,
+      duration: '1',
+      price_check: '1',
+    });
+    try {
+      const res = await this.http.request<{
+        RenewResponse?: { Status?: string; PriceInfo?: string };
+      }>({ method: 'GET', path: `/api3.json?${params.toString()}`, ...opts });
+      const info = res.RenewResponse;
+      if (info?.Status !== 'price_check_success' || !info.PriceInfo) return null;
+      const match = info.PriceInfo.match(/Renew Fee:\s*([\d.]+)\s+in\s+([A-Za-z]{3})/);
+      if (!match) return null;
+      const renewal = Number(match[1]);
+      return Number.isNaN(renewal) ? null : { renewal, currency: match[2].toUpperCase() };
+    } catch {
+      return null;
+    }
   }
 
   // --- writes (paths + bodies verified against the Dynadot sandbox) ---
