@@ -157,6 +157,7 @@ export class NameSiloRegistrar extends BaseRegistrar {
   readonly name = 'namesilo';
 
   static readonly displayName = 'NameSilo';
+  static readonly website = 'namesilo.com';
   static readonly helpText =
     'Generate an API key in your NameSilo account under Account Options > API Manager. ' +
     'You can optionally restrict the key to specific IP addresses there. For sandbox ' +

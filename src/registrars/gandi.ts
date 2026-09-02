@@ -161,6 +161,7 @@ export class GandiRegistrar extends BaseRegistrar {
   readonly name = 'gandi';
 
   static readonly displayName = 'Gandi.net';
+  static readonly website = 'gandi.net';
   static readonly helpText =
     'Generate a Personal Access Token (PAT) in your Gandi account under Account ' +
     'Settings > Security. The token needs permission to manage domains. (Gandi has ' +

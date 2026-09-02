@@ -188,6 +188,7 @@ export class NamecheapRegistrar extends BaseRegistrar {
   readonly name = 'namecheap';
 
   static readonly displayName = 'Namecheap';
+  static readonly website = 'namecheap.com';
   static readonly helpText =
     'Enable API access in your Namecheap account under Profile > Tools > API Access, ' +
     'generate an API key, and whitelist your request IP(s) in the API settings. ' +

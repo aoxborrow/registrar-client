@@ -175,6 +175,7 @@ export class CloudflareRegistrar extends BaseRegistrar {
   readonly name = 'cloudflare';
 
   static readonly displayName = 'Cloudflare';
+  static readonly website = 'cloudflare.com';
   static readonly helpText =
     'Create an API token in your Cloudflare dashboard under My Profile > API Tokens. ' +
     'The token needs "Account.Registrar" read/write permissions. Find your Account ID ' +

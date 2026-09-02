@@ -198,6 +198,7 @@ export class NameBrightRegistrar extends BaseRegistrar {
   readonly name = 'namebright';
 
   static readonly displayName = 'NameBright';
+  static readonly website = 'namebright.com';
   static readonly helpText =
     'API access is not enabled by default — you must request it from NameBright ' +
     '(contact support / your account manager) before the API Management page is ' +
