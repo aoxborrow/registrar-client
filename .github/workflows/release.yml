@@ -1,14 +1,19 @@
 name: Release
 
 on:
+  # Publish when a GitHub Release is published manually (Releases → Draft a new
+  # release, or `gh release create`).
   release:
     types: [published]
+  # Or cut the release straight from the Actions tab: "Run workflow" tags the
+  # current package.json version, creates the GitHub Release, and publishes.
+  workflow_dispatch:
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write # create the tag + GitHub Release on manual dispatch
       id-token: write # Required for npm provenance and OIDC
     steps:
       - uses: actions/checkout@v7
@@ -36,6 +41,21 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Create GitHub Release
+        # Only on manual dispatch — a release:published run already has one. Tags
+        # the checked-out commit as v<package.json version> and generates notes.
+        # Fails fast if that version was already released, so we never double-cut.
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="v$(node -p "require('./package.json').version")"
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "::error::Release $VERSION already exists — bump the version in package.json first."
+            exit 1
+          fi
+          gh release create "$VERSION" --target "$GITHUB_SHA" --generate-notes
 
       - name: Publish to npm (with OIDC)
         run: npm publish --provenance --access public
