@@ -180,6 +180,7 @@ export class DynadotRegistrar extends BaseRegistrar {
   readonly name = 'dynadot';
 
   static readonly displayName = 'Dynadot';
+  static readonly website = 'dynadot.com';
   static readonly helpText =
     'Under Tools > API in your Dynadot account, generate an API Key and API Secret. ' +
     'The account must be unlocked with API access enabled. The key identifies you; ' +

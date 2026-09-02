@@ -269,6 +269,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
   readonly name = 'godaddy';
 
   static readonly displayName = 'GoDaddy';
+  static readonly website = 'godaddy.com';
   static readonly helpText =
     'Authenticate one of two ways. For production, create a Personal Access ' +
     'Token (PAT) at https://developer.godaddy.com and pass it as `apiToken` — ' +

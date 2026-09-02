@@ -182,6 +182,7 @@ export class PorkbunRegistrar extends BaseRegistrar {
   readonly name = 'porkbun';
 
   static readonly displayName = 'Porkbun';
+  static readonly website = 'porkbun.com';
   static readonly helpText =
     'Create an API key and secret in your Porkbun account under Account > API Access, ' +
     'then enable "API Access" on each domain you want to manage (per-domain toggle in ' +

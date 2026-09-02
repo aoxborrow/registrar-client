@@ -55,8 +55,9 @@ npm install @aoxborrow/registrar-client
 | `spaceship`  | Spaceship  | key + secret               | —       |                                              |
 
 Each provider class exposes static discovery metadata — `displayName`,
-`configFields` (the credential fields it needs), and `helpText` (where to get
-them) — so you can build a credential UI generically.
+`website` (its public domain, e.g. `gandi.net`), `configFields` (the credential
+fields it needs), and `helpText` (where to get them) — so you can build a
+credential UI generically.
 
 Research notes for additional registrars live in
 [`docs/registrars/`](docs/registrars). Three are documented but **not**

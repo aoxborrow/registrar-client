@@ -133,6 +133,7 @@ export class SpaceshipRegistrar extends BaseRegistrar {
   readonly name = 'spaceship';
 
   static readonly displayName = 'Spaceship';
+  static readonly website = 'spaceship.com';
   static readonly helpText =
     'Generate your API key and secret in the API Manager at Spaceship using the ' +
     '"New API key" button. The API requires both X-API-Key and X-API-Secret headers.';

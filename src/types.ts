@@ -431,11 +431,13 @@ export interface Registrar {
 }
 
 // static side of a registrar class: the constructor plus discovery metadata
-// (display name, the credential fields it needs, where to get them, and whether
-// it offers a sandbox/test environment).
+// (display name, public website, the credential fields it needs, where to get
+// them, and whether it offers a sandbox/test environment).
 export interface RegistrarConstructor {
   new (credentials: RegistrarCredentials, options?: RegistrarOptions): Registrar;
   readonly displayName: string;
+  // the provider's public website domain, e.g. "gandi.net"
+  readonly website: string;
   readonly configFields: ConfigField[];
   readonly helpText: string;
   readonly supportsSandbox: boolean;

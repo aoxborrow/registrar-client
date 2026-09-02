@@ -91,6 +91,9 @@ describe('registrars catalog', () => {
   it('exposes all built-in registrars with metadata', () => {
     for (const [id, Registrar] of Object.entries(registrars)) {
       expect(typeof Registrar.displayName).toBe('string');
+      // website is the provider's public domain (e.g. "gandi.net"); it's the key
+      // downstreams join on against per-registrar pricing datasets.
+      expect(Registrar.website).toMatch(/^[a-z0-9-]+(\.[a-z0-9-]+)+$/);
       expect(Array.isArray(Registrar.configFields)).toBe(true);
       expect(typeof Registrar.helpText).toBe('string');
       // the instance's name matches its catalog id
