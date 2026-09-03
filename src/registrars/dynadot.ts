@@ -321,6 +321,10 @@ export class DynadotRegistrar extends BaseRegistrar {
     return data.domain_info;
   }
 
+  // getNameservers re-reads getDomain (domain_info carries NS inline; no separate
+  // endpoint), so listing enrichment gains nothing from the fallback — skip it.
+  override readonly requiresNameserversFetch = false;
+
   override async getNameservers(domainName: string, opts?: RequestOptions): Promise<string[]> {
     // domain_info carries the nameservers inline (empty for Dynadot-DNS-hosted
     // domains, which have no external NS)
