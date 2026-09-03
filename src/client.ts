@@ -50,8 +50,10 @@ export class RegistrarClient {
           const detail = await this.provider.getDomain(name, opts);
           let merged = { ...domains[index], ...detail };
           // Some providers expose nameservers only via a dedicated endpoint, not
-          // on the domain detail — fetch them separately when still empty.
-          if (merged.nameservers.length === 0) {
+          // on the domain detail — fetch them separately when still empty. Skip
+          // providers whose getNameservers just re-reads getDomain: it would
+          // repeat the same call and return the same empty result.
+          if (merged.nameservers.length === 0 && this.provider.requiresNameserversFetch) {
             try {
               const nameservers = normalizeNameservers(
                 await this.provider.getNameservers(name, opts)

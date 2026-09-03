@@ -307,6 +307,13 @@ export interface Registrar {
   // the capabilities this provider supports (core contract + its extended features)
   readonly features: readonly RegistrarFeature[];
 
+  // Whether reading a domain's nameservers needs a getNameservers call beyond
+  // getDomain. True when getNameservers hits its own endpoint that can surface
+  // nameservers getDomain omits; false when it just re-reads getDomain, so
+  // listing enrichment skips the redundant fetch. See BaseRegistrar for the
+  // default.
+  readonly requiresNameserversFetch: boolean;
+
   // whether this provider supports a given capability
   supports(feature: RegistrarFeature): boolean;
 

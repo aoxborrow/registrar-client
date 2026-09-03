@@ -286,6 +286,10 @@ export class NameSiloRegistrar extends BaseRegistrar {
     });
   }
 
+  // getNameservers re-reads getDomain (getDomainInfo carries NS; no separate
+  // endpoint), so listing enrichment gains nothing from the fallback — skip it.
+  override readonly requiresNameserversFetch = false;
+
   override async getNameservers(domainName: string, opts?: RequestOptions): Promise<string[]> {
     const domain = await this.getDomain(domainName, opts);
     return domain.nameservers;

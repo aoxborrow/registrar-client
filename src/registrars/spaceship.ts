@@ -204,6 +204,10 @@ export class SpaceshipRegistrar extends BaseRegistrar {
     return this.toDomain(await this.getRaw(domainName, opts));
   }
 
+  // getNameservers reads the same getRaw payload as getDomain (no dedicated NS
+  // endpoint), so listing enrichment gains nothing from the fallback — skip it.
+  override readonly requiresNameserversFetch = false;
+
   override async getNameservers(domainName: string, opts?: RequestOptions): Promise<string[]> {
     const d = await this.getRaw(domainName, opts);
     return d.nameservers?.hosts ?? [];

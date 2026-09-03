@@ -23,11 +23,15 @@ function fakeProvider(config: {
   summaries: Domain[];
   detail: (name: string) => Domain;
   onGetDomain?: (name: string) => void;
+  onGetNameservers?: (name: string) => void;
   failFor?: string;
   nameservers?: (name: string) => string[];
+  // Mirrors BaseRegistrar's default (true); set false for delegator providers.
+  requiresNameserversFetch?: boolean;
 }): Registrar {
   return {
     name: 'fake',
+    requiresNameserversFetch: config.requiresNameserversFetch ?? true,
     listDomains: () => Promise.resolve(config.summaries),
     getDomain: (name: string) => {
       config.onGetDomain?.(name);
@@ -36,8 +40,10 @@ function fakeProvider(config: {
       }
       return Promise.resolve(config.detail(name));
     },
-    getNameservers: (name: string) =>
-      Promise.resolve(config.nameservers ? config.nameservers(name) : []),
+    getNameservers: (name: string) => {
+      config.onGetNameservers?.(name);
+      return Promise.resolve(config.nameservers ? config.nameservers(name) : []);
+    },
   } as unknown as Registrar;
 }
 
@@ -160,6 +166,28 @@ describe('RegistrarClient listDomains detailed enrichment', () => {
     expect(out[0].nameservers).toEqual(['dns1.registrar.net', 'dns2.registrar.net']);
   });
 
+  it('skips the getNameservers fallback for delegator providers', async () => {
+    // A provider whose getNameservers just re-reads getDomain (GoDaddy-style):
+    // getDomain leaves nameservers empty, so the fallback would return the same
+    // empty result. It must not be called.
+    const nsCalls: string[] = [];
+    const detailNoNs = (name: string) =>
+      createDomain({ domainName: name, privacy: true, nameservers: [] });
+    const client = new RegistrarClient(
+      fakeProvider({
+        summaries,
+        detail: detailNoNs,
+        requiresNameserversFetch: false,
+        onGetNameservers: n => nsCalls.push(n),
+        nameservers: () => ['should.not.be.used'],
+      })
+    );
+    const out = await client.listDomains({ detailed: true });
+    expect(out[0].privacy).toBe(true); // still enriched from getDomain
+    expect(out[0].nameservers).toEqual([]); // fallback skipped, stays empty
+    expect(nsCalls).toEqual([]); // getNameservers never called
+  });
+
   it('keeps the summary for a domain whose detail fetch fails', async () => {
     const client = new RegistrarClient(fakeProvider({ summaries, detail, failFor: 'a.com' }));
     const out = await client.listDomains({ detailed: true });
@@ -168,6 +196,35 @@ describe('RegistrarClient listDomains detailed enrichment', () => {
     expect(a?.privacy).toBe(false); // detail failed → summary kept
     expect(b?.privacy).toBe(true); // enriched
   });
+});
+
+describe('requiresNameserversFetch per provider', () => {
+  // False only for providers whose getNameservers just re-reads getDomain (so the
+  // listing-enrichment fallback would repeat the same empty result); true for the
+  // rest, which read a dedicated NS endpoint. A getNameservers rewrite that
+  // changes this delegation should update the flag here too.
+  const expected: Record<string, boolean> = {
+    cloudflare: true,
+    dynadot: false,
+    gandi: true,
+    godaddy: false,
+    namebright: true,
+    namecheap: true,
+    namesilo: false,
+    porkbun: true,
+    spaceship: false,
+  };
+
+  it('covers every registrar', () => {
+    expect(Object.keys(expected).sort()).toEqual(Object.keys(registrars).sort());
+  });
+
+  for (const [name, want] of Object.entries(expected)) {
+    it(`${name} -> ${want}`, () => {
+      const provider = createRegistrar(name as keyof typeof registrars, {});
+      expect(provider.requiresNameserversFetch).toBe(want);
+    });
+  }
 });
 
 describe('RegistrarClient forwarding passthrough', () => {

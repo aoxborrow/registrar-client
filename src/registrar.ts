@@ -75,6 +75,12 @@ export abstract class BaseRegistrar implements Registrar {
     return this.features.includes(feature);
   }
 
+  // See Registrar.requiresNameserversFetch. Defaults true, so a provider
+  // whose getNameservers hits a real endpoint keeps the enrichment fallback
+  // without opting in; the providers whose getNameservers just re-reads getDomain
+  // override this to false to drop the redundant call.
+  readonly requiresNameserversFetch: boolean = true;
+
   constructor(
     credentials: RegistrarCredentials,
     httpConfig: Omit<HttpClientConfig, 'options'>,
