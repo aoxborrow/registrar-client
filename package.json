@@ -1,6 +1,6 @@
 {
   "name": "@aoxborrow/registrar-client",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "One consistent, fully-typed TypeScript interface to many domain registrar APIs (GoDaddy, Cloudflare, Namecheap, Spaceship, Dynadot, Porkbun, and more) behind a single pluggable multi-provider client",
   "author": {
     "name": "Aaron Oxborrow",

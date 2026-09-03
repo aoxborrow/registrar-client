@@ -271,20 +271,28 @@ export class GoDaddyRegistrar extends BaseRegistrar {
   static readonly displayName = 'GoDaddy';
   static readonly website = 'godaddy.com';
   static readonly helpText =
-    'Authenticate one of two ways. For production, create a Personal Access ' +
-    'Token (PAT) at https://developer.godaddy.com and pass it as `apiToken` — ' +
-    'this enables the modern v3 API. For sandbox testing, create OTE ' +
-    '(test environment) keys and pass `apiKey` + `apiSecret` with ' +
-    '{ environment: "sandbox" }; OTE only exposes the legacy v1 API. The ' +
-    'sso-key (API Key/Secret) scheme is deprecated by GoDaddy in 2026. ' +
-    'Domain forwarding uses the v2 customer-scoped API — set `customerId` to ' +
-    'your GoDaddy customer UUID, or to your numeric shopper/account ID (which ' +
-    'the client resolves to the UUID via an sso-key-authenticated lookup).';
+    'Create a Personal Access Token (PAT) at https://developer.godaddy.com and ' +
+    "paste it here. The PAT is GoDaddy's modern credential: it unlocks the v3 " +
+    'API (discovery, registration, DNS, nameservers) and also authenticates the ' +
+    'legacy v1 API for management operations (renew, transfer, auto-renew, ' +
+    'lock, privacy, contacts) — one token covers everything.';
+  // Only the PAT is exposed for configuration — it is the sole credential
+  // GoDaddy recommends going forward, and it covers every production operation.
+  //
+  // The legacy `apiKey` + `apiSecret` (sso-key) pair and the `customerId` field
+  // are intentionally NOT advertised here. The code that consumes them is kept
+  // (see `authHeader`, `useV3`, `resolveCustomerId`, and the forwarding methods)
+  // so OTE/sandbox testing and direct programmatic use still work when those
+  // values are passed in credentials explicitly. But because they are no longer
+  // configurable, two capabilities are effectively unreachable through normal
+  // (config-driven) setup:
+  //   - OTE/sandbox, which needs an sso-key (`apiKey` + `apiSecret`), and
+  //   - domain forwarding, which needs `customerId` (a customer UUID), plus an
+  //     sso-key to resolve a numeric shopper ID to that UUID.
+  // GoDaddy is deprecating the sso-key scheme in 2026, so this is the direction
+  // of travel regardless.
   static readonly configFields: ConfigField[] = [
-    { name: 'apiToken', label: 'API Token (PAT)', type: 'password', required: false },
-    { name: 'apiKey', label: 'API Key', type: 'password', required: false },
-    { name: 'apiSecret', label: 'API Secret', type: 'password', required: false },
-    { name: 'customerId', label: 'Customer ID or Shopper ID', type: 'text', required: false },
+    { name: 'apiToken', label: 'API Token (PAT)', type: 'password', required: true },
   ];
   // GoDaddy's OTE ("Operational Test Environment") is its sandbox
   static readonly supportsSandbox = true;
