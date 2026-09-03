@@ -196,7 +196,10 @@ export class NamecheapRegistrar extends BaseRegistrar {
   static readonly configFields: ConfigField[] = [
     { name: 'username', label: 'Username', type: 'text', required: true },
     { name: 'apiKey', label: 'API Key', type: 'password', required: true },
-    { name: 'clientIp', label: 'Client IP', type: 'text', required: false, default: '0.0.0.0' },
+    // Required: Namecheap rejects any request whose ClientIp isn't on the
+    // account's whitelist, so a placeholder like 0.0.0.0 only defers the
+    // failure to the first call. Make the user supply the whitelisted IP.
+    { name: 'clientIp', label: 'Client IP', type: 'text', required: true },
   ];
   // Namecheap runs a sandbox at api.sandbox.namecheap.com (separate account at
   // sandbox.namecheap.com with its own API key)
