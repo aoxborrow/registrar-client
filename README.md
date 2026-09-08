@@ -51,6 +51,7 @@ npm install @aoxborrow/registrar-client
 | `godaddy`    | GoDaddy    | PAT, or key + secret       | ✓       | hybrid v3/v1; sandbox = OTE (v1 only)        |
 | `namebright` | NameBright | client ID + secret         | —       | OAuth2 bearer; production-only               |
 | `namecheap`  | Namecheap  | username + key + client IP | ✓       | XML API; IP allowlisting required            |
+| `namecom`    | Name.com   | username + API token       | ✓       | Core v1; separate sandbox host and token     |
 | `namesilo`   | NameSilo   | API key                    | ✓       | JSON/XML API; key sent in query string       |
 | `porkbun`    | Porkbun    | key + secret               | ✓       | sandbox via `pk1_sb_` key; per-domain opt-in |
 | `spaceship`  | Spaceship  | key + secret               | —       |                                              |
@@ -161,41 +162,45 @@ are the guaranteed contract; **extended** methods are opt-in per provider.
 **Legend:** ✓ implemented · ✗ not available via the provider's API (throws
 `NotImplementedError`) · a superscript marks a caveat noted below.
 
-| Core method         | CF  | DY  | GA  | GD  | NB  | NC  | NS  | PB  | SP  |
-| ------------------- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `testConnection`    | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
-| `listDomains`       | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
-| `getDomain`         | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
-| `checkAvailability` | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
-| `getPricing`        | ✓   | ✓ᵃ  | ✓   | ✓ᵃ  | ✗ᵇ  | ✓   | ✓   | ✓   | ✗ᵇ  |
-| `registerDomain`    | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
-| `renewDomain`       | ✗ᶜ  | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
-| `setAutoRenew`      | ✗ᶜ  | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
-| `transferIn`        | ✗ᶜ  | ✓   | ✓   | ✓   | ✗ᵈ  | ✓   | ✓   | ✓   | ✓   |
-| `updateNameservers` | ✗ᶜ  | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
-| `getNameservers`    | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
-| `lockDomain`        | ✗ᶜ  | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✗ᵉ  | ✓   |
-| `unlockDomain`      | ✗ᶜ  | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✗ᵉ  | ✓   |
-| `setPrivacy`        | ✓   | ✓   | ✓ᶠ  | ✓ᵍ  | ✓   | ✓   | ✓   | ✗ᵉ  | ✓   |
-| `getContacts`       | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✗ᵉ  | ✓   |
-| `updateContacts`    | ✗ᶜ  | ✓   | ✓   | ✓   | ✗ᵈ  | ✓   | ✓   | ✓   | ✓   |
-| `getDnsRecords`     | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
-| `setDnsRecords`     | ✓   | ✓ʰ  | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓ʰ  |
+| Core method         | CF  | DY  | GA  | GD  | NB  | NC  | NS  | PB  | SP  | NM  |
+| ------------------- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `testConnection`    | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
+| `listDomains`       | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
+| `getDomain`         | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
+| `checkAvailability` | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
+| `getPricing`        | ✓   | ✓ᵃ  | ✓   | ✓ᵃ  | ✗ᵇ  | ✓   | ✓   | ✓   | ✗ᵇ  | ✓   |
+| `registerDomain`    | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
+| `renewDomain`       | ✗ᶜ  | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
+| `setAutoRenew`      | ✗ᶜ  | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
+| `transferIn`        | ✗ᶜ  | ✓   | ✓   | ✓   | ✗ᵈ  | ✓   | ✓   | ✓   | ✓   | ✓   |
+| `updateNameservers` | ✗ᶜ  | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
+| `getNameservers`    | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
+| `lockDomain`        | ✗ᶜ  | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✗ᵉ  | ✓   | ✓   |
+| `unlockDomain`      | ✗ᶜ  | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✗ᵉ  | ✓   | ✓   |
+| `setPrivacy`        | ✓   | ✓   | ✓ᶠ  | ✓ᵍ  | ✓   | ✓   | ✓   | ✗ᵉ  | ✓   | ✓   |
+| `getContacts`       | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✗ᵉ  | ✓   | ✓   |
+| `updateContacts`    | ✗ᶜ  | ✓   | ✓   | ✓   | ✗ᵈ  | ✓   | ✓   | ✓   | ✓   | ✓   |
+| `getDnsRecords`     | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
+| `setDnsRecords`     | ✓   | ✓ʰ  | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓ʰ  | ✓   |
 
-| Extended method       | CF  | DY  | GA  | GD  | NB  | NC  | NS  | PB  | SP  |
-| --------------------- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `getAuthCode`         | ✗   | ✓   | ✓   | ✓   | ✓   | ✗ⁱ  | ✗ⁱ  | ✗   | ✓   |
-| `getDnssec`           | ✗   | ✓   | ✓   | ✗   | ✗   | ✗   | ✓   | ✓   | ✗   |
-| `disableDnssec`       | ✗   | ✓   | ✓   | ✗   | ✗   | ✗   | ✓   | ✓   | ✗   |
-| `getEmailForwarding`  | ✓   | ✓   | ✓   | ✗   | ✗   | ✓   | ✓   | ✗   | ✗   |
-| `setEmailForwarding`  | ✓   | ✓   | ✓   | ✗   | ✗   | ✓   | ✓   | ✗   | ✗   |
-| `getDomainForwarding` | ✓   | ✓ʲ  | ✓ᵏ  | ✓ˡ  | ✗   | ✓   | ✓ʲ  | ✓   | ✗   |
-| `setDomainForwarding` | ✓   | ✓ʲ  | ✓ᵏ  | ✓ˡ  | ✗   | ✓   | ✓ʲ  | ✓   | ✗   |
+| Extended method       | CF  | DY  | GA  | GD  | NB  | NC  | NS  | PB  | SP  | NM  |
+| --------------------- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `getAuthCode`         | ✗   | ✓   | ✓   | ✓   | ✓   | ✗ⁱ  | ✗ⁱ  | ✗   | ✓   | ✓   |
+| `getDnssec`           | ✗   | ✓   | ✓   | ✗   | ✗   | ✗   | ✓   | ✓   | ✗   | ✗ᵐ  |
+| `disableDnssec`       | ✗   | ✓   | ✓   | ✗   | ✗   | ✗   | ✓   | ✓   | ✗   | ✗ᵐ  |
+| `getEmailForwarding`  | ✓   | ✓   | ✓   | ✗   | ✗   | ✓   | ✓   | ✗   | ✗   | ✗ᵐ  |
+| `setEmailForwarding`  | ✓   | ✓   | ✓   | ✗   | ✗   | ✓   | ✓   | ✗   | ✗   | ✗ᵐ  |
+| `getDomainForwarding` | ✓   | ✓ʲ  | ✓ᵏ  | ✓ˡ  | ✗   | ✓   | ✓ʲ  | ✓   | ✗   | ✗ᵐ  |
+| `setDomainForwarding` | ✓   | ✓ʲ  | ✓ᵏ  | ✓ˡ  | ✗   | ✓   | ✓ʲ  | ✓   | ✗   | ✗ᵐ  |
 
 `CF` Cloudflare · `DY` Dynadot · `GA` Gandi · `GD` GoDaddy · `NB` NameBright ·
-`NC` Namecheap · `NS` NameSilo · `PB` Porkbun · `SP` Spaceship.
+`NC` Namecheap · `NS` NameSilo · `PB` Porkbun · `SP` Spaceship · `NM` Name.com.
 
 **Caveats**
+
+- **ᵐ** Name.com DNSSEC and forwarding are not wired into this adapter yet;
+  they are not advertised as extended features. See [Name.com](#namecom-core-api)
+  for pricing, transfer and DNS limits.
 
 - **ᵃ** `getPricing` is per-domain only (pass a full name, not a bare TLD) —
   Dynadot and GoDaddy price via their availability endpoint and have no per-TLD
@@ -329,6 +334,90 @@ most providers need only the auth code (`TransferDomainInput`).
 > documented-but-unverified. Known gap: Namecheap registration doesn't yet send
 > per-TLD extended attributes, so TLDs that require them (`.us`, `.eu`, …) aren't
 > registrable there yet.
+
+## Name.com Core API
+
+```ts
+const namecom = createRegistrar(
+  'namecom',
+  {
+    username: 'your-username-test',
+    apiToken: 'your-development-test-token',
+  },
+  { environment: 'sandbox' }
+);
+
+await namecom.listDomains();
+await namecom.getPricing('example.com'); // exact domain prices, including premiums
+await namecom.getPricing('.co.uk'); // explicit compound TLD; 'com' also works
+```
+
+The adapter uses [Core v1](https://docs.name.com/api/v1/overview), with HTTP Basic
+Auth in the Authorization header. Production is `https://api.name.com/core/v1`;
+sandbox is `https://api.dev.name.com/core/v1`. Use the Development/Test token and
+`-test` username from [API settings](https://www.name.com/account/settings/api).
+The username is used exactly as supplied. For 2FA accounts, API Access must be
+enabled. New sandbox credentials can take up to 15 minutes to activate, per the
+[testing guide](https://docs.name.com/guides/testing-environment).
+
+All portfolio and DNS pages are consumed using `nextPage`, including short
+intermediate pages. Missing boolean fields are Core's default `false` values.
+`status` contains the returned registry lock statuses (lowercased, comma separated);
+Core has no lifecycle-status field. `renewalDate` remains null because Core does
+not report a scheduled renewal date. The shared `Domain` model has no price field:
+use `getPricing(domainName)` for renewal prices, rather than estimating them from
+TLD retail prices.
+
+Pricing uses account-level USD amounts before VAT. Domain registration and renewal
+quotes explicitly request one year; unavailable/null products remain undefined.
+Transfer prices cover the registry's transfer term, which may exceed one year.
+Bare compound strings such as `co.uk` are interpreted as domains; use `.co.uk` for
+TLD pricing. Availability is restricted to standard/registry-premium registration,
+batched in groups of 50; its discovery price covers the TLD minimum term, so no
+one-year `period` is inferred.
+
+Registration rechecks availability and obtains a quote for the requested term.
+Premium create/renew/transfer requests send the exact matching purchase, renewal,
+or transfer price; standard operations omit `purchasePrice`. Null/unavailable
+quotes stop the operation before purchase. Registration defaults to one year;
+pass the appropriate `years` for TLDs with a higher minimum. Aftermarket/backorder,
+claims acknowledgments, IDN language attributes, and other TLD-specific registration
+requirements are not exposed by the shared input types. Such registrations require
+a provider-specific workflow. Transfers accept `authCode` and optional `privacy`;
+explicit `years`, `contacts` or `autoRenew` are rejected before submission because
+Core cannot apply them in its transfer request. Update settings after completion.
+
+Every mutation disables automatic retries, including per-request retry overrides.
+Transport/parse failures after a purchase report an unknown outcome: inspect
+Name.com orders and domain/transfer status before retrying. An accepted order is
+reported as accepted, not proof of final registry completion. Read operations
+retain the shared retry policy and honor `Retry-After` / `X-RateLimit-Reset`.
+HTTP errors retain typed status information but omit provider response bodies,
+which may contain credentials, EPP codes or contact data.
+
+Contacts require complete objects for each supplied role (including state), and
+omitted roles are left unchanged on update. Postal code/company and EPP-style
+phone numbers are mapped to Core's `zip`, `companyName` and E.164 fields. DNS
+replacement reconciles individual record IDs, preserving unchanged records and
+creating/updating before removing stale records. This is **not atomic**; failures
+can leave a partial zone, which must be read before retrying. Supported DNS types
+are A, AAAA, ANAME, CNAME, MX, NS, SRV and TXT, with a minimum TTL of 300 seconds.
+Only auth-code retrieval is implemented as an extended feature in this version.
+
+Offline tests exercise the published API contract. Run the dedicated sandbox
+checks with credentials in `.env.testing`:
+
+```bash
+npm run test:integration -- test/integration/namecom.integration.test.ts
+```
+
+Read checks are credential-gated and always use sandbox. To exercise registration,
+renewal, flags, nameservers, contacts and DNS, additionally set
+`NAMECOM_TEST_DOMAIN=registrar-client-<unique-suffix>.com`. This must be a disposable
+sandbox name with that prefix. The test creates it if absent and leaves it in the
+sandbox (Name.com offers no domain deletion/reset there); it is excluded from the
+default offline suite. Transfer completion and production behavior need separate
+verification; sandbox transfers are not deterministic.
 
 ## Sandbox environments
 

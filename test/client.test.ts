@@ -210,6 +210,7 @@ describe('requiresNameserversFetch per provider', () => {
     godaddy: false,
     namebright: true,
     namecheap: true,
+    namecom: false,
     namesilo: false,
     porkbun: true,
     spaceship: false,
@@ -364,6 +365,14 @@ describe('sandbox / environment', () => {
       .filter(([, R]) => R.supportsSandbox)
       .map(([id]) => id)
       .sort();
-    expect(supported).toEqual(['dynadot', 'gandi', 'godaddy', 'namecheap', 'namesilo', 'porkbun']);
+    expect(supported).toEqual([
+      'dynadot',
+      'gandi',
+      'godaddy',
+      'namecheap',
+      'namecom',
+      'namesilo',
+      'porkbun',
+    ]);
   });
 });
