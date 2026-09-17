@@ -387,9 +387,9 @@ a provider-specific workflow. Transfers accept `authCode` and optional `privacy`
 explicit `years`, `contacts` or `autoRenew` are rejected before submission because
 Core cannot apply them in its transfer request. Update settings after completion.
 
-Every mutation disables automatic retries, including per-request retry overrides.
-Transport/parse failures after a purchase report an unknown outcome: inspect
-Name.com orders and domain/transfer status before retrying. An accepted order is
+Mutations follow the shared [retry rules](#retries): a request Name.com may have
+received is never re-sent. Transport/parse failures after a purchase report an
+unknown outcome: inspect Name.com orders and domain/transfer status before retrying. An accepted order is
 reported as accepted, not proof of final registry completion. Read operations
 retain the shared retry policy and honor `Retry-After` / `X-RateLimit-Reset`.
 HTTP errors retain typed status information but omit provider response bodies,
@@ -492,6 +492,55 @@ providers under `src/registrars/` are working references.
 All failures throw a typed subclass of `RegistrarError` (`AuthenticationError`,
 `NotFoundError`, `RateLimitError`, `TimeoutError`, `NotImplementedError`, …),
 each carrying an HTTP-style `status`.
+
+## Retries
+
+Requests retry with exponential backoff (`retries`, default 2). What may be
+re-sent depends on where the failure happened and on whether the call reads or
+writes, and is the same for every provider:
+
+| Failure                                                                    | Read  | Write                                  |
+| -------------------------------------------------------------------------- | ----- | -------------------------------------- |
+| The registrar never saw it: DNS failure, connection refused, TLS handshake | Retry | Retry                                  |
+| `429`, honoring `Retry-After`                                              | Retry | Retry                                  |
+| Outcome unknown: timeout, connection dropped mid-response, `5xx`           | Retry | **Not re-sent.** `OutcomeUnknownError` |
+| Any other response                                                         | Fail  | Fail                                   |
+
+Reads and writes are told apart by feature, not by HTTP method (`FEATURE_CALLS`
+lists every one). The method is no guide: Namecheap sends writes as `GET`, and
+Porkbun sends reads as `POST`. `getAuthCode` counts as a write because some
+registrars regenerate the code.
+
+A write whose outcome is unknown may have been applied, and a second renewal
+charges twice. So the library reports it and leaves the decision to you: re-read
+the domain, then retry if nothing changed. Providers that throw raise
+`OutcomeUnknownError`; providers that return an `OperationResult` set
+`outcome: 'unknown'` on it:
+
+```ts
+const result = await client.renewDomain('example.com', 1);
+if (!result.success && result.outcome === 'unknown') {
+  const domain = await client.getDomain('example.com'); // did it go through?
+}
+```
+
+Only positive evidence counts as "never sent": a pre-connection error code from
+Node's `fetch`, or an error a custom transport marked with `markNotSent`.
+Browsers and Workers report network failures opaquely, so there they count as
+unknown.
+
+### Custom transport
+
+Pass `fetch` to route every request through your own transport, such as a
+proxy:
+
+```ts
+const registrar = createRegistrar('namecheap', credentials, { fetch: proxiedFetch });
+```
+
+If the transport can fail before the request leaves, for instance a proxy that
+refuses the tunnel, throw `markNotSent(error)` so the failure is retried even
+for writes.
 
 ## Security
 

@@ -94,7 +94,7 @@ class NamecomHttpClient extends HttpClient {
     } catch (error) {
       if (error instanceof ParsingError) throw new ParsingError('namecom: invalid JSON response');
       if (error instanceof ConnectionError)
-        throw new ConnectionError('namecom: network request failed');
+        throw new ConnectionError('namecom: network request failed', { notSent: error.notSent });
       throw error;
     }
   }
@@ -444,7 +444,6 @@ export class NamecomRegistrar extends BaseRegistrar {
         const old = index >= 0 ? remaining.splice(index, 1)[0] : undefined;
         await this.http.request({
           ...opts,
-          retries: 0,
           method: old ? 'PUT' : 'POST',
           path: old ? `${path}/${old.id!}` : path,
           body: record,
@@ -453,7 +452,6 @@ export class NamecomRegistrar extends BaseRegistrar {
       for (const old of remaining) {
         await this.http.request({
           ...opts,
-          retries: 0,
           method: 'DELETE',
           path: `${path}/${old.id!}`,
         });
@@ -532,7 +530,7 @@ export class NamecomRegistrar extends BaseRegistrar {
   }
   private async mutate(req: RequestConfig, opts?: RequestOptions): Promise<OperationResult> {
     try {
-      await this.http.request({ ...req, ...opts, retries: 0 });
+      await this.http.request({ ...req, ...opts });
       return { success: true, message: 'Domain updated successfully' };
     } catch (error) {
       return { success: false, message: toRegistrarError(error).message };

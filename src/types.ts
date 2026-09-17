@@ -12,10 +12,34 @@ export interface RegistrarClientOptions {
   backoff: number;
   // optional AbortSignal to cancel in-flight requests
   signal?: AbortSignal;
+  // fetch implementation used for every request, e.g. one that routes through a
+  // proxy. Defaults to the global `fetch`. A transport that fails before the
+  // request leaves (proxy refused, tunnel not established) should throw an
+  // error marked with `markNotSent` so the failure is retried for any call.
+  fetch?: typeof globalThis.fetch;
+}
+
+// whether a call only reads registrar state or may change it. Decides what is
+// safe to re-send after a failure; see `FEATURE_CALLS` in features.ts.
+export type RequestIntent = 'read' | 'write';
+
+// per-call bookkeeping the library threads through `RequestOptions` from a
+// feature method down to the HTTP layer. Set by `BaseRegistrar`; callers never
+// need to supply it.
+export interface FeatureCall {
+  intent: RequestIntent;
+  // the feature method being served, e.g. "renewDomain"
+  feature?: string;
+  // set by the HTTP layer when a write's outcome could not be determined, so
+  // it survives providers that fold errors into an `OperationResult`
+  outcomeUnknown?: Error;
 }
 
 // per-request options that can override client-level options
-export type RequestOptions = Partial<RegistrarClientOptions>;
+export interface RequestOptions extends Partial<RegistrarClientOptions> {
+  // library-internal; see `FeatureCall`
+  call?: FeatureCall;
+}
 
 // options for `listDomains`. Extends `RequestOptions` so timeout/retries/signal
 // still flow through a single argument. `listDomains` always returns the full
@@ -56,6 +80,11 @@ export interface ConnectionResult {
 export interface OperationResult {
   success: boolean;
   message: string;
+  // Present only on a failed write whose request may have reached the
+  // registrar (timed out, connection dropped mid-response, or a 5xx). The
+  // change may or may not have been applied: re-read the domain before trying
+  // again. The library never re-sends such a request itself.
+  outcome?: 'unknown';
 }
 
 // a configuration field a registrar needs (used to build credential UIs generically)

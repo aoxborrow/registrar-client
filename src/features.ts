@@ -102,3 +102,45 @@ const CORE_FEATURE_SET: ReadonlySet<RegistrarFeature> = new Set(CORE_FEATURES);
 export function isCoreFeature(feature: RegistrarFeature): boolean {
   return CORE_FEATURE_SET.has(feature);
 }
+
+// How each feature method is served: whether it only reads registrar state or
+// may change it, and which positional argument carries its `RequestOptions`.
+//
+// The intent decides what may be re-sent after a failure (see `HttpClient`). It
+// is keyed by feature rather than by HTTP method because the method says
+// nothing reliable: Namecheap sends every command, writes included, as a GET,
+// and Porkbun sends reads as POSTs.
+//
+// Typed as a total record so adding a feature without classifying it fails to
+// compile. `getAuthCode` is a write: several registrars regenerate the code,
+// invalidating the previous one.
+export const FEATURE_CALLS: Record<
+  RegistrarFeature,
+  { intent: 'read' | 'write'; optsIndex: number }
+> = {
+  testConnection: { intent: 'read', optsIndex: 0 },
+  listDomains: { intent: 'read', optsIndex: 0 },
+  getDomain: { intent: 'read', optsIndex: 1 },
+  checkAvailability: { intent: 'read', optsIndex: 1 },
+  getPricing: { intent: 'read', optsIndex: 1 },
+  registerDomain: { intent: 'write', optsIndex: 2 },
+  renewDomain: { intent: 'write', optsIndex: 2 },
+  setAutoRenew: { intent: 'write', optsIndex: 2 },
+  transferIn: { intent: 'write', optsIndex: 2 },
+  updateNameservers: { intent: 'write', optsIndex: 2 },
+  getNameservers: { intent: 'read', optsIndex: 1 },
+  lockDomain: { intent: 'write', optsIndex: 1 },
+  unlockDomain: { intent: 'write', optsIndex: 1 },
+  setPrivacy: { intent: 'write', optsIndex: 2 },
+  getContacts: { intent: 'read', optsIndex: 1 },
+  updateContacts: { intent: 'write', optsIndex: 2 },
+  getDnsRecords: { intent: 'read', optsIndex: 1 },
+  setDnsRecords: { intent: 'write', optsIndex: 2 },
+  getAuthCode: { intent: 'write', optsIndex: 1 },
+  getDnssec: { intent: 'read', optsIndex: 1 },
+  disableDnssec: { intent: 'write', optsIndex: 1 },
+  getEmailForwarding: { intent: 'read', optsIndex: 1 },
+  setEmailForwarding: { intent: 'write', optsIndex: 2 },
+  getDomainForwarding: { intent: 'read', optsIndex: 1 },
+  setDomainForwarding: { intent: 'write', optsIndex: 2 },
+};

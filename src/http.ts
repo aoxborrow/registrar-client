@@ -6,13 +6,15 @@ import {
   ConnectionError,
   InvalidResponseError,
   NotFoundError,
+  OutcomeUnknownError,
   ParsingError,
   RateLimitError,
   RegistrarError,
   TimeoutError,
   toRegistrarError,
+  wasNotSent,
 } from './errors';
-import type { RegistrarClientOptions } from './types';
+import type { FeatureCall, RegistrarClientOptions } from './types';
 import { backoffDelay, sleep } from './utils';
 
 // configuration for an HttpClient instance
@@ -40,6 +42,11 @@ export interface RequestConfig {
   retries?: number;
   backoff?: number;
   signal?: AbortSignal;
+  fetch?: typeof globalThis.fetch;
+  // which feature this request serves and whether it reads or writes; arrives
+  // with the caller's `RequestOptions`. A request without one is treated as a
+  // write, the safe assumption.
+  call?: FeatureCall;
 }
 
 // a small, browser/edge-safe fetch wrapper with timeout, abort linking,
@@ -67,7 +74,20 @@ export class HttpClient {
     return this.withRetries(req, () => this.send(req));
   }
 
-  // shared retry-with-backoff wrapper around a single-attempt operation
+  // Shared retry-with-backoff wrapper around a single-attempt operation.
+  //
+  // What may be re-sent depends on where the failure happened and on whether
+  // the call reads or writes:
+  //
+  //   failure                                        read    write
+  //   never sent (DNS, refused, TLS, proxy stage)    retry   retry
+  //   429                                            retry   retry
+  //   unknown (timeout, dropped mid-response, 5xx)   retry   OutcomeUnknownError
+  //   any other response                             fail    fail
+  //
+  // A write whose outcome is unknown may have been applied, so it is never
+  // re-sent: a second renewal charges twice, a second record-create leaves a
+  // duplicate. The caller re-reads the domain instead.
   protected async withRetries<T>(req: RequestConfig, attemptFn: () => Promise<T>): Promise<T> {
     const retries = req.retries ?? this.config.options.retries;
     const backoff = req.backoff ?? this.config.options.backoff;
@@ -78,6 +98,16 @@ export class HttpClient {
         return await attemptFn();
       } catch (error) {
         lastError = toRegistrarError(error);
+
+        if ((req.call?.intent ?? 'write') === 'write' && isOutcomeUnknown(lastError)) {
+          const unknown = new OutcomeUnknownError(
+            `The registrar did not confirm this change, so it may or may not have been applied. ` +
+              `Check the domain before trying again. (${lastError.message})`,
+            { feature: req.call?.feature, cause: lastError }
+          );
+          if (req.call) req.call.outcomeUnknown = unknown;
+          throw unknown;
+        }
 
         // out of attempts, or the error is not retryable
         if (attempt >= retries || !lastError.shouldRetry()) {
@@ -146,7 +176,8 @@ export class HttpClient {
     try {
       let response: Response;
       try {
-        response = await fetch(url, {
+        const doFetch = req.fetch ?? this.config.options.fetch ?? fetch;
+        response = await doFetch(url, {
           method: req.method ?? 'GET',
           headers,
           body: req.body !== undefined ? JSON.stringify(req.body) : undefined,
@@ -158,7 +189,9 @@ export class HttpClient {
           if (externalSignal?.aborted) throw new AbortError('Request was aborted');
           throw new TimeoutError(`Request to '${url}' timed out after ${timeout}ms`);
         }
-        throw new ConnectionError(`Failed to reach '${url}': ${errorMessage(error)}`);
+        throw new ConnectionError(`Failed to reach '${url}': ${errorMessage(error)}`, {
+          notSent: wasNotSent(error),
+        });
       }
 
       if (!response.ok) {
@@ -212,6 +245,14 @@ export class HttpClient {
       }
     }
   }
+}
+
+// A retryable failure that leaves a write's result unknown: the request may
+// have reached the registrar. A rate limit is an explicit rejection, and a
+// connection error known to precede sending never reached it.
+function isOutcomeUnknown(error: RegistrarError): boolean {
+  if (error instanceof TimeoutError || error instanceof InvalidResponseError) return true;
+  return error instanceof ConnectionError && !error.notSent;
 }
 
 // detect an AbortController/fetch abort across environments
