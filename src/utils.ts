@@ -1,4 +1,10 @@
-import type { DomainForward, Domain, DomainInput, RegistrationConsent } from './types';
+import type {
+  DomainForward,
+  Domain,
+  DomainInput,
+  RegistrationConsent,
+  RequestOptions,
+} from './types';
 import { ConsentRequiredError } from './errors';
 
 // sleep helper for retry backoff
@@ -132,4 +138,13 @@ export function createDomain(data: DomainInput = {}): Domain {
     syncedAt: data.syncedAt ?? new Date(),
     deleted: data.deleted ?? false,
   };
+}
+
+// Marks a request made inside a write feature as a read: a lookup the write
+// needs first (current records, a price, an auth token). It is retried like any
+// read, and its failure is never reported as a write of unknown outcome. For
+// APIs whose HTTP method can't tell reads from writes; REST providers get this
+// from `safeMethods`.
+export function asRead<T extends RequestOptions>(opts?: T): T {
+  return { ...opts, call: { ...opts?.call, intent: 'read' } } as T;
 }

@@ -19,6 +19,7 @@ import type {
   TldPricing,
   TransferDomainInput,
 } from '../types';
+import { REST_SAFE_METHODS } from '../http';
 import { createDomain, filterDomains, settableForwards } from '../utils';
 import { toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
@@ -159,6 +160,8 @@ const GANDI_TYPE_TO_FORWARD: Record<string, DomainForwardType> = {
  */
 export class GandiRegistrar extends BaseRegistrar {
   readonly name = 'gandi';
+  // a REST API: GET and HEAD never change state
+  static override readonly safeMethods = REST_SAFE_METHODS;
 
   static readonly displayName = 'Gandi.net';
   static readonly website = 'gandi.net';

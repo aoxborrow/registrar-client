@@ -37,6 +37,15 @@ const never = () =>
         );
       })
   );
+// Porkbun prices a renewal before sending it. Answer that lookup so the failure
+// under test lands on the renewal itself; `counted` sees only the other requests.
+const PRICING = JSON.stringify({ status: 'SUCCESS', pricing: { com: { renewal: '10.00' } } });
+function pastPricing(counted: ReturnType<typeof vi.fn<Fetch>>): Fetch {
+  return (url, init) =>
+    String(url).includes('/pricing/get')
+      ? Promise.resolve(new Response(PRICING))
+      : counted(url, init);
+}
 const undici = (code: string) => () =>
   Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error(code), { code }) });
 
@@ -123,7 +132,7 @@ describe.each([
 
   it('never re-sends a write that got a definite rejection', async () => {
     const fetch = status(403);
-    await make(fetch)
+    await make(pastPricing(fetch))
       .renewDomain('example.com', 1)
       .catch(() => undefined);
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -138,7 +147,7 @@ describe.each([
     const fetch = fail();
     // Providers either throw or fold the failure into an OperationResult; the
     // unknown outcome has to survive both.
-    const settled = await make(fetch)
+    const settled = await make(pastPricing(fetch))
       .renewDomain('example.com', 1)
       .then(
         result => ({ result }),
@@ -155,8 +164,38 @@ describe.each([
     }
   });
 
+  it('treats a response cut off mid-body as sent: unknown for a write, retried for a read', async () => {
+    const cutOff = () =>
+      vi.fn<Fetch>(() =>
+        Promise.resolve(
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.error(new TypeError('terminated'));
+              },
+            }),
+            { status: 200 }
+          )
+        )
+      );
+    const write = cutOff();
+    const settled = await make(pastPricing(write))
+      .renewDomain('example.com', 1)
+      .then(
+        result => ({ result }),
+        (error: unknown) => ({ error })
+      );
+    expect(write).toHaveBeenCalledTimes(1);
+    if ('error' in settled) expect(settled.error).toBeInstanceOf(OutcomeUnknownError);
+    else expect(settled.result).toMatchObject({ success: false, outcome: 'unknown' });
+
+    const read = cutOff();
+    await expect(make(read).getDomain('example.com')).rejects.toThrow(/lost while reading/);
+    expect(read).toHaveBeenCalledTimes(3);
+  });
+
   it('does not mark an ordinary failed write as unknown', async () => {
-    const settled = await make(status(403))
+    const settled = await make(pastPricing(status(403)))
       .renewDomain('example.com', 1)
       .then(
         result => ({ result }),
@@ -170,6 +209,73 @@ describe.each([
     const fetch = status(503);
     await expect(make(fetch).getDomain('example.com', { retries: 0 })).rejects.toThrow();
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a lookup made in the middle of a write', () => {
+  // A write often reads first: current records, a price, a zone id. That lookup
+  // changed nothing, so it is retried like any read and its failure is an
+  // ordinary error, never "the write may have been applied".
+  const settle = (p: Promise<unknown>) =>
+    p.then(
+      result => ({ result }) as { result: { outcome?: string }; error?: undefined },
+      (error: unknown) => ({ error })
+    );
+  const expectPlainFailure = (settled: Awaited<ReturnType<typeof settle>>) => {
+    if (settled.error !== undefined) expect(settled.error).not.toBeInstanceOf(OutcomeUnknownError);
+    else expect(settled.result.outcome).toBeUndefined();
+  };
+
+  it('is retried on a REST API because GET never changes state (Cloudflare zone lookup)', async () => {
+    const fetch = status(503);
+    const cf = createRegistrar('cloudflare', { apiToken: 't', accountId: 'a' }, { ...fast, fetch });
+    expectPlainFailure(
+      await settle(
+        cf.setDnsRecords('example.com', [{ type: 'A', name: '@', value: '192.0.2.1', ttl: 300 }])
+      )
+    );
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch.mock.calls.every(([, init]) => (init?.method ?? 'GET') === 'GET')).toBe(true);
+  });
+
+  it('still sends a REST write once and reports it unknown (Gandi PATCH)', async () => {
+    const fetch = status(503);
+    const gandi = createRegistrar('gandi', { apiKey: 'k' }, { ...fast, fetch });
+    const settled = await settle(gandi.setAutoRenew('example.com', true));
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0][1]?.method).toBe('PATCH');
+    if (settled.error !== undefined) expect(settled.error).toBeInstanceOf(OutcomeUnknownError);
+    else expect(settled.result.outcome).toBe('unknown');
+  });
+
+  it('is retried where the method means nothing, because the provider marks it (Porkbun price)', async () => {
+    const fetch = status(503);
+    expectPlainFailure(await settle(porkbun(fetch).renewDomain('example.com', 1)));
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch.mock.calls.every(([url]) => String(url).includes('/pricing/get'))).toBe(true);
+  });
+
+  it('is retried for Namecheap, whose writes are GETs too (WhoisGuard id lookup)', async () => {
+    const fetch = status(503);
+    expectPlainFailure(await settle(namecheap(fetch).setPrivacy('example.com', true)));
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(
+      fetch.mock.calls.every(([url]) => String(url).includes('namecheap.domains.getInfo'))
+    ).toBe(true);
+  });
+
+  it('is retried for NameSilo (current records before a DNS update)', async () => {
+    const fetch = status(503);
+    const namesilo = createRegistrar('namesilo', { apiKey: 'k' }, { ...fast, fetch });
+    expectPlainFailure(
+      await settle(
+        namesilo.setDnsRecords('example.com', [
+          { type: 'A', name: '@', value: '192.0.2.1', ttl: 3600 },
+        ])
+      )
+    );
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch.mock.calls.every(([url]) => String(url).includes('dnsListRecords'))).toBe(true);
   });
 });
 

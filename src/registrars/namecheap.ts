@@ -18,6 +18,7 @@ import type {
   TransferDomainInput,
 } from '../types';
 import {
+  asRead,
   createDomain,
   filterDomains,
   normalizeDomain,
@@ -580,7 +581,11 @@ export class NamecheapRegistrar extends BaseRegistrar {
     enabled: boolean,
     opts?: RequestOptions
   ): Promise<OperationResult> {
-    const cr = await this.command('namecheap.domains.getInfo', { DomainName: domainName }, opts);
+    const cr = await this.command(
+      'namecheap.domains.getInfo',
+      { DomainName: domainName },
+      asRead(opts)
+    );
     const id = cr.DomainGetInfoResult?.Whoisguard?.ID;
     if (id == null || String(id) === '0') {
       throw new Error(`${this.name}: ${domainName} has no WhoisGuard subscription to toggle`);

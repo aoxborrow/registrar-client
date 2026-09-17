@@ -15,6 +15,7 @@ import type {
   RequestOptions,
   TldPricing,
 } from '../types';
+import { REST_SAFE_METHODS } from '../http';
 import { createDomain, filterDomains, normalizeDomain, settableForwards } from '../utils';
 import { NotImplementedError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
@@ -173,6 +174,8 @@ interface CfDnsRecord {
  */
 export class CloudflareRegistrar extends BaseRegistrar {
   readonly name = 'cloudflare';
+  // a REST API: GET and HEAD never change state
+  static override readonly safeMethods = REST_SAFE_METHODS;
 
   static readonly displayName = 'Cloudflare';
   static readonly website = 'cloudflare.com';

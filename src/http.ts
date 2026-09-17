@@ -25,7 +25,15 @@ export interface HttpClientConfig {
   headers?: Record<string, string>;
   // request/retry behavior
   options: RegistrarClientOptions;
+  // HTTP methods this API reserves for requests that never change state. A
+  // REST API sets `REST_SAFE_METHODS`, so a lookup made in the middle of a
+  // write (a zone list, a price check) is still retried like any read. Leave
+  // unset for APIs where the method means nothing: Namecheap and NameSilo send
+  // writes as GET. Those mark their nested reads with `asRead` instead.
+  safeMethods?: readonly string[];
 }
+
+export const REST_SAFE_METHODS: readonly string[] = ['GET', 'HEAD'];
 
 // options for a single request
 export interface RequestConfig {
@@ -99,7 +107,7 @@ export class HttpClient {
       } catch (error) {
         lastError = toRegistrarError(error);
 
-        if ((req.call?.intent ?? 'write') === 'write' && isOutcomeUnknown(lastError)) {
+        if (this.intentOf(req) === 'write' && isOutcomeUnknown(lastError)) {
           const unknown = new OutcomeUnknownError(
             `The registrar did not confirm this change, so it may or may not have been applied. ` +
               `Check the domain before trying again. (${lastError.message})`,
@@ -125,6 +133,15 @@ export class HttpClient {
 
     // unreachable: the loop always returns or throws
     throw lastError ?? new RegistrarError('Request failed');
+  }
+
+  // Whether a request only reads. A method the API reserves for reads wins;
+  // otherwise it is whatever the feature being served is, and a request that
+  // says nothing is assumed to write.
+  protected intentOf(req: RequestConfig): 'read' | 'write' {
+    const method = (req.method ?? 'GET').toUpperCase();
+    if (this.config.safeMethods?.includes(method)) return 'read';
+    return req.call?.intent ?? 'write';
   }
 
   // build the full URL for a request, applying query parameters
@@ -202,7 +219,20 @@ export class HttpClient {
       if (response.status === 204) {
         return '';
       }
-      return await response.text();
+      try {
+        return await response.text();
+      } catch (error) {
+        // The registrar answered, then the body was cut off. The request was
+        // certainly sent, so for a write the outcome is unknown; a read can
+        // simply be retried.
+        if (isAbortError(error)) {
+          if (externalSignal?.aborted) throw new AbortError('Request was aborted');
+          throw new TimeoutError(`Response from '${url}' timed out after ${timeout}ms`);
+        }
+        throw new ConnectionError(
+          `Connection to '${url}' was lost while reading the response: ${errorMessage(error)}`
+        );
+      }
     } finally {
       clearTimeout(timeoutId);
       externalSignal?.removeEventListener('abort', onAbort);

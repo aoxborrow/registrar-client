@@ -17,6 +17,7 @@ import type {
   TldPricing,
   TransferDomainInput,
 } from '../types';
+import { REST_SAFE_METHODS } from '../http';
 import { createDomain, filterDomains, settableForwards } from '../utils';
 import {
   ConfigurationError,
@@ -267,6 +268,8 @@ interface GdV3Operation {
  */
 export class GoDaddyRegistrar extends BaseRegistrar {
   readonly name = 'godaddy';
+  // a REST API: GET and HEAD never change state
+  static override readonly safeMethods = REST_SAFE_METHODS;
 
   static readonly displayName = 'GoDaddy';
   static readonly website = 'godaddy.com';

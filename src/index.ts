@@ -3,7 +3,7 @@
 export { RegistrarClient } from './client';
 export { listPortfolio } from './portfolio';
 export type { DomainSource, PortfolioError, PortfolioResult } from './portfolio';
-export { HttpClient } from './http';
+export { HttpClient, REST_SAFE_METHODS } from './http';
 export type { HttpClientConfig, RequestConfig } from './http';
 
 // core registrar abstraction (the `Registrar` interface itself is exported via

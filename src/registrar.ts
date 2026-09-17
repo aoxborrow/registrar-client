@@ -66,6 +66,10 @@ export abstract class BaseRegistrar implements Registrar {
     return [...CORE_FEATURES, ...this.extendedFeatures];
   }
 
+  // HTTP methods this provider's API reserves for reads; see
+  // `HttpClientConfig.safeMethods`. REST providers set `REST_SAFE_METHODS`.
+  static readonly safeMethods: readonly string[] = [];
+
   // instance mirror of the static `features`
   get features(): readonly RegistrarFeature[] {
     return (this.constructor as typeof BaseRegistrar).features;
@@ -91,7 +95,11 @@ export abstract class BaseRegistrar implements Registrar {
     this.credentials = credentials;
     this.environment = environment;
     this.options = { ...DEFAULT_OPTIONS, ...clientOptions };
-    this.http = new HttpClient({ ...httpConfig, options: this.options });
+    this.http = new HttpClient({
+      safeMethods: (this.constructor as typeof BaseRegistrar).safeMethods,
+      ...httpConfig,
+      options: this.options,
+    });
     this.threadFeatureCalls();
   }
 

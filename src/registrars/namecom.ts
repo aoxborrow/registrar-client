@@ -9,7 +9,7 @@ import {
   toRegistrarError,
 } from '../errors';
 import { Feature, type RegistrarFeature } from '../features';
-import { HttpClient, type RequestConfig } from '../http';
+import { HttpClient, type RequestConfig, REST_SAFE_METHODS } from '../http';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import type {
   ConfigField,
@@ -127,6 +127,8 @@ class NamecomHttpClient extends HttpClient {
 
 export class NamecomRegistrar extends BaseRegistrar {
   readonly name = 'namecom';
+  // a REST API: GET and HEAD never change state
+  static override readonly safeMethods = REST_SAFE_METHODS;
   static readonly displayName = 'Name.com';
   static readonly website = 'name.com';
   static readonly supportsSandbox = true;
@@ -158,7 +160,11 @@ export class NamecomRegistrar extends BaseRegistrar {
       headers: { Authorization: `Basic ${auth}` },
     };
     super(credentials, config, options);
-    this.http = new NamecomHttpClient({ ...config, options: this.options });
+    this.http = new NamecomHttpClient({
+      ...config,
+      safeMethods: REST_SAFE_METHODS,
+      options: this.options,
+    });
   }
 
   override async testConnection(opts?: RequestOptions): Promise<ConnectionResult> {

@@ -482,8 +482,12 @@ implementations**:
 Extend `BaseRegistrar`, pass a `baseUrl` + auth headers to `super()`, add the
 static `displayName` / `configFields` / `helpText` metadata, override the
 operations the API supports (mapping payloads to the shared types in
-`src/types.ts`), and add the class to `src/registrars/index.ts`. The existing
-providers under `src/registrars/` are working references.
+`src/types.ts`), and add the class to `src/registrars/index.ts`. Forward the
+`opts` you are given into every `this.http` request: they carry the timeout and
+signal, and tell the [retry rules](#retries) whether the call reads or writes.
+For a REST API set `static safeMethods = REST_SAFE_METHODS`; otherwise wrap any
+lookup a write performs first in `asRead(opts)`. The existing providers under
+`src/registrars/` are working references.
 
 **New providers are welcome** — if you've wired up a registrar, open a PR.
 
@@ -510,6 +514,12 @@ Reads and writes are told apart by feature, not by HTTP method (`FEATURE_CALLS`
 lists every one). The method is no guide: Namecheap sends writes as `GET`, and
 Porkbun sends reads as `POST`. `getAuthCode` counts as a write because some
 registrars regenerate the code.
+
+A write often reads first: current DNS records, a price, a zone id. Those
+lookups changed nothing, so they are retried like any read and never reported as
+an unknown outcome. REST providers get this from the HTTP method
+(`static safeMethods = REST_SAFE_METHODS` treats `GET` and `HEAD` as reads);
+providers whose method means nothing wrap the lookup's options in `asRead(opts)`.
 
 A write whose outcome is unknown may have been applied, and a second renewal
 charges twice. So the library reports it and leaves the decision to you: re-read
