@@ -3,7 +3,7 @@
 export { RegistrarClient } from './client';
 export { listPortfolio } from './portfolio';
 export type { DomainSource, PortfolioError, PortfolioResult } from './portfolio';
-export { HttpClient } from './http';
+export { HttpClient, REST_SAFE_METHODS } from './http';
 export type { HttpClientConfig, RequestConfig } from './http';
 
 // core registrar abstraction (the `Registrar` interface itself is exported via
@@ -15,7 +15,14 @@ export { registrars, createRegistrar } from './registrars/index';
 export type { RegistrarName } from './registrars/index';
 
 // capability model: feature constants, the core contract, and helpers
-export { Feature, CORE_FEATURES, EXTENDED_FEATURES, ALL_FEATURES, isCoreFeature } from './features';
+export {
+  Feature,
+  CORE_FEATURES,
+  EXTENDED_FEATURES,
+  ALL_FEATURES,
+  FEATURE_CALLS,
+  isCoreFeature,
+} from './features';
 export type { RegistrarFeature } from './features';
 
 // bundled providers

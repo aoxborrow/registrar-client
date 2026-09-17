@@ -75,11 +75,79 @@ export class TimeoutError extends RetryableRegistrarError {
 // network/connection failure reaching the registrar API
 export class ConnectionError extends RetryableRegistrarError {
   public status = 503; // Service Unavailable
+  // true when the failure is known to have happened before the request left:
+  // DNS, connection refused, TLS handshake, or a proxy that never opened its
+  // tunnel. The registrar cannot have acted on it, so it is safe to re-send
+  // even for a write.
+  public notSent: boolean;
 
-  constructor(message: string) {
+  constructor(message: string, details: { notSent?: boolean } = {}) {
     super(message);
     this.name = 'ConnectionError';
+    this.notSent = details.notSent ?? false;
   }
+}
+
+// A write failed in a way that leaves its result unknown: the request timed
+// out, the connection dropped mid-response, or the registrar answered 5xx. It
+// may have been applied. Never retried by the library; re-read the domain
+// before trying again.
+export class OutcomeUnknownError extends RegistrarError {
+  public status = 504; // Gateway Timeout
+  public feature?: string;
+  public override cause?: unknown;
+
+  constructor(message: string, details: { feature?: string; cause?: unknown } = {}) {
+    super(message);
+    this.name = 'OutcomeUnknownError';
+    this.feature = details.feature;
+    this.cause = details.cause;
+  }
+}
+
+const NOT_SENT = Symbol.for('registrar-client.notSent');
+
+// For custom `fetch` transports: mark an error as having occurred before the
+// request was sent (proxy unreachable, proxy auth refused, tunnel TLS failed).
+// Returns the same error for `throw markNotSent(err)`.
+export function markNotSent<T>(error: T): T {
+  if (typeof error === 'object' && error !== null) {
+    Object.defineProperty(error, NOT_SENT, { value: true, enumerable: false });
+  }
+  return error;
+}
+
+// error codes Node's fetch (undici) reports, via `error.cause.code`, for
+// failures that happen before any request bytes are written
+const PRE_SEND_CODES = new Set([
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'ECONNREFUSED',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'EADDRNOTAVAIL',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'CERT_HAS_EXPIRED',
+  'CERT_NOT_YET_VALID',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+]);
+
+// Whether a fetch rejection is known to have happened before the request was
+// sent. Only positive evidence counts: an explicit `markNotSent`, or a
+// pre-connection error code. Runtimes that expose no code (browsers, Workers)
+// yield false, which is the safe answer.
+export function wasNotSent(error: unknown): boolean {
+  for (let e: unknown = error, depth = 0; e && typeof e === 'object' && depth < 5; depth++) {
+    if ((e as Record<symbol, unknown>)[NOT_SENT] === true) return true;
+    const code = (e as { code?: unknown }).code;
+    if (typeof code === 'string' && PRE_SEND_CODES.has(code)) return true;
+    e = (e as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 // registrar API rejected the credentials

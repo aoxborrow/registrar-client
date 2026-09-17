@@ -17,6 +17,7 @@ import type {
   TldPricing,
   TransferDomainInput,
 } from '../types';
+import { REST_SAFE_METHODS } from '../http';
 import { createDomain, filterDomains, requireConsent, settableForwards } from '../utils';
 import { NotFoundError, NotImplementedError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
@@ -178,6 +179,8 @@ const SUPPORTED_DNS_TYPES = new Set(['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'S
  */
 export class DynadotRegistrar extends BaseRegistrar {
   readonly name = 'dynadot';
+  // a REST API: GET and HEAD never change state
+  static override readonly safeMethods = REST_SAFE_METHODS;
 
   static readonly displayName = 'Dynadot';
   static readonly website = 'dynadot.com';

@@ -13,12 +13,13 @@ import type {
   RequestOptions,
   TldPricing,
 } from '../types';
-import { createDomain, filterDomains } from '../utils';
+import { asRead, createDomain, filterDomains } from '../utils';
 import { AuthenticationError, NotImplementedError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
 import type { RequestConfig } from '../http';
+import { REST_SAFE_METHODS } from '../http';
 
 const TOKEN_URL = 'https://api.namebright.com/auth/token';
 
@@ -196,6 +197,8 @@ interface NbAvailability {
  */
 export class NameBrightRegistrar extends BaseRegistrar {
   readonly name = 'namebright';
+  // a REST API: GET and HEAD never change state
+  static override readonly safeMethods = REST_SAFE_METHODS;
 
   static readonly displayName = 'NameBright';
   static readonly website = 'namebright.com';
@@ -243,7 +246,8 @@ export class NameBrightRegistrar extends BaseRegistrar {
         client_id: this.credentials.clientId,
         client_secret: this.credentials.clientSecret,
       },
-      ...opts,
+      // issuing a token changes nothing on the account, whatever it precedes
+      ...asRead(opts),
     });
     if (!res.access_token) {
       throw new AuthenticationError('NameBright: token endpoint returned no access_token');

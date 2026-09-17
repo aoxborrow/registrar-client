@@ -1,7 +1,7 @@
 import { DEFAULT_OPTIONS } from './constants';
 import { ConfigurationError, NotImplementedError } from './errors';
 import { HttpClient, type HttpClientConfig } from './http';
-import { CORE_FEATURES, type RegistrarFeature } from './features';
+import { CORE_FEATURES, FEATURE_CALLS, type RegistrarFeature } from './features';
 import type {
   ConnectionResult,
   ContactSet,
@@ -18,6 +18,7 @@ import type {
   RegistrarClientOptions,
   RegistrarCredentials,
   RegistrarEnvironment,
+  FeatureCall,
   RegistrarOptions,
   RequestOptions,
   TldPricing,
@@ -65,6 +66,10 @@ export abstract class BaseRegistrar implements Registrar {
     return [...CORE_FEATURES, ...this.extendedFeatures];
   }
 
+  // HTTP methods this provider's API reserves for reads; see
+  // `HttpClientConfig.safeMethods`. REST providers set `REST_SAFE_METHODS`.
+  static readonly safeMethods: readonly string[] = [];
+
   // instance mirror of the static `features`
   get features(): readonly RegistrarFeature[] {
     return (this.constructor as typeof BaseRegistrar).features;
@@ -90,7 +95,47 @@ export abstract class BaseRegistrar implements Registrar {
     this.credentials = credentials;
     this.environment = environment;
     this.options = { ...DEFAULT_OPTIONS, ...clientOptions };
-    this.http = new HttpClient({ ...httpConfig, options: this.options });
+    this.http = new HttpClient({
+      safeMethods: (this.constructor as typeof BaseRegistrar).safeMethods,
+      ...httpConfig,
+      options: this.options,
+    });
+    this.threadFeatureCalls();
+  }
+
+  // Wrap each feature method so its `RequestOptions` carry a `FeatureCall`:
+  // the read/write intent the HTTP layer needs to decide what may be re-sent,
+  // and a slot where it reports a write whose outcome is unknown. Providers
+  // already forward their options into every request, so nothing else changes.
+  //
+  // A feature calling another feature (a write re-reading the domain, say)
+  // goes through that feature's own wrapper, so the inner read is still a read.
+  // Providers fold most failures into an `OperationResult`; the unknown outcome
+  // is copied onto that result so it is not lost along with the error.
+  private threadFeatureCalls(): void {
+    const self = this as unknown as Record<string, unknown>;
+    for (const [feature, { intent, optsIndex }] of Object.entries(FEATURE_CALLS)) {
+      const original = self[feature];
+      if (typeof original !== 'function') continue;
+      // Not `async`: a provider that validates its arguments by throwing
+      // synchronously keeps doing so.
+      self[feature] = (...args: unknown[]): unknown => {
+        const call: FeatureCall = { intent, feature };
+        const next = [...args];
+        while (next.length <= optsIndex) next.push(undefined);
+        next[optsIndex] = { ...(next[optsIndex] as RequestOptions | undefined), call };
+        const result: unknown = (original as (...a: unknown[]) => unknown).apply(this, next);
+        if (!(result instanceof Promise)) return result;
+        return result.then((value: unknown) =>
+          call.outcomeUnknown &&
+          value !== null &&
+          typeof value === 'object' &&
+          (value as OperationResult).success === false
+            ? { ...value, outcome: 'unknown' }
+            : value
+        );
+      };
+    }
   }
 
   testConnection(_opts?: RequestOptions): Promise<ConnectionResult> {

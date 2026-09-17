@@ -9,7 +9,7 @@ import {
   toRegistrarError,
 } from '../errors';
 import { Feature, type RegistrarFeature } from '../features';
-import { HttpClient, type RequestConfig } from '../http';
+import { HttpClient, type RequestConfig, REST_SAFE_METHODS } from '../http';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import type {
   ConfigField,
@@ -94,7 +94,7 @@ class NamecomHttpClient extends HttpClient {
     } catch (error) {
       if (error instanceof ParsingError) throw new ParsingError('namecom: invalid JSON response');
       if (error instanceof ConnectionError)
-        throw new ConnectionError('namecom: network request failed');
+        throw new ConnectionError('namecom: network request failed', { notSent: error.notSent });
       throw error;
     }
   }
@@ -127,6 +127,8 @@ class NamecomHttpClient extends HttpClient {
 
 export class NamecomRegistrar extends BaseRegistrar {
   readonly name = 'namecom';
+  // a REST API: GET and HEAD never change state
+  static override readonly safeMethods = REST_SAFE_METHODS;
   static readonly displayName = 'Name.com';
   static readonly website = 'name.com';
   static readonly supportsSandbox = true;
@@ -158,7 +160,11 @@ export class NamecomRegistrar extends BaseRegistrar {
       headers: { Authorization: `Basic ${auth}` },
     };
     super(credentials, config, options);
-    this.http = new NamecomHttpClient({ ...config, options: this.options });
+    this.http = new NamecomHttpClient({
+      ...config,
+      safeMethods: REST_SAFE_METHODS,
+      options: this.options,
+    });
   }
 
   override async testConnection(opts?: RequestOptions): Promise<ConnectionResult> {
@@ -444,7 +450,6 @@ export class NamecomRegistrar extends BaseRegistrar {
         const old = index >= 0 ? remaining.splice(index, 1)[0] : undefined;
         await this.http.request({
           ...opts,
-          retries: 0,
           method: old ? 'PUT' : 'POST',
           path: old ? `${path}/${old.id!}` : path,
           body: record,
@@ -453,7 +458,6 @@ export class NamecomRegistrar extends BaseRegistrar {
       for (const old of remaining) {
         await this.http.request({
           ...opts,
-          retries: 0,
           method: 'DELETE',
           path: `${path}/${old.id!}`,
         });
@@ -532,7 +536,7 @@ export class NamecomRegistrar extends BaseRegistrar {
   }
   private async mutate(req: RequestConfig, opts?: RequestOptions): Promise<OperationResult> {
     try {
-      await this.http.request({ ...req, ...opts, retries: 0 });
+      await this.http.request({ ...req, ...opts });
       return { success: true, message: 'Domain updated successfully' };
     } catch (error) {
       return { success: false, message: toRegistrarError(error).message };

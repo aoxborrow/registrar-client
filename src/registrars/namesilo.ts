@@ -18,7 +18,7 @@ import type {
   TldPricing,
   TransferDomainInput,
 } from '../types';
-import { createDomain, filterDomains, settableForwards } from '../utils';
+import { asRead, createDomain, filterDomains, settableForwards } from '../utils';
 import { NotFoundError, toRegistrarError } from '../errors';
 import { ensureArray, parseXml } from '../xml';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
@@ -486,7 +486,7 @@ export class NameSiloRegistrar extends BaseRegistrar {
     opts?: RequestOptions
   ): Promise<OperationResult> {
     try {
-      const res = await this.call('dnsSecListRecords', { domain: domainName }, opts);
+      const res = await this.call('dnsSecListRecords', { domain: domainName }, asRead(opts));
       if (!replyOk(res)) return statusResult(res);
       for (const d of ensureArray<NsDsRecord>(res.reply?.ds_record)) {
         const del = await this.call(
@@ -574,7 +574,7 @@ export class NameSiloRegistrar extends BaseRegistrar {
         desired.set(f.alias, list);
       }
       const currentAliases = new Set(
-        (await this.listEmailForwards(domainName, opts)).map(r => r.alias).filter(Boolean)
+        (await this.listEmailForwards(domainName, asRead(opts))).map(r => r.alias).filter(Boolean)
       );
 
       for (const alias of currentAliases) {
@@ -696,7 +696,7 @@ export class NameSiloRegistrar extends BaseRegistrar {
     records: DnsRecord[],
     opts?: RequestOptions
   ): Promise<OperationResult> {
-    const listRes = await this.call('dnsListRecords', { domain: domainName }, opts);
+    const listRes = await this.call('dnsListRecords', { domain: domainName }, asRead(opts));
     if (!replyOk(listRes)) return { success: false, message: replyDetail(listRes) };
     const existing = ensureArray(listRes.reply?.resource_record);
 

@@ -14,6 +14,7 @@ import type {
   TldPricing,
   TransferDomainInput,
 } from '../types';
+import { REST_SAFE_METHODS } from '../http';
 import { createDomain, filterDomains, requireConsent, sleep } from '../utils';
 import { NotImplementedError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
@@ -131,6 +132,8 @@ const WRITABLE_DNS_TYPES = new Set(['A', 'AAAA', 'CNAME', 'NS', 'TXT', 'MX']);
  */
 export class SpaceshipRegistrar extends BaseRegistrar {
   readonly name = 'spaceship';
+  // a REST API: GET and HEAD never change state
+  static override readonly safeMethods = REST_SAFE_METHODS;
 
   static readonly displayName = 'Spaceship';
   static readonly website = 'spaceship.com';

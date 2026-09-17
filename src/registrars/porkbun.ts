@@ -17,7 +17,7 @@ import type {
   TldPricing,
   TransferDomainInput,
 } from '../types';
-import { createDomain, filterDomains, normalizeDomain, settableForwards } from '../utils';
+import { asRead, createDomain, filterDomains, normalizeDomain, settableForwards } from '../utils';
 import { NotFoundError, NotImplementedError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
@@ -520,7 +520,7 @@ export class PorkbunRegistrar extends BaseRegistrar {
     _years = 1,
     opts?: RequestOptions
   ): Promise<OperationResult> {
-    const pricing = await this.tldPricing(extractTld(domainName), opts);
+    const pricing = await this.tldPricing(extractTld(domainName), asRead(opts));
     if (pricing.renewal == null) {
       throw new Error(`${this.name}: could not determine the renewal price for ${domainName}`);
     }
@@ -563,7 +563,7 @@ export class PorkbunRegistrar extends BaseRegistrar {
     input: TransferDomainInput,
     opts?: RequestOptions
   ): Promise<OperationResult> {
-    const pricing = await this.tldPricing(extractTld(domainName), opts);
+    const pricing = await this.tldPricing(extractTld(domainName), asRead(opts));
     if (pricing.transfer == null) {
       throw new Error(`${this.name}: could not determine the transfer price for ${domainName}`);
     }
