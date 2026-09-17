@@ -42,10 +42,12 @@ const never = () =>
 const PRICING = JSON.stringify({ status: 'SUCCESS', pricing: { com: { renewal: '10.00' } } });
 function pastPricing(counted: ReturnType<typeof vi.fn<Fetch>>): Fetch {
   return (url, init) =>
-    String(url).includes('/pricing/get')
+    href(url).includes('/pricing/get')
       ? Promise.resolve(new Response(PRICING))
       : counted(url, init);
 }
+// the library always calls fetch with a URL string
+const href = (url: Parameters<Fetch>[0]): string => (typeof url === 'string' ? url : '');
 const undici = (code: string) => () =>
   Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error(code), { code }) });
 
@@ -216,14 +218,18 @@ describe('a lookup made in the middle of a write', () => {
   // A write often reads first: current records, a price, a zone id. That lookup
   // changed nothing, so it is retried like any read and its failure is an
   // ordinary error, never "the write may have been applied".
-  const settle = (p: Promise<unknown>) =>
+  interface Settled {
+    result?: { outcome?: string };
+    error?: unknown;
+  }
+  const settle = (p: Promise<unknown>): Promise<Settled> =>
     p.then(
-      result => ({ result }) as { result: { outcome?: string }; error?: undefined },
+      result => ({ result: result as Settled['result'] }),
       (error: unknown) => ({ error })
     );
-  const expectPlainFailure = (settled: Awaited<ReturnType<typeof settle>>) => {
-    if (settled.error !== undefined) expect(settled.error).not.toBeInstanceOf(OutcomeUnknownError);
-    else expect(settled.result.outcome).toBeUndefined();
+  const expectPlainFailure = (settled: Settled) => {
+    expect(settled.error).not.toBeInstanceOf(OutcomeUnknownError);
+    expect(settled.result?.outcome).toBeUndefined();
   };
 
   it('is retried on a REST API because GET never changes state (Cloudflare zone lookup)', async () => {
@@ -245,23 +251,23 @@ describe('a lookup made in the middle of a write', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch.mock.calls[0][1]?.method).toBe('PATCH');
     if (settled.error !== undefined) expect(settled.error).toBeInstanceOf(OutcomeUnknownError);
-    else expect(settled.result.outcome).toBe('unknown');
+    else expect(settled.result?.outcome).toBe('unknown');
   });
 
   it('is retried where the method means nothing, because the provider marks it (Porkbun price)', async () => {
     const fetch = status(503);
     expectPlainFailure(await settle(porkbun(fetch).renewDomain('example.com', 1)));
     expect(fetch).toHaveBeenCalledTimes(3);
-    expect(fetch.mock.calls.every(([url]) => String(url).includes('/pricing/get'))).toBe(true);
+    expect(fetch.mock.calls.every(([url]) => href(url).includes('/pricing/get'))).toBe(true);
   });
 
   it('is retried for Namecheap, whose writes are GETs too (WhoisGuard id lookup)', async () => {
     const fetch = status(503);
     expectPlainFailure(await settle(namecheap(fetch).setPrivacy('example.com', true)));
     expect(fetch).toHaveBeenCalledTimes(3);
-    expect(
-      fetch.mock.calls.every(([url]) => String(url).includes('namecheap.domains.getInfo'))
-    ).toBe(true);
+    expect(fetch.mock.calls.every(([url]) => href(url).includes('namecheap.domains.getInfo'))).toBe(
+      true
+    );
   });
 
   it('is retried for NameSilo (current records before a DNS update)', async () => {
@@ -275,7 +281,7 @@ describe('a lookup made in the middle of a write', () => {
       )
     );
     expect(fetch).toHaveBeenCalledTimes(3);
-    expect(fetch.mock.calls.every(([url]) => String(url).includes('dnsListRecords'))).toBe(true);
+    expect(fetch.mock.calls.every(([url]) => href(url).includes('dnsListRecords'))).toBe(true);
   });
 });
 
