@@ -8,6 +8,12 @@ updates:
     groups:
       dev-dependencies:
         dependency-type: 'development'
+    ignore:
+      # typescript-eslint 8 peers on typescript <6.1, so a TypeScript major
+      # fails npm ci and blocks the whole dev-dependencies group. Lift this
+      # once typescript-eslint supports the new major.
+      - dependency-name: 'typescript'
+        update-types: ['version-update:semver-major']
 
   - package-ecosystem: 'github-actions'
     directory: '/'
