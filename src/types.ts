@@ -80,6 +80,9 @@ export interface ConnectionResult {
 export interface OperationResult {
   success: boolean;
   message: string;
+  // Accepted by the registrar but still pending registry processing. Callers
+  // must not optimistically display the requested state as already active.
+  pending?: boolean;
   // Present only on a failed write whose request may have reached the
   // registrar (timed out, connection dropped mid-response, or a 5xx). The
   // change may or may not have been applied: re-read the domain before trying

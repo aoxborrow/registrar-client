@@ -5,6 +5,7 @@ import type {
   RegistrarOptions,
 } from '../types';
 import { CloudflareRegistrar } from './cloudflare';
+import { Domain101Registrar } from './domain101';
 import { DynadotRegistrar } from './dynadot';
 import { GandiRegistrar } from './gandi';
 import { GoDaddyRegistrar } from './godaddy';
@@ -17,16 +18,17 @@ import { SpaceshipRegistrar } from './spaceship';
 
 // the built-in registrar providers, keyed by id
 export const registrars = {
-  cloudflare: CloudflareRegistrar,
-  dynadot: DynadotRegistrar,
-  gandi: GandiRegistrar,
-  godaddy: GoDaddyRegistrar,
-  namebright: NameBrightRegistrar,
-  namecheap: NamecheapRegistrar,
-  namecom: NamecomRegistrar,
-  namesilo: NameSiloRegistrar,
-  porkbun: PorkbunRegistrar,
-  spaceship: SpaceshipRegistrar,
+  '101domain': Domain101Registrar,
+  'cloudflare': CloudflareRegistrar,
+  'dynadot': DynadotRegistrar,
+  'gandi': GandiRegistrar,
+  'godaddy': GoDaddyRegistrar,
+  'namebright': NameBrightRegistrar,
+  'namecheap': NamecheapRegistrar,
+  'namecom': NamecomRegistrar,
+  'namesilo': NameSiloRegistrar,
+  'porkbun': PorkbunRegistrar,
+  'spaceship': SpaceshipRegistrar,
 } satisfies Record<string, RegistrarConstructor>;
 
 // id of a built-in registrar
