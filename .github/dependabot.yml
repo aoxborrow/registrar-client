@@ -14,6 +14,12 @@ updates:
       # once typescript-eslint supports the new major.
       - dependency-name: 'typescript'
         update-types: ['version-update:semver-major']
+      # Vitest 5 needs Node 22.12+, but we support and test on Node 20. Lift
+      # this when Node 20 leaves the engines range and the CI matrix.
+      - dependency-name: 'vitest'
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@vitest/coverage-v8'
+        update-types: ['version-update:semver-major']
 
   - package-ecosystem: 'github-actions'
     directory: '/'
