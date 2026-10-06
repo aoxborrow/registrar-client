@@ -389,25 +389,26 @@ export class Domain101Registrar extends BaseRegistrar {
     // Whether an earlier batch already landed, leaving the zone part-updated.
     let changed = false;
     try {
-      const existing = await this.rawRecords(domainName, opts);
-      const stale = [...existing];
+      // Existing records are only compared, never validated as writes: the
+      // zone may hold what the writer refuses (an SWA record's automatic TTL,
+      // a TTL under 300). Apex NS is the delegation, which this never replaces.
+      const stale = (await this.rawRecords(domainName, opts))
+        .map(raw => ({ raw, spec: recordSpec(fromRecord(raw), domainName, false) }))
+        .filter(({ spec }) => !(spec.type === 'NS' && spec.name === ''));
       const additions: RecordSpec[] = [];
       const edits: RecordSpec[] = [];
       for (const record of unique) {
         const index = stale.findIndex(
-          raw =>
-            recordSignature(recordSpec(fromRecord(raw), domainName)) === recordSignature(record)
+          ({ spec }) => recordSignature(spec) === recordSignature(record)
         );
         if (index >= 0) stale.splice(index, 1);
         else {
           // The generic DNS shape has no proxy flag. Preserve the existing
           // host/type's SWA proxying when replacing its content or TTL.
           const priorIndex = stale.findIndex(
-            raw =>
-              raw.type === record.type &&
-              recordSpec(fromRecord(raw), domainName).name === record.name
+            ({ spec }) => spec.type === record.type && spec.name === record.name
           );
-          const prior = priorIndex >= 0 ? stale.splice(priorIndex, 1)[0] : undefined;
+          const prior = priorIndex >= 0 ? stale.splice(priorIndex, 1)[0].raw : undefined;
           if (prior?.proxied) record.proxied = true;
           if (record.ttl === 1 && record.proxied !== true)
             throw new ConfigurationError(
@@ -458,7 +459,7 @@ export class Domain101Registrar extends BaseRegistrar {
           ...opts,
           method: 'DELETE',
           path: `${dnsPath(domainName)}/records`,
-          body: { ids: batch.map(r => r.id) },
+          body: { ids: batch.map(({ raw }) => raw.id) },
         });
         changed = true;
       }
@@ -659,39 +660,47 @@ function fromRecord(raw: RawRecord): DnsRecord {
   }
   return { ...common, value: raw.value };
 }
-function recordSpec(record: DnsRecord, domain: string): RecordSpec {
+// The API's write shape for a record. `strict` applies the write rules; an
+// existing record is read with it off, only to compare against.
+function recordSpec(record: DnsRecord, domain: string, strict = true): RecordSpec {
   const type = record.type.toUpperCase();
   const zone = normalizeDomain(domain);
   let name = record.name.trim().toLowerCase().replace(/\.$/, '');
   if (name === zone || name === '@') name = '';
   else if (name.endsWith('.' + zone)) name = name.slice(0, -zone.length - 1);
+  const reject = (message: string) => {
+    if (strict) throw new ConfigurationError(`101domain: ${message}`);
+  };
   if (
     !['A', 'AAAA', 'CNAME', 'NS', 'MX', 'TXT', 'SRV', 'CAA'].includes(type) ||
     (type === 'NS' && !name)
   )
-    throw new ConfigurationError('101domain: unsupported DNS type or apex NS record');
+    reject('unsupported DNS type or apex NS record');
   const ttl = record.ttl ?? 3600;
   if (!Number.isInteger(ttl) || (ttl !== 1 && ttl < 300))
-    throw new ConfigurationError('101domain: DNS TTL must be at least 300 seconds');
+    reject('DNS TTL must be at least 300 seconds');
   const result: RecordSpec = { name, type, ttl };
   if (type === 'MX' || type === 'SRV') {
     if (!Number.isInteger(record.priority) || record.priority! < 0 || record.priority! > 65535)
-      throw new ConfigurationError('101domain: MX/SRV priority is required');
+      reject('MX/SRV priority is required');
     result.priority = record.priority!;
     result.target = record.value;
     if (type === 'SRV') {
       if (![record.weight, record.port].every(n => Number.isInteger(n) && n! >= 0 && n! <= 65535))
-        throw new ConfigurationError('101domain: SRV weight and port are required');
+        reject('SRV weight and port are required');
       result.weight = record.weight!;
       result.port = record.port!;
     }
   } else if (type === 'CAA') {
     const match = /^(\d+)\s+(\w+)\s+"([\s\S]*)"$/.exec(record.value);
-    if (!match || Number(match[1]) > 255)
-      throw new ConfigurationError('101domain: CAA needs flags, tag and quoted value');
-    result.flag = Number(match[1]);
-    result.tag = match[2];
-    result.value = match[3];
+    if (!match || Number(match[1]) > 255) {
+      reject('CAA needs flags, tag and quoted value');
+      result.value = record.value;
+    } else {
+      result.flag = Number(match[1]);
+      result.tag = match[2];
+      result.value = match[3];
+    }
   } else result.value = record.value;
   return result;
 }

@@ -485,6 +485,28 @@ describe('101domain DNS reconciliation', () => {
     expect(await provider().setDnsRecords('example.com', result)).toMatchObject({ success: true });
     expect(mock).toHaveBeenCalledTimes(2);
   });
+  it('accepts existing records the writer would refuse, and keeps apex NS', async () => {
+    const zone = [
+      { id: 'swa', name: '@', type: 'A', value: '192.0.2.1', ttl: 1, proxied: true },
+      { id: 'short', name: 'old', type: 'txt', value: 'x', ttl: 60 },
+      { id: 'ns', name: '@', type: 'NS', value: 'ns1.101domain.com', ttl: 3600 },
+      { id: 'caa', name: '@', type: 'CAA', value: 'odd caa', ttl: 3600 },
+    ];
+    const mock = responses(
+      success(zone),
+      success([{ old_id: 'short', id: 'short2' }]),
+      success([])
+    );
+    const result = await provider().setDnsRecords('example.com', [
+      { type: 'A', name: '@', value: '192.0.2.1', ttl: 1 },
+      { type: 'TXT', name: 'old', value: 'y', ttl: 300 },
+    ]);
+    expect(result).toMatchObject({ success: true });
+    // the lowercase txt is edited by ID, not recreated; only the CAA is stale
+    expect(mock.mock.calls.map(([, req]) => req?.method)).toEqual(['GET', 'PATCH', 'DELETE']);
+    expect(body(mock, 1)).toEqual({ records: [{ id: 'short', ttl: 300, value: 'y' }] });
+    expect(body(mock, 2)).toEqual({ ids: ['caa'] });
+  });
   it('stops before deleting existing DNS when creation fails', async () => {
     const mock = responses(success([record]), new Response(null, { status: 403 }));
     expect(
