@@ -312,7 +312,7 @@ export class Domain101Registrar extends BaseRegistrar {
   override async getDnsRecords(domainName: string, opts?: RequestOptions): Promise<DnsRecord[]> {
     return (await this.rawRecords(domainName, opts)).map(fromRecord);
   }
-  // Reconcile by content-derived IDs. Preserve unchanged records, create additions
+  // Reconcile by content-derived IDs. Preserve unchanged records, edit by ID, create additions
   // before removing stale records, and stop on any failed batch. Never retry an
   // uncertain write. This replaces the custom records, not the apex NS delegation.
   override async setDnsRecords(
@@ -328,6 +328,7 @@ export class Domain101Registrar extends BaseRegistrar {
       const existing = await this.rawRecords(domainName, opts);
       const stale = [...existing];
       const additions: RecordSpec[] = [];
+      const edits: RecordSpec[] = [];
       for (const record of unique) {
         const index = stale.findIndex(
           raw =>
@@ -337,18 +338,46 @@ export class Domain101Registrar extends BaseRegistrar {
         else {
           // The generic DNS shape has no proxy flag. Preserve the existing
           // host/type's SWA proxying when replacing its content or TTL.
-          const prior = existing.find(
+          const priorIndex = stale.findIndex(
             raw =>
               raw.type === record.type &&
               recordSpec(fromRecord(raw), domainName).name === record.name
           );
+          const prior = priorIndex >= 0 ? stale.splice(priorIndex, 1)[0] : undefined;
           if (prior?.proxied) record.proxied = true;
           if (record.ttl === 1 && record.proxied !== true)
             throw new ConfigurationError(
               '101domain: automatic TTL requires an existing proxied SWA record'
             );
-          additions.push(record);
+          if (prior) {
+            const edit: RecordSpec = { ...record, id: prior.id };
+            delete edit.name;
+            delete edit.type;
+            edits.push(edit);
+          } else additions.push(record);
         }
+      }
+      for (const batch of chunks(edits, 25)) {
+        const response = await this.request<{ old_id: string; id: string }[]>({
+          ...opts,
+          method: 'PATCH',
+          path: `${dnsPath(domainName)}/records`,
+          body: { records: batch },
+        });
+        // IDs change on edit. These records have been removed from the stale
+        // set, so neither their old nor new IDs may be deleted below.
+        if (
+          !Array.isArray(response.data) ||
+          response.data.length !== batch.length ||
+          new Set(response.data.map(r => r?.old_id)).size !== batch.length ||
+          response.data.some(
+            r =>
+              !r || !batch.some(edit => edit.id === r.old_id) || typeof r.id !== 'string' || !r.id
+          )
+        )
+          throw new OutcomeUnknownError(
+            '101domain: invalid DNS edit confirmation. Re-read the zone before trying again.'
+          );
       }
       for (const batch of chunks(additions, 25))
         await this.request({
