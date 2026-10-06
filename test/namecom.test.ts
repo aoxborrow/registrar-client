@@ -605,6 +605,37 @@ describe('Name.com errors and safe read retries', () => {
     await result;
     expect(mock).toHaveBeenCalledTimes(2);
   });
+  it.each([
+    ['an HTTP-date Retry-After', { 'Retry-After': 'Tue, 08 Sep 2026 00:00:12 GMT' }, 12],
+    [
+      'X-RateLimit-Reset when Retry-After is unusable',
+      { 'Retry-After': 'soon', 'X-RateLimit-Reset': String(Date.UTC(2026, 8, 8) / 1000 + 5) },
+      5,
+    ],
+    [
+      'Retry-After over X-RateLimit-Reset',
+      { 'Retry-After': '3', 'X-RateLimit-Reset': '9999999999' },
+      3,
+    ],
+    [
+      'neither header when both are empty',
+      { 'Retry-After': '', 'X-RateLimit-Reset': '' },
+      undefined,
+    ],
+  ])('reads %s', async (_label, headers, expected) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-08T00:00:00Z'));
+    try {
+      responses(new Response('', { status: 429, headers }));
+      const error: unknown = await provider({ retries: 0 })
+        .getDomain('example.com')
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(RateLimitError);
+      expect((error as RateLimitError).retryAfter).toBe(expected);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('does not reflect malformed responses or network error excerpts', async () => {
     responses(new Response('secret-token epp-secret', { status: 200 }));
     await expect(provider().getDomain('example.com')).rejects.toThrow(
