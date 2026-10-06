@@ -60,6 +60,7 @@ interface NcCheckEl {
   '@_Available'?: string;
   '@_IsPremiumName'?: string;
   '@_PremiumRegistrationPrice'?: string;
+  '@_PremiumRenewalPrice'?: string;
 }
 
 // a contact group in namecheap.domains.getContacts (children are text elements)
@@ -367,9 +368,10 @@ export class NamecheapRegistrar extends BaseRegistrar {
 
   /**
    * Availability via domains.check (batched at 50 per request, Namecheap's cap).
-   * The check response only carries a price for *premium* names
-   * (`PremiumRegistrationPrice`); regular registration pricing comes from
-   * `getPricing`, so `price` is set only for premium results.
+   * The check response only carries prices for *premium* names
+   * (`PremiumRegistrationPrice`, `PremiumRenewalPrice`); regular pricing comes
+   * from `getPricing`, so `price` and `renewalPrice` are set only for premium
+   * results.
    */
   override async checkAvailability(
     domainNames: string[],
@@ -385,12 +387,16 @@ export class NamecheapRegistrar extends BaseRegistrar {
       );
       for (const el of ensureArray(cr.DomainCheckResult)) {
         const premium = el['@_IsPremiumName'] === 'true';
-        const premiumPrice = premium ? Number(el['@_PremiumRegistrationPrice']) : NaN;
+        const premiumPrice = (attr: string | undefined) => {
+          const n = premium ? Number(attr) : NaN;
+          return Number.isFinite(n) && n > 0 ? n : undefined;
+        };
         results.push({
           domainName: el['@_Domain'] ?? '',
           available: el['@_Available'] === 'true',
           premium,
-          price: Number.isFinite(premiumPrice) && premiumPrice > 0 ? premiumPrice : undefined,
+          price: premiumPrice(el['@_PremiumRegistrationPrice']),
+          renewalPrice: premiumPrice(el['@_PremiumRenewalPrice']),
         });
       }
     }

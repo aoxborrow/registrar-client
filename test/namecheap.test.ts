@@ -26,12 +26,12 @@ function ok(body: string): string {
 }
 
 describe('Namecheap provider', () => {
-  it('checkAvailability maps availability and premium price', async () => {
+  it('checkAvailability maps availability and premium prices', async () => {
     const nc = namecheap();
     stubXml(nc, () =>
       ok(
-        `<DomainCheckResult Domain="example.com" Available="true" IsPremiumName="false" PremiumRegistrationPrice="0.0000"/>
-         <DomainCheckResult Domain="rich.com" Available="true" IsPremiumName="true" PremiumRegistrationPrice="1500.0000"/>
+        `<DomainCheckResult Domain="example.com" Available="true" IsPremiumName="false" PremiumRegistrationPrice="0.0000" PremiumRenewalPrice="0.0000"/>
+         <DomainCheckResult Domain="rich.com" Available="true" IsPremiumName="true" PremiumRegistrationPrice="1500.0000" PremiumRenewalPrice="1200.0000"/>
          <DomainCheckResult Domain="taken.com" Available="false" IsPremiumName="false"/>`
       )
     );
@@ -42,7 +42,13 @@ describe('Namecheap provider', () => {
       premium: false,
     });
     expect(results[0].price).toBeUndefined();
-    expect(results[1]).toMatchObject({ available: true, premium: true, price: 1500 });
+    expect(results[0].renewalPrice).toBeUndefined();
+    expect(results[1]).toMatchObject({
+      available: true,
+      premium: true,
+      price: 1500,
+      renewalPrice: 1200,
+    });
     expect(results[2]).toMatchObject({ domainName: 'taken.com', available: false });
   });
 
