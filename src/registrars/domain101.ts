@@ -1,4 +1,5 @@
 import {
+  AuthorizationError,
   ConfigurationError,
   ConnectionError,
   InvalidResponseError,
@@ -54,7 +55,8 @@ interface RawPrice {
 interface RawAvailability {
   domain_name: string;
   available: boolean;
-  pricing?: RawPrice | null;
+  // one entry per term; null when the name isn't available to register
+  pricing?: RawPrice[] | null;
 }
 interface RawRecord {
   id: string;
@@ -65,18 +67,30 @@ interface RawRecord {
   proxied?: boolean;
 }
 interface RawForward {
-  destination: string;
-  type: '301' | 'cloak';
+  destination: string | null;
+  type: '301' | 'cloak' | null;
 }
 type RecordSpec = Record<string, string | number | boolean>;
 
-// Response bodies and fetch/parser excerpts can echo credentials or private data.
-// Keep typed statuses and Retry-After, but never include upstream bodies in errors.
+// Response bodies and fetch/parser excerpts can echo private data. Keep typed
+// statuses and Retry-After, and of an error body only the API's own `code` and
+// `message` fields (e.g. NAMESERVERS_NOT_LOCAL), never the raw body.
 class Domain101HttpClient extends HttpClient {
   override async request<T = unknown>(req: RequestConfig): Promise<T> {
     try {
       return await super.request<T>(req);
     } catch (error) {
+      // A read-only key is valid but scoped: name the missing scope so the
+      // caller can say what to grant rather than "403 Forbidden".
+      if (error instanceof AuthorizationError) {
+        const scope = requiredScope(req);
+        if (!scope || error.providerCode !== 'INSUFFICIENT_PERMISSIONS') throw error;
+        const scoped = new AuthorizationError(
+          `101domain: this API key does not have the ${scope} scope. Create a key with ${scope} to ${SCOPE_PURPOSE[scope]}.`
+        );
+        scoped.providerCode = error.providerCode;
+        throw scoped;
+      }
       if (error instanceof OutcomeUnknownError)
         throw new OutcomeUnknownError(
           '101domain: the registrar did not confirm this change. Re-read the domain before trying again.',
@@ -89,11 +103,51 @@ class Domain101HttpClient extends HttpClient {
     }
   }
   protected override async toStatusError(response: Response, url: string): Promise<RegistrarError> {
-    await response.body?.cancel().catch(() => undefined);
-    return super.toStatusError(
+    const detail = await errorDetail(response);
+    const error = await super.toStatusError(
       new Response(null, { status: response.status, headers: response.headers }),
       url
     );
+    if (detail) {
+      error.message = `101domain: ${detail.message}`;
+      error.providerCode = detail.code;
+    } else if (response.status === 403) {
+      // The API host sits behind Cloudflare, whose bot challenge answers
+      // some clients with an HTML 403 before the request reaches the API.
+      error.message =
+        '101domain: the request was refused before reaching the API (403 without an API error)';
+    }
+    return error;
+  }
+}
+
+type Scope = 'domains_read' | 'domains_write' | 'dns_read' | 'dns_write';
+const SCOPE_PURPOSE: Record<Scope, string> = {
+  domains_read: 'read the domain portfolio',
+  domains_write: 'change URL forwarding',
+  dns_read: 'read DNS records and nameservers',
+  dns_write: 'change DNS records and nameservers',
+};
+
+// The scope an endpoint requires; search, bulk-search and TLD pricing need none.
+function requiredScope(req: RequestConfig): Scope | undefined {
+  const write = !REST_SAFE_METHODS.includes((req.method ?? 'GET').toUpperCase());
+  if (req.path.startsWith('/dns/')) return write ? 'dns_write' : 'dns_read';
+  if (req.path === '/domains' || /^\/domains\/[^/]+(?:\/forwarding)?$/.test(req.path))
+    return write ? 'domains_write' : 'domains_read';
+  return undefined;
+}
+
+// The error envelope's code and message, which are fixed API strings. Returns
+// null for anything else so a stray body is never surfaced.
+async function errorDetail(response: Response): Promise<{ code: string; message: string } | null> {
+  try {
+    const body = (await response.json()) as { code?: unknown; message?: unknown };
+    if (typeof body?.code !== 'string' || typeof body.message !== 'string' || !body.message)
+      return null;
+    return { code: body.code, message: body.message.replace(/\s+/g, ' ').slice(0, 200) };
+  } catch {
+    return null;
   }
 }
 
@@ -176,7 +230,12 @@ export class Domain101Registrar extends BaseRegistrar {
       }
       if (page >= pagination.total_pages) {
         if (result.length !== pagination.total) throw invalid('incomplete portfolio');
-        return filterDomains(result, search);
+        // The list keeps every order the account ever placed, so drop the
+        // names it doesn't hold (as GoDaddy's status filter does).
+        return filterDomains(
+          result.filter(d => !d.deleted),
+          search
+        );
       }
       if (!response.data.length) throw invalid('empty intermediate page');
     }
@@ -258,13 +317,14 @@ export class Domain101Registrar extends BaseRegistrar {
         if (!domains.includes(domainName) || found.has(domainName))
           throw invalid('availability identity');
         found.add(domainName);
+        const price = oneYear(raw.pricing);
         result.push({
           domainName,
           available: raw.available,
-          premium: raw.pricing?.premium,
-          price: amount(raw.pricing?.register),
-          renewalPrice: amount(raw.pricing?.renew),
-          currency: raw.pricing?.currency,
+          premium: price?.premium,
+          price: amount(price?.register),
+          renewalPrice: amount(price?.renew),
+          currency: price?.currency,
           period: 1,
         });
       }
@@ -282,7 +342,7 @@ export class Domain101Registrar extends BaseRegistrar {
         query: { pricing_terms: '1' },
         ...opts,
       });
-      const price = response.data?.pricing?.find(p => p.term_years === 1);
+      const price = oneYear(response.data?.pricing);
       if (!price) throw new NotFoundError('101domain: no one-year pricing for this TLD');
       return {
         tld,
@@ -299,13 +359,15 @@ export class Domain101Registrar extends BaseRegistrar {
     });
     const raw = response.data;
     if (!raw || normalizeDomain(raw.domain_name) !== name) throw invalid('pricing identity');
-    if (!raw.pricing) throw new NotFoundError('101domain: pricing unavailable for this domain');
+    // Pricing is null for a name that's taken, the account's own included.
+    const price = oneYear(raw.pricing);
+    if (!price) throw new NotFoundError('101domain: pricing unavailable for this domain');
     return {
       tld: name.slice(name.indexOf('.') + 1),
-      currency: raw.pricing.currency,
-      registration: amount(raw.pricing.register),
-      renewal: amount(raw.pricing.renew),
-      transfer: amount(raw.pricing.transfer),
+      currency: price.currency,
+      registration: amount(price.register),
+      renewal: amount(price.renew),
+      transfer: amount(price.transfer),
     };
   }
 
@@ -324,6 +386,8 @@ export class Domain101Registrar extends BaseRegistrar {
     const unique = desired.filter(
       (r, i) => desired.findIndex(other => recordSignature(other) === recordSignature(r)) === i
     );
+    // Whether an earlier batch already landed, leaving the zone part-updated.
+    let changed = false;
     try {
       const existing = await this.rawRecords(domainName, opts);
       const stale = [...existing];
@@ -378,26 +442,35 @@ export class Domain101Registrar extends BaseRegistrar {
           throw new OutcomeUnknownError(
             '101domain: invalid DNS edit confirmation. Re-read the zone before trying again.'
           );
+        changed = true;
       }
-      for (const batch of chunks(additions, 25))
+      for (const batch of chunks(additions, 25)) {
         await this.request({
           ...opts,
           method: 'POST',
           path: `${dnsPath(domainName)}/records`,
           body: { records: batch },
         });
-      for (const batch of chunks(stale, 25))
+        changed = true;
+      }
+      for (const batch of chunks(stale, 25)) {
         await this.request({
           ...opts,
           method: 'DELETE',
           path: `${dnsPath(domainName)}/records`,
           body: { ids: batch.map(r => r.id) },
         });
+        changed = true;
+      }
       return { success: true, message: 'DNS records updated successfully' };
     } catch (error) {
+      const result = failed(error);
+      // Nothing was written when the first write was refused (a read-only
+      // key, say), so only warn about a partial zone once one may exist.
+      if (!changed && !result.outcome) return result;
       return {
-        ...failed(error),
-        message: `${toRegistrarError(error).message}. DNS replacement is not atomic; read the zone before retrying.`,
+        ...result,
+        message: `${result.message}. DNS replacement is not atomic; read the zone before retrying.`,
       };
     }
   }
@@ -417,11 +490,12 @@ export class Domain101Registrar extends BaseRegistrar {
     if (!raw || normalizeDomain(raw.domain_name) !== normalizeDomain(domainName))
       throw invalid('domain identity');
     const forward = raw.web_forwarding;
-    if (forward === null) return [];
+    // No rule reads as all-null fields ({destination: null, type: null}).
+    if (forward === null || (forward?.destination === null && forward.type === null)) return [];
     if (
       !forward ||
       typeof forward.destination !== 'string' ||
-      !['301', 'cloak'].includes(forward.type)
+      (forward.type !== '301' && forward.type !== 'cloak')
     )
       throw invalid('forwarding');
     return [
@@ -528,6 +602,12 @@ function chunks<T>(items: T[], size: number): T[][] {
   for (let i = 0; i < items.length; i += size) result.push(items.slice(i, i + size));
   return result;
 }
+// The one-year entry of a per-term price list.
+function oneYear(pricing: RawPrice[] | null | undefined): RawPrice | undefined {
+  if (pricing == null) return undefined;
+  if (!Array.isArray(pricing)) throw invalid('pricing');
+  return pricing.find(p => p?.term_years === 1);
+}
 function amount(raw?: string): number | undefined {
   if (raw == null) return undefined;
   if (!/^\d+(?:\.\d+)?$/.test(raw)) throw invalid('price');
@@ -547,8 +627,17 @@ function toDomain(raw: RawDomain): Domain {
     autoRenew: raw.auto_renew,
     locked: raw.registry_statuses?.some(s => /^clientTransferProhibited$/i.test(s)),
     nameservers: raw.nameservers,
-    deleted: ['DELETED', 'CANCELLED'].includes(raw.status ?? ''),
+    deleted: !isHeld(raw),
   });
+}
+// Statuses for a name the account no longer (or never) held: deleted,
+// cancelled, a denied application, or transferred to another registrar.
+const GONE = new Set(['DELETED', 'CANCELLED', 'DENIED', 'XFER_AWAY']);
+// Whether the account holds this name. Incoming transfers and applications
+// that never registered (no registered_at) aren't held yet either.
+function isHeld(raw: RawDomain): boolean {
+  const status = raw.status?.toUpperCase() ?? '';
+  return !GONE.has(status) && !status.startsWith('XFER_IN_') && raw.registered_at != null;
 }
 function fromRecord(raw: RawRecord): DnsRecord {
   const common = { name: raw.name || '@', type: raw.type, ttl: raw.ttl };

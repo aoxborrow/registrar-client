@@ -17,6 +17,12 @@ specification use underscores (`domains_read`); some help pages use colons.
 - `domains_write`: forwarding changes.
 
 Availability and TLD pricing need a valid token but no additional scopes.
+
+A read-only key (`domains_read` + `dns_read`) connects and syncs normally. A
+write it isn't scoped for fails with an `AuthorizationError` that names the
+missing scope ("this API key does not have the dns_write scope…"); write
+methods that return an `OperationResult` report it as `success: false` with no
+`outcome`, since nothing was changed.
 Finance/account/product scopes are not needed by this adapter. Optional IP
 restrictions support IPv4/IPv6, up to ten addresses, without CIDR ranges.
 
@@ -26,6 +32,10 @@ restrictions support IPv4/IPv6, up to ten addresses, without CIDR ranges.
   dates, lifecycle status, auto-renew and registry transfer-lock status. Privacy
   is not reported; the generic boolean default does not prove privacy is off.
   Contact handles are not contact objects and are not exposed as such.
+- `GET /domains` returns every order the account has placed, so the list drops
+  names it doesn't hold: `DELETED`, `CANCELLED`, `DENIED` (a failed application),
+  `XFER_AWAY` (transferred out), incoming `XFER_IN_*` transfers, and any name
+  with no `registered_at`. `getDomain` on one of these returns `deleted: true`.
 - Listing follows `meta.pagination`, at 50 names per page, and rejects missing
   pages, duplicate names and inconsistent totals. A partial result never becomes
   a successful portfolio. Reads support standard retry/backoff and cancellation.
@@ -46,7 +56,8 @@ restrictions support IPv4/IPv6, up to ten addresses, without CIDR ranges.
   failure requires reading the zone before retrying. Apex NS is never replaced
   through the records API. Cross-type CNAME transitions can be rejected by the
   registrar; the adapter stops rather than removing existing records first.
-- URL forwarding: one permanent (301) apex rule. Existing cloaked forwarding is
+- URL forwarding: one permanent (301) apex rule. A domain with no rule reports
+  `web_forwarding: {destination: null, type: null}`. Existing cloaked forwarding is
   readable as `masked`; creating masking, temporary redirects and subdomain
   forwarding is rejected. An empty rule list removes forwarding.
 
@@ -56,16 +67,24 @@ list represents the library contract; unsupported core methods still throw
 `NotImplementedError`. Consumers should gate these known API gaps explicitly.
 Only the implemented URL-forwarding methods are declared as extended features.
 
-Unknown write outcomes are never automatically repeated. HTTP error bodies,
-network excerpts and parser errors do not expose tokens or upstream private data.
+Unknown write outcomes are never automatically repeated. Of an HTTP error body
+only the API's own `code` (as `providerCode`, e.g. `NAMESERVERS_NOT_LOCAL`) and
+`message` are kept; network excerpts and parser errors are not surfaced. The API
+host is behind Cloudflare, and a 403 without an API error body (a bot challenge)
+is reported as refused before reaching the API.
 Account rate limits aggregate all keys; numeric RPS/RPH quotas are account-specific.
 
 ## Verification
 
 Unit tests: `TZ=UTC npm test -- test/domain101.test.ts`. For live validation,
 first compare a read-only list/detail result against the account portal. Test DNS
-or forwarding writes only on an explicitly disposable domain. No live account
-or write verification is implied by offline tests.
+or forwarding writes only on an explicitly disposable domain.
+
+Live-verified 2026-10-06 (reads only, from Node): connection, portfolio
+filtering, detail, nameservers, DNS records (and the third-party-nameserver
+error), forwarding with and without a rule, availability with prices, and TLD
+and domain pricing. DNS, nameserver and forwarding writes are not yet verified
+live.
 
 ## Sources checked 2026-10-06
 

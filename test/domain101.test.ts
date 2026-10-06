@@ -6,8 +6,10 @@ import {
   Domain101Registrar,
   Feature,
   InvalidResponseError,
+  NotFoundError,
   NotImplementedError,
   RateLimitError,
+  RegistrarError,
   createRegistrar,
   type RegistrarOptions,
 } from '../src/index';
@@ -21,7 +23,8 @@ const raw = {
   registry_statuses: ['clientTransferProhibited'],
   auto_renew: true,
   nameservers: ['NS1.101DOMAIN.COM', 'NS2.101DOMAIN.COM'],
-  web_forwarding: null,
+  // the live API's shape for a domain without forwarding
+  web_forwarding: { destination: null, type: null },
 };
 const success = (data: unknown, meta?: unknown) => ({
   status: 'success',
@@ -32,12 +35,15 @@ const success = (data: unknown, meta?: unknown) => ({
 });
 const page = (data: unknown[], current_page = 1, total_pages = 1, total = data.length) =>
   success(data, { pagination: { current_page, total_pages, per_page: 50, total } });
+const apiError = (status: number, code: string, message: string) =>
+  Response.json({ status: 'error', code, message, errors: null }, { status });
 const quote = {
   register: '12.50',
   renew: '15.00',
   transfer: '10.00',
   currency: 'USD',
   premium: false,
+  term_years: 1,
 };
 function provider(options?: RegistrarOptions) {
   return createRegistrar('101domain', { apiKey: 'secret-token' }, { retries: 0, ...options });
@@ -105,6 +111,38 @@ describe('101domain authentication and metadata', () => {
       if (error instanceof RateLimitError) expect(error.retryAfter).toBe(17);
     }
   );
+  it("keeps the API's error code and message, but not other body fields", async () => {
+    responses(
+      Response.json(
+        {
+          status: 'error',
+          code: 'NAMESERVERS_NOT_LOCAL',
+          message:
+            'DNS records cannot be managed here because the domain is using third-party nameservers.',
+          errors: { secret: 'private-contact' },
+        },
+        { status: 400 }
+      )
+    );
+    const error = (await provider()
+      .getDnsRecords('example.com')
+      .catch((e: unknown) => e)) as RegistrarError;
+    expect(error).toMatchObject({
+      status: 400,
+      providerCode: 'NAMESERVERS_NOT_LOCAL',
+      message:
+        '101domain: DNS records cannot be managed here because the domain is using third-party nameservers.',
+    });
+    expect(error.message).not.toContain('private-contact');
+  });
+  it('says a 403 without an API error never reached the API', async () => {
+    responses(new Response('<html>Just a moment...</html>', { status: 403 }));
+    const error = await provider()
+      .getDomain('example.com')
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AuthorizationError);
+    expect((error as Error).message).toMatch(/refused before reaching the API/);
+  });
   it('rejects a successful HTTP response with an error or malformed envelope', async () => {
     responses({ status: 'error', data: [], message: 'secret-token' });
     await expect(provider().listDomains()).rejects.toThrow(InvalidResponseError);
@@ -168,6 +206,37 @@ describe('101domain portfolio completeness', () => {
     responses(...values);
     await expect(provider().listDomains()).rejects.toThrow(InvalidResponseError);
   });
+  it('drops names the account no longer or never held', async () => {
+    const gone = [
+      {
+        ...raw,
+        domain_name: 'DENIED.BIO',
+        status: 'DENIED',
+        registered_at: null,
+        expires_at: null,
+      },
+      { ...raw, domain_name: 'DELETED.EE', status: 'DELETED', registered_at: null },
+      { ...raw, domain_name: 'CANCELLED.NET', status: 'CANCELLED' },
+      { ...raw, domain_name: 'AWAY.IO', status: 'XFER_AWAY' },
+      { ...raw, domain_name: 'INCOMING.ORG', status: 'XFER_IN_PEND', registered_at: null },
+      { ...raw, domain_name: 'APPLIED.APP', status: 'PROCESSING', registered_at: null },
+    ];
+    const held = [
+      raw,
+      { ...raw, domain_name: 'LAPSED.COM', status: 'EXPIRED' },
+      { ...raw, domain_name: 'LEAVING.COM', status: 'XFER_PEND' },
+    ];
+    responses(page([...gone, ...held]));
+    expect((await provider().listDomains()).map(d => d.domainName)).toEqual([
+      'example.com',
+      'lapsed.com',
+      'leaving.com',
+    ]);
+    responses(success({ ...raw, status: 'XFER_AWAY' }));
+    expect(await provider().getDomain('example.com')).toMatchObject({ deleted: true });
+    responses(success(raw));
+    expect(await provider().getDomain('example.com')).toMatchObject({ deleted: false });
+  });
   it('rejects detail for a different domain', async () => {
     responses(success({ ...raw, domain_name: 'other.com' }));
     await expect(provider().getDomain('example.com')).rejects.toThrow(/identity/);
@@ -179,15 +248,15 @@ describe('101domain pricing and availability', () => {
     const names = Array.from({ length: 51 }, (_, i) => `name${i}.com`);
     const mock = responses(
       success(
-        names.slice(0, 50).map(domain_name => ({ domain_name, available: true, pricing: quote }))
+        names.slice(0, 50).map(domain_name => ({ domain_name, available: true, pricing: [quote] }))
       ),
-      success([{ domain_name: names[50], available: false, pricing: { ...quote, premium: true } }])
+      success([{ domain_name: names[50], available: true, pricing: [{ ...quote, premium: true }] }])
     );
     const result = await provider().checkAvailability(names);
     expect(result).toHaveLength(51);
     expect(body(mock, 0)).toEqual({ domains: names.slice(0, 50), pricing_term: 1 });
     expect(result[50]).toMatchObject({
-      available: false,
+      available: true,
       premium: true,
       price: 12.5,
       renewalPrice: 15,
@@ -229,8 +298,11 @@ describe('101domain pricing and availability', () => {
     const mock = responses(
       success({
         domain_name: 'EXAMPLE.COM',
-        available: false,
-        pricing: { ...quote, renew: undefined },
+        available: true,
+        pricing: [
+          { ...quote, term_years: 2, renew: '99.00' },
+          { ...quote, renew: undefined },
+        ],
       })
     );
     expect(await provider().getPricing('example.com')).toMatchObject({
@@ -240,9 +312,17 @@ describe('101domain pricing and availability', () => {
     expect(url(mock).searchParams.get('domain_name')).toBe('example.com');
     expect(url(mock).searchParams.get('pricing_terms')).toBe('1');
     responses(
-      success({ domain_name: 'example.com', available: false, pricing: { ...quote, renew: '' } })
+      success({ domain_name: 'example.com', available: true, pricing: [{ ...quote, renew: '' }] })
     );
     await expect(provider().getPricing('example.com')).rejects.toThrow(/price/);
+  });
+  it('has no price for a taken name, the account’s own included', async () => {
+    responses(success([{ domain_name: 'TAKEN.COM', available: false, pricing: null }]));
+    expect(await provider().checkAvailability(['taken.com'])).toEqual([
+      { domainName: 'taken.com', available: false, period: 1 },
+    ]);
+    responses(success({ domain_name: 'TAKEN.COM', available: false, pricing: null }));
+    await expect(provider().getPricing('taken.com')).rejects.toThrow(NotFoundError);
   });
 });
 
@@ -462,6 +542,16 @@ describe('101domain URL forwarding', () => {
     });
     expect(missing).toHaveBeenCalledTimes(1);
   });
+  it('reads all-null forwarding fields as no rule', async () => {
+    responses(success(raw));
+    expect(await provider().getDomainForwarding('example.com')).toEqual([]);
+    responses(success({ ...raw, web_forwarding: null }));
+    expect(await provider().getDomainForwarding('example.com')).toEqual([]);
+    responses(
+      success({ ...raw, web_forwarding: { destination: 'https://a.example/', type: null } })
+    );
+    await expect(provider().getDomainForwarding('example.com')).rejects.toThrow(/forwarding/);
+  });
   it('reports cloaked forwarding but rejects creating masking, temporary or subdomain rules', async () => {
     responses(
       success({ ...raw, web_forwarding: { destination: 'https://target.example/', type: 'cloak' } })
@@ -482,5 +572,74 @@ describe('101domain URL forwarding', () => {
       ])
     ).rejects.toThrow(ConfigurationError);
     expect(mock).not.toHaveBeenCalled();
+  });
+});
+
+describe('101domain read-only API keys', () => {
+  const denied = () =>
+    apiError(
+      403,
+      'INSUFFICIENT_PERMISSIONS',
+      'The provided token does not have the required scope(s).'
+    );
+
+  it('connects and syncs with only the read scopes', async () => {
+    responses(page([raw]), page([raw]));
+    expect(await provider().testConnection()).toMatchObject({ success: true });
+    expect(await provider().listDomains()).toHaveLength(1);
+  });
+  it('fails a connection test with a clear message when domains_read is missing', async () => {
+    responses(denied());
+    const result = await provider().testConnection();
+    expect(result.success).toBe(false);
+    expect(result.message).toMatch(/does not have the domains_read scope/);
+  });
+  it('names dns_write when a nameserver change is refused, with a definite outcome', async () => {
+    const mock = responses(denied());
+    const result = await provider({ retries: 3 }).updateNameservers('example.com', [
+      'ns1.new.net',
+      'ns2.new.net',
+    ]);
+    expect(result).toEqual({
+      success: false,
+      message:
+        '101domain: this API key does not have the dns_write scope. Create a key with dns_write to change DNS records and nameservers.',
+    });
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
+  it('reports a refused first DNS write as nothing changed', async () => {
+    const record = { id: 'r1', name: 'www', type: 'A', value: '192.0.2.1', ttl: 3600 };
+    const mock = responses(success([record]), denied());
+    const result = await provider().setDnsRecords('example.com', [
+      { type: 'A', name: 'www', value: '192.0.2.2', ttl: 3600 },
+    ]);
+    expect(result.success).toBe(false);
+    expect(result.outcome).toBeUndefined();
+    expect(result.message).toMatch(/dns_write scope/);
+    expect(result.message).not.toMatch(/not atomic/);
+    expect(mock).toHaveBeenCalledTimes(2);
+  });
+  it('warns of a partial zone when a later DNS batch is refused', async () => {
+    const record = { id: 'r1', name: 'www', type: 'A', value: '192.0.2.1', ttl: 3600 };
+    responses(success([record]), success([{ id: 'n1' }]), denied());
+    const result = await provider().setDnsRecords('example.com', [
+      { type: 'TXT', name: '_new', value: 'added', ttl: 3600 },
+    ]);
+    expect(result.success).toBe(false);
+    expect(result.message).toMatch(/not atomic/);
+  });
+  it('names domains_write when a forwarding change is refused', async () => {
+    responses(success(raw), denied());
+    const result = await provider().setDomainForwarding('example.com', [
+      { host: '@', type: 'permanent', url: 'https://target.example/' },
+    ]);
+    expect(result.success).toBe(false);
+    expect(result.message).toMatch(/does not have the domains_write scope/);
+  });
+  it('names dns_read when DNS records cannot be read', async () => {
+    responses(denied());
+    await expect(provider().getDnsRecords('example.com')).rejects.toThrow(
+      /does not have the dns_read scope/
+    );
   });
 });
