@@ -108,18 +108,14 @@ class NamecomHttpClient extends HttpClient {
       }),
       url
     );
-    if (error instanceof RateLimitError) {
-      const retryAfter = response.headers.get('retry-after');
-      const seconds = retryAfter == null ? NaN : Number(retryAfter);
-      const date = retryAfter == null ? NaN : Date.parse(retryAfter);
-      const reset = response.headers.get('x-ratelimit-reset');
-      error.retryAfter = Number.isFinite(seconds)
-        ? Math.max(0, seconds)
-        : Number.isFinite(date)
-          ? Math.max(0, (date - Date.now()) / 1000)
-          : reset != null && Number.isFinite(Number(reset))
-            ? Math.max(0, Number(reset) - Date.now() / 1000)
-            : undefined;
+    // The shared client has already read Retry-After. Without a usable one,
+    // fall back to X-RateLimit-Reset (Unix seconds); otherwise leave it unset
+    // so the configured backoff applies.
+    if (error instanceof RateLimitError && error.retryAfter === undefined) {
+      const reset = response.headers.get('x-ratelimit-reset')?.trim();
+      if (reset && /^\d+(?:\.\d+)?$/.test(reset)) {
+        error.retryAfter = Math.max(0, Math.ceil(Number(reset) - Date.now() / 1000));
+      }
     }
     return error;
   }
