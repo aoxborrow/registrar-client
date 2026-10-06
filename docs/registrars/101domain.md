@@ -40,10 +40,11 @@ restrictions support IPv4/IPv6, up to ten addresses, without CIDR ranges.
 - DNS records: A, AAAA, CNAME, NS (subdomains), MX, TXT, SRV and CAA. Available
   only on 101domain/SWA managed DNS. Content-derived record IDs change after an
   edit. `setDnsRecords` reconciles the complete custom zone: preserve identical
-  records, create additions, then delete stale IDs in batches of 25. Replacement
+  records, PATCH existing host/type pairs, create additions, then delete stale IDs
+  in batches of 25. Edited records receive new IDs and are never stale-deleted. Replacement
   is not atomic. A rejected creation leaves stale records intact; a partial
   failure requires reading the zone before retrying. Apex NS is never replaced
-  through the records API. Incompatible CNAME transitions can be rejected by the
+  through the records API. Cross-type CNAME transitions can be rejected by the
   registrar; the adapter stops rather than removing existing records first.
 - URL forwarding: one permanent (301) apex rule. Existing cloaked forwarding is
   readable as `masked`; creating masking, temporary redirects and subdomain

@@ -312,8 +312,7 @@ describe('101domain DNS reconciliation', () => {
   it('preserves SWA proxying when replacing content and rejects automatic TTL on new records', async () => {
     const mock = responses(
       success([{ id: 'old', name: 'www', type: 'A', value: '192.0.2.1', ttl: 1, proxied: true }]),
-      success([]),
-      success(null)
+      success([{ old_id: 'old', id: 'new' }])
     );
     expect(
       await provider().setDnsRecords('example.com', [
@@ -321,7 +320,7 @@ describe('101domain DNS reconciliation', () => {
       ])
     ).toMatchObject({ success: true });
     expect(body(mock, 1)).toEqual({
-      records: [{ name: 'www', type: 'A', value: '192.0.2.2', ttl: 1, proxied: true }],
+      records: [{ id: 'old', value: '192.0.2.2', ttl: 1, proxied: true }],
     });
     const fresh = responses(success([]));
     expect(
@@ -332,6 +331,39 @@ describe('101domain DNS reconciliation', () => {
     expect(fresh).toHaveBeenCalledTimes(1);
   });
   const record = { id: 'stable', type: 'TXT', name: '', value: 'keep', ttl: 3600 };
+  it('edits a CNAME by ID and never deletes its replacement ID', async () => {
+    const old = {
+      id: 'cname-old',
+      type: 'CNAME',
+      name: 'www',
+      value: 'old.example.net.',
+      ttl: 3600,
+    };
+    const mock = responses(
+      success([old, record]),
+      success([{ old_id: 'cname-old', id: 'cname-new' }]),
+      success(null)
+    );
+    expect(
+      await provider().setDnsRecords('example.com', [
+        { type: 'CNAME', name: 'www', value: 'new.example.net.', ttl: 3600 },
+      ])
+    ).toMatchObject({ success: true });
+    expect(mock.mock.calls.map(([, req]) => req?.method)).toEqual(['GET', 'PATCH', 'DELETE']);
+    expect(body(mock, 1)).toEqual({
+      records: [{ id: 'cname-old', value: 'new.example.net.', ttl: 3600 }],
+    });
+    expect(body(mock, 2)).toEqual({ ids: ['stable'] });
+  });
+  it('stops after an unconfirmed edit without deleting any stale DNS', async () => {
+    const mock = responses(success([record]), success([]));
+    expect(
+      await provider().setDnsRecords('example.com', [
+        { type: 'TXT', name: '@', value: 'changed', ttl: 3600 },
+      ])
+    ).toMatchObject({ success: false, outcome: 'unknown' });
+    expect(mock.mock.calls.map(([, req]) => req?.method)).toEqual(['GET', 'PATCH']);
+  });
   it('preserves unchanged IDs, creates additions before stale deletes, and batches at 25', async () => {
     const old = { ...record, id: 'stale', name: 'old', value: 'delete' };
     const mock = responses(success([record, old]), success([]), success([]), success(null));
