@@ -194,6 +194,9 @@ export interface DomainAvailability {
   premium?: boolean;
   // registration price in major currency units (e.g. 11.99), when the API reports it
   price?: number;
+  // annual renewal price in major currency units, when the API reports one for
+  // this specific name (e.g. a premium name's renewal)
+  renewalPrice?: number;
   // ISO 4217 currency code, e.g. "USD"
   currency?: string;
   // the registration period the price covers, in years
