@@ -216,6 +216,9 @@ export class DynadotRegistrar extends BaseRegistrar {
           sandbox: 'https://api-sandbox.dynadot.com',
         }),
         headers: { Authorization: `Bearer ${credentials.apiKey}` },
+        // HTTP 429 can omit Retry-After. Avoid exhausting all attempts inside
+        // Dynadot's regular-tier minute window in that case.
+        rateLimitFallbackSeconds: 60,
       },
       options
     );

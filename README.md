@@ -503,6 +503,11 @@ Requests retry with exponential backoff (`retries`, default 2). What may be
 re-sent depends on where the failure happened and on whether the call reads or
 writes, and is the same for every provider:
 
+HTTP 429 honors valid `Retry-After` delay-seconds and HTTP dates. Missing or
+invalid headers use the provider's fallback or the configured backoff; Dynadot
+uses a conservative 60-second fallback. An explicit zero or past date remains
+an immediate retry instruction from the server.
+
 | Failure                                                                    | Read  | Write                                  |
 | -------------------------------------------------------------------------- | ----- | -------------------------------------- |
 | The registrar never saw it: DNS failure, connection refused, TLS handshake | Retry | Retry                                  |

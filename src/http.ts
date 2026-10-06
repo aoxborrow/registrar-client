@@ -31,6 +31,9 @@ export interface HttpClientConfig {
   // unset for APIs where the method means nothing: Namecheap and NameSilo send
   // writes as GET. Those mark their nested reads with `asRead` instead.
   safeMethods?: readonly string[];
+  // A provider-specific delay for HTTP 429 without a usable Retry-After.
+  // Otherwise the normal exponential backoff applies.
+  rateLimitFallbackSeconds?: number;
 }
 
 export const REST_SAFE_METHODS: readonly string[] = ['GET', 'HEAD'];
@@ -260,8 +263,10 @@ export class HttpClient {
       case 404:
         return new NotFoundError(message);
       case 429: {
-        const retryAfter = Number(response.headers.get('retry-after'));
-        return new RateLimitError(message, Number.isFinite(retryAfter) ? retryAfter : undefined);
+        const retryAfter =
+          parseRetryAfter(response.headers.get('retry-after')) ??
+          this.config.rateLimitFallbackSeconds;
+        return new RateLimitError(message, retryAfter);
       }
       default: {
         if (response.status >= 500) {
@@ -275,6 +280,25 @@ export class HttpClient {
       }
     }
   }
+}
+
+// RFC 9110 Retry-After is delay-seconds or an HTTP date. Absence must stay
+// undefined: Number(null) is zero and would bypass the configured backoff.
+function parseRetryAfter(value: string | null): number | undefined {
+  const text = value?.trim();
+  if (!text) return undefined;
+  if (/^\d+$/.test(text)) {
+    const seconds = Number(text);
+    return Number.isSafeInteger(seconds) ? seconds : undefined;
+  }
+  // Accept the HTTP-date formats from RFC 9110, not Date.parse's permissive
+  // numeric/calendar inputs. The obsolete asctime form has implicit UTC.
+  const zonedDate =
+    /^(?:[a-z]{3}, \d{2} [a-z]{3} \d{4}|[a-z]+, \d{2}-[a-z]{3}-\d{2}) \d{2}:\d{2}:\d{2} GMT$/i;
+  const asctimeDate = /^[a-z]{3} [a-z]{3} (?: \d|\d{2}) \d{2}:\d{2}:\d{2} \d{4}$/i;
+  if (!zonedDate.test(text) && !asctimeDate.test(text)) return undefined;
+  const date = Date.parse(asctimeDate.test(text) ? `${text} GMT` : text);
+  return Number.isFinite(date) ? Math.max(0, Math.ceil((date - Date.now()) / 1000)) : undefined;
 }
 
 // A retryable failure that leaves a write's result unknown: the request may
