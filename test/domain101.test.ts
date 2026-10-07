@@ -511,6 +511,22 @@ describe('101domain DNS reconciliation', () => {
     ).toMatchObject({ success: true });
     expect(mock).toHaveBeenCalledTimes(1);
   });
+  it('keeps the root target of a null MX and a "no service" SRV', async () => {
+    const zone = [
+      { id: 'm', name: '@', type: 'MX', value: '0 .', ttl: 3600 },
+      { id: 's', name: '_sip._tcp', type: 'SRV', value: '0 0 0 .', ttl: 3600 },
+    ];
+    responses(success(zone));
+    expect((await provider().getDnsRecords('example.com')).map(r => r.value)).toEqual(['.', '.']);
+    const mock = responses(success(zone));
+    expect(
+      await provider().setDnsRecords('example.com', [
+        { type: 'MX', name: '@', value: '.', priority: 0, ttl: 3600 },
+        { type: 'SRV', name: '_sip._tcp', value: '.', priority: 0, weight: 0, port: 0, ttl: 3600 },
+      ])
+    ).toMatchObject({ success: true });
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
   it('accepts existing records the writer would refuse, and keeps apex NS', async () => {
     const zone = [
       { id: 'swa', name: '@', type: 'A', value: '192.0.2.1', ttl: 1, proxied: true },

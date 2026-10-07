@@ -666,7 +666,9 @@ function fromRecord(raw: RawRecord): DnsRecord {
 function canonicalValue(type: string, value: string): string {
   const kind = type.toUpperCase();
   if (kind === 'TXT') return unquoteTxt(value);
-  if (['CNAME', 'NS', 'MX', 'SRV'].includes(kind)) return value.replace(/\.$/, '');
+  // `.` alone is the root, a null MX or "no service" SRV target; it keeps its dot
+  if (['CNAME', 'NS', 'MX', 'SRV'].includes(kind))
+    return value === '.' ? '.' : value.replace(/\.$/, '');
   return value;
 }
 // A TXT value made only of quoted strings ("a" "b"), joined and unescaped; any
