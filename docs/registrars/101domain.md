@@ -47,7 +47,9 @@ restrictions support IPv4/IPv6, up to ten addresses, without CIDR ranges.
 - Nameservers: 2–13 distinct hostnames; no glue records. Accepted changes return
   `pending: true` until registry processing completes. Callers must re-read the
   nameservers rather than immediately showing the submitted set as active.
-- DNS records: A, AAAA, CNAME, NS (subdomains), MX, TXT, SRV and CAA. Available
+- DNS records: A, AAAA, CNAME, NS (subdomains), MX, TXT, SRV and CAA. The API
+  returns hostnames with a trailing dot and TXT as quoted strings; both are read
+  and compared bare, so re-saving a zone as read changes nothing. Available
   only on 101domain/SWA managed DNS. Content-derived record IDs change after an
   edit. `setDnsRecords` reconciles the complete custom zone: preserve identical
   records, PATCH existing host/type pairs, create additions, then delete stale IDs
@@ -83,8 +85,13 @@ or forwarding writes only on an explicitly disposable domain.
 Live-verified 2026-10-06 (reads only, from Node): connection, portfolio
 filtering, detail, nameservers, DNS records (and the third-party-nameserver
 error), forwarding with and without a rule, availability with prices, and TLD
-and domain pricing. DNS, nameserver and forwarding writes are not yet verified
-live.
+and domain pricing.
+
+Writes live-verified 2026-10-07 on a test domain: DNS add, edit by ID, no-op
+re-save and restore; forwarding change, clear and create. A nameserver change
+on an update-locked domain (`clientUpdateProhibited`) returns "This domain is
+currently update-locked"; the API can't remove that lock, and an unlocked
+nameserver change is not yet verified.
 
 ## Sources checked 2026-10-06
 

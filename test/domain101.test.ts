@@ -431,7 +431,7 @@ describe('101domain DNS reconciliation', () => {
     ).toMatchObject({ success: true });
     expect(mock.mock.calls.map(([, req]) => req?.method)).toEqual(['GET', 'PATCH', 'DELETE']);
     expect(body(mock, 1)).toEqual({
-      records: [{ id: 'cname-old', value: 'new.example.net.', ttl: 3600 }],
+      records: [{ id: 'cname-old', value: 'new.example.net', ttl: 3600 }],
     });
     expect(body(mock, 2)).toEqual({ ids: ['stable'] });
   });
@@ -480,10 +480,36 @@ describe('101domain DNS reconciliation', () => {
     ];
     const mock = responses(success(records), success(records));
     const result = await provider().getDnsRecords('example.com');
-    expect(result[0]).toMatchObject({ priority: 10, value: 'mail.example.com.' });
+    expect(result[0]).toMatchObject({ priority: 10, value: 'mail.example.com' });
     expect(result[1]).toMatchObject({ priority: 5, weight: 20, port: 443 });
     expect(await provider().setDnsRecords('example.com', result)).toMatchObject({ success: true });
     expect(mock).toHaveBeenCalledTimes(2);
+  });
+  it('reads TXT unquoted and hostnames without the trailing dot, so a re-save is a no-op', async () => {
+    const zone = [
+      { id: 't', name: '@', type: 'TXT', value: '"v=spf1 include:spf.example -all"', ttl: 3600 },
+      { id: 'k', name: 'dkim', type: 'TXT', value: '"p=abc" "def\\"g"', ttl: 3600 },
+      { id: 'c', name: 'www', type: 'CNAME', value: 'example.net.', ttl: 3600 },
+      { id: 'm', name: '@', type: 'MX', value: '10 mx.example.net.', ttl: 3600 },
+    ];
+    responses(success(zone));
+    expect((await provider().getDnsRecords('example.com')).map(r => r.value)).toEqual([
+      'v=spf1 include:spf.example -all',
+      'p=abcdef"g',
+      'example.net',
+      'mx.example.net',
+    ]);
+    // the values as typed, quoted or dotted either way, match what's there
+    const mock = responses(success(zone));
+    expect(
+      await provider().setDnsRecords('example.com', [
+        { type: 'TXT', name: '@', value: 'v=spf1 include:spf.example -all', ttl: 3600 },
+        { type: 'TXT', name: 'dkim', value: '"p=abc" "def\\"g"', ttl: 3600 },
+        { type: 'CNAME', name: 'www', value: 'example.net.', ttl: 3600 },
+        { type: 'MX', name: '@', value: 'mx.example.net', priority: 10, ttl: 3600 },
+      ])
+    ).toMatchObject({ success: true });
+    expect(mock).toHaveBeenCalledTimes(1);
   });
   it('accepts existing records the writer would refuse, and keeps apex NS', async () => {
     const zone = [

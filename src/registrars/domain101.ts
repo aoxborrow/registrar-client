@@ -645,20 +645,36 @@ function fromRecord(raw: RawRecord): DnsRecord {
   if (raw.type === 'MX') {
     const match = /^(\d+)\s+(.+)$/.exec(raw.value);
     if (!match) throw invalid('MX record');
-    return { ...common, value: match[2], priority: Number(match[1]) };
+    return { ...common, value: canonicalValue('MX', match[2]), priority: Number(match[1]) };
   }
   if (raw.type === 'SRV') {
     const match = /^(\d+)\s+(\d+)\s+(\d+)\s+(.+)$/.exec(raw.value);
     if (!match) throw invalid('SRV record');
     return {
       ...common,
-      value: match[4],
+      value: canonicalValue('SRV', match[4]),
       priority: Number(match[1]),
       weight: Number(match[2]),
       port: Number(match[3]),
     };
   }
-  return { ...common, value: raw.value };
+  return { ...common, value: canonicalValue(raw.type, raw.value) };
+}
+// 101domain returns hostnames fully qualified ("mx.example.net.") and TXT as
+// quoted character-strings ("\"v=spf1 -all\""), but accepts both bare. Read and
+// compare them bare, so a record written as read back is left unchanged.
+function canonicalValue(type: string, value: string): string {
+  const kind = type.toUpperCase();
+  if (kind === 'TXT') return unquoteTxt(value);
+  if (['CNAME', 'NS', 'MX', 'SRV'].includes(kind)) return value.replace(/\.$/, '');
+  return value;
+}
+// A TXT value made only of quoted strings ("a" "b"), joined and unescaped; any
+// other value is returned as is.
+function unquoteTxt(value: string): string {
+  const chunk = /"((?:[^"\\]|\\.)*)"/g;
+  if (!/^\s*"(?:[^"\\]|\\.)*"(?:\s+"(?:[^"\\]|\\.)*")*\s*$/.test(value)) return value;
+  return [...value.matchAll(chunk)].map(m => m[1].replace(/\\(.)/g, '$1')).join('');
 }
 // The API's write shape for a record. `strict` applies the write rules; an
 // existing record is read with it off, only to compare against.
@@ -684,7 +700,7 @@ function recordSpec(record: DnsRecord, domain: string, strict = true): RecordSpe
     if (!Number.isInteger(record.priority) || record.priority! < 0 || record.priority! > 65535)
       reject('MX/SRV priority is required');
     result.priority = record.priority!;
-    result.target = record.value;
+    result.target = canonicalValue(type, record.value);
     if (type === 'SRV') {
       if (![record.weight, record.port].every(n => Number.isInteger(n) && n! >= 0 && n! <= 65535))
         reject('SRV weight and port are required');
@@ -701,7 +717,7 @@ function recordSpec(record: DnsRecord, domain: string, strict = true): RecordSpe
       result.tag = match[2];
       result.value = match[3];
     }
-  } else result.value = record.value;
+  } else result.value = canonicalValue(type, record.value);
   return result;
 }
 function recordSignature(record: RecordSpec): string {
