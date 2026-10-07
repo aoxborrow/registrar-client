@@ -25,6 +25,9 @@ export {
 } from './features';
 export type { RegistrarFeature } from './features';
 
+// DNS record syntax and canonical form
+export * from './dns-records';
+
 // bundled providers
 export { CloudflareRegistrar } from './registrars/cloudflare';
 export { Domain101Registrar } from './registrars/domain101';
