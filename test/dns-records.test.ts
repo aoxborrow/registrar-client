@@ -106,6 +106,7 @@ describe('prepareRdata', () => {
     expect(() => prepareRdata('MX', 'mail.example.net')).toThrow(/<priority> <mail host>/);
     expect(() => prepareRdata('MX', '70000 mail.example.net')).toThrow(/0 to 65535/);
     expect(() => prepareRdata('MX', '010 mail.example.net')).toThrow(/0 to 65535/);
+    expect(() => prepareRdata('MX', '10 192.0.2.1')).toThrow(/not an address/);
   });
   it('SRV, including the root target for "no service"', () => {
     expect(prepareRdata('SRV', '10 5 5060 SIP.example.com.')).toBe('10 5 5060 sip.example.com');
@@ -113,6 +114,7 @@ describe('prepareRdata', () => {
     expect(() => prepareRdata('SRV', '10 5 sip.example.com')).toThrow(/<priority> <weight>/);
     expect(() => prepareRdata('SRV', '10 5 70000 sip.example.com')).toThrow(/port/);
     expect(() => prepareRdata('SRV', '10 x 1 sip.example.com')).toThrow(/weight/);
+    expect(() => prepareRdata('SRV', '10 5 5060 192.0.2.1.')).toThrow(/not an address/);
   });
   it('CAA, quoted or bare, comes back quoted with a lowercase tag', () => {
     expect(prepareRdata('CAA', '0 issue "letsencrypt.org"')).toBe('0 issue "letsencrypt.org"');

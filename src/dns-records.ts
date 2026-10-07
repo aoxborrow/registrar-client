@@ -278,11 +278,12 @@ function prepareMailExchange(text: string): string {
 }
 
 /**
- * MX or SRV host. A lone `.` is the root: "no service here" (null MX, RFC 7505;
- * SRV, RFC 2782). It stays `.` because there is no name left to prepare.
+ * MX or SRV host: a host name, never an address (RFC 2181 §10.3). A lone `.`
+ * is the root: "no service here" (null MX, RFC 7505; SRV, RFC 2782). It stays
+ * `.` because there is no name left to prepare.
  */
 function prepareServiceHost(text: string): string {
-  return text === '.' ? '.' : prepareName(text, 'target');
+  return text === '.' ? '.' : prepareHostTarget(text, undefined, false);
 }
 
 /** `priority weight port target`, each number a 16-bit unsigned integer. */
