@@ -204,16 +204,17 @@ describe('requiresNameserversFetch per provider', () => {
   // rest, which read a dedicated NS endpoint. A getNameservers rewrite that
   // changes this delegation should update the flag here too.
   const expected: Record<string, boolean> = {
-    cloudflare: true,
-    dynadot: false,
-    gandi: true,
-    godaddy: false,
-    namebright: true,
-    namecheap: true,
-    namecom: false,
-    namesilo: false,
-    porkbun: true,
-    spaceship: false,
+    '101domain': true,
+    'cloudflare': true,
+    'dynadot': false,
+    'gandi': true,
+    'godaddy': false,
+    'namebright': true,
+    'namecheap': true,
+    'namecom': false,
+    'namesilo': false,
+    'porkbun': true,
+    'spaceship': false,
   };
 
   it('covers every registrar', () => {

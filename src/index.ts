@@ -27,6 +27,7 @@ export type { RegistrarFeature } from './features';
 
 // bundled providers
 export { CloudflareRegistrar } from './registrars/cloudflare';
+export { Domain101Registrar } from './registrars/domain101';
 export { DynadotRegistrar } from './registrars/dynadot';
 export { GandiRegistrar } from './registrars/gandi';
 export { GoDaddyRegistrar } from './registrars/godaddy';
