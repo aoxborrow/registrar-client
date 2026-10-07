@@ -51,11 +51,11 @@
       "require": "./dist/index.cjs",
       "default": "./dist/index.js"
     },
-    "./dns": {
-      "types": "./dist/dns.d.ts",
-      "import": "./dist/dns.js",
-      "require": "./dist/dns.cjs",
-      "default": "./dist/dns.js"
+    "./utils": {
+      "types": "./dist/utils.d.ts",
+      "import": "./dist/utils.js",
+      "require": "./dist/utils.cjs",
+      "default": "./dist/utils.js"
     }
   },
   "files": [
