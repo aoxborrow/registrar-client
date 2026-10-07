@@ -50,6 +50,12 @@
       "import": "./dist/index.js",
       "require": "./dist/index.cjs",
       "default": "./dist/index.js"
+    },
+    "./dns": {
+      "types": "./dist/dns.d.ts",
+      "import": "./dist/dns.js",
+      "require": "./dist/dns.cjs",
+      "default": "./dist/dns.js"
     }
   },
   "files": [

@@ -1,7 +1,8 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/index.ts'],
+  // `dns` is its own entry so it can be imported without the providers
+  entry: ['src/index.ts', 'src/dns.ts'],
   // emit both modern ESM and CommonJS for broad consumer compatibility
   format: ['esm', 'cjs'],
   // .js for ESM, .cjs for CJS (matches the package.json exports map)

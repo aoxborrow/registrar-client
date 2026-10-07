@@ -425,6 +425,35 @@ sandbox (Name.com offers no domain deletion/reset there); it is excluded from th
 default offline suite. Transfer completion and production behavior need separate
 verification; sandbox transfers are not deterministic.
 
+## DNS record syntax
+
+`@aoxborrow/registrar-client/dns` checks DNS record syntax and puts records in
+one canonical form, with no registrar code, so a browser UI can validate input
+without loading the providers. It's pure and dependency-free.
+
+```ts
+import { findCnameConflicts, prepareEntry, toDnsEntry } from '@aoxborrow/registrar-client/dns';
+
+// throws DnsSyntaxError with a message safe to show a person
+prepareEntry(toDnsEntry({ type: 'MX', name: '@', value: 'Mail.Example.net.', priority: 10 }));
+// → { owner: '@', kind: 'MX', ttl: 3600, rdata: '10 mail.example.net' }
+
+findCnameConflicts(records.map(r => toDnsEntry(r))); // [{ owner, kind, detail }]
+```
+
+- Names are folded to lowercase with one trailing dot removed, and are never
+  joined to a zone: `www` and `www.example.com` are different owners, and `@`
+  stays `@`. Underscore labels (`_dmarc`) and one leftmost `*` are allowed.
+- Data syntax is checked for A, AAAA, CNAME, NS, MX (including null MX), TXT,
+  SRV, CAA and DS. Any other type is trimmed and passed through, so a
+  provider-specific type still round-trips.
+- `findCnameConflicts` and `findRepeatedRecords` check a whole set of records.
+- `toDnsEntry` adapts a `DnsRecord` (separate MX/SRV number fields) to the
+  entry shape the checks take.
+
+These are DNS rules only. Each provider still applies its own limits, such as
+a minimum TTL or the record types it accepts.
+
 ## Sandbox environments
 
 Providers that offer a test environment accept `{ environment: 'sandbox' }` at
