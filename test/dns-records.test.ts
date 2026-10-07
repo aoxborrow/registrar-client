@@ -13,7 +13,7 @@ import {
   toDnsEntry,
   useLabelMapper,
   type DnsEntry,
-} from '../src/utils-entry';
+} from '../src/index';
 
 const entry = (owner: string, kind: string, rdata: string, ttl = 300): DnsEntry => ({
   owner,

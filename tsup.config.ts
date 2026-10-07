@@ -1,8 +1,7 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  // `utils` is its own entry so its pure helpers load without the providers
-  entry: { index: 'src/index.ts', utils: 'src/utils-entry.ts' },
+  entry: ['src/index.ts'],
   // emit both modern ESM and CommonJS for broad consumer compatibility
   format: ['esm', 'cjs'],
   // .js for ESM, .cjs for CJS (matches the package.json exports map)

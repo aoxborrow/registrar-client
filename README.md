@@ -427,14 +427,12 @@ verification; sandbox transfers are not deterministic.
 
 ## DNS record syntax
 
-`@aoxborrow/registrar-client/utils` is the library's pure helpers and data,
-with no registrar code, so a browser UI can use them without loading the
-providers (the main entry pulls in all of them). It includes the `Feature`
-ids and core/extended feature lists, and DNS record syntax checks that put
-records in one canonical form.
+Pure functions for checking DNS record syntax and putting records in one
+canonical form, with no network calls, so a UI can validate what someone types
+before it reaches a registrar.
 
 ```ts
-import { findCnameConflicts, prepareEntry, toDnsEntry } from '@aoxborrow/registrar-client/utils';
+import { findCnameConflicts, prepareEntry, toDnsEntry } from '@aoxborrow/registrar-client';
 
 // throws DnsSyntaxError with a message safe to show a person
 prepareEntry(toDnsEntry({ type: 'MX', name: '@', value: 'Mail.Example.net.', priority: 10 }));
