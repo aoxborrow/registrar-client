@@ -200,11 +200,11 @@ export function isIpv6(text: string): boolean {
   const compressedAt = body.indexOf('::');
   if (compressedAt !== -1) {
     if (body.indexOf('::', compressedAt + 1) !== -1) return false;
-    const head = body.slice(0, compressedAt).split(':').filter(Boolean);
-    const tail = body
-      .slice(compressedAt + 2)
-      .split(':')
-      .filter(Boolean);
+    // Each side of `::` is empty or a run of groups. Splitting an empty side
+    // gives no groups; any other empty group is a stray colon (`::1:`, `:1::`).
+    const groupsOf = (side: string) => (side === '' ? [] : side.split(':'));
+    const head = groupsOf(body.slice(0, compressedAt));
+    const tail = groupsOf(body.slice(compressedAt + 2));
     // `::` replaces at least one group, so at most 7 groups are written out.
     if (head.length + tail.length > 7) return false;
     return [...head, ...tail].every(group => /^[0-9a-fA-F]{1,4}$/.test(group));

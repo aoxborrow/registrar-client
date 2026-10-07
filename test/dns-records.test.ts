@@ -69,7 +69,15 @@ describe('addresses', () => {
     }
   });
   it('checks IPv6, with one :: and an optional IPv4 tail', () => {
-    for (const good of ['2001:db8::1', '::', '::1', '1:2:3:4:5:6:7:8', '::ffff:192.0.2.1']) {
+    for (const good of [
+      '2001:db8::1',
+      '::',
+      '::1',
+      '1::',
+      '1:2:3:4:5:6:7::',
+      '1:2:3:4:5:6:7:8',
+      '::ffff:192.0.2.1',
+    ]) {
       expect(isIpv6(good)).toBe(true);
     }
     for (const bad of [
@@ -78,6 +86,12 @@ describe('addresses', () => {
       'fe80::1%eth0',
       '::ffff:999.0.2.1',
       'g::1',
+      // a stray colon beside `::`
+      '2001:db8::1:',
+      ':2001:db8::1',
+      ':::1',
+      '1:::',
+      ':1:2:3:4:5:6:7:8',
     ]) {
       expect(isIpv6(bad)).toBe(false);
     }
