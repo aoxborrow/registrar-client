@@ -40,7 +40,6 @@ interface NbOrder {
 // nameservers (those come from account/domains/{domain}/nameservers).
 interface NbDomain {
   DomainName?: string;
-  domain?: string;
   Status?: string;
   ExpirationDate?: string;
   RegistrationDate?: string;
@@ -48,6 +47,8 @@ interface NbDomain {
   Locked?: boolean;
   WhoIsPrivacy?: boolean;
   AuthCode?: string;
+  Category?: string;
+  UpgradedDomain?: boolean;
 }
 
 // the paged wrapper GET account/domains returns
@@ -55,16 +56,13 @@ interface NbDomainsPage {
   ResultsTotal?: number;
   CurrentPage?: number;
   Domains?: NbDomain[];
-  domains?: NbDomain[];
 }
 
 // GET account/domains/{domain}/nameservers → { DomainName, NameServers: [...] }.
-// Be lenient about casing and a possible bare array.
+// Be lenient about a possible bare array.
 interface NbNameservers {
   DomainName?: string;
   NameServers?: string[];
-  Nameservers?: string[];
-  nameservers?: string[];
 }
 
 // a contact object inside GET account/domains/{domain}/contacts/all. NameBright
@@ -158,6 +156,44 @@ interface NbAvailability {
     Discount?: number;
     Description?: string;
   };
+}
+
+// Every field name the NameBright interfaces above read, keyed by its lowercase
+// form. NameBright's REST API documents (and used to return) PascalCase JSON —
+// `DomainName`, `ExpirationDate`, `IPV4Address` — but now returns camelCase —
+// `domainName`, `expirationDate`, `ipV4Address` (seen live 2026-10-09). The
+// renamed keys aren't a simple first-letter change (`IPV4Address` vs
+// `ipV4Address`, `CNAMERecords` vs `cnameRecords`), so responses are matched to
+// these names case-insensitively instead.
+// prettier-ignore
+const NB_KEYS = new Map(
+  [
+    // domains
+    'DomainName', 'Status', 'ExpirationDate', 'RegistrationDate', 'AutoRenew', 'Locked',
+    'WhoIsPrivacy', 'AuthCode', 'Category', 'UpgradedDomain', 'ResultsTotal', 'CurrentPage',
+    'Domains', 'NameServers',
+    // contacts
+    'RegistrantContact', 'AdministrativeContact', 'TechnicalContact', 'FirstName', 'LastName',
+    'Organization', 'Department', 'Email', 'Address1', 'Address2', 'City', 'Region', 'Country',
+    'PostalCode', 'PhoneCountry', 'Phone', 'FaxCountry', 'Fax',
+    // host records
+    'ARecords', 'AAAARecords', 'CNAMERecords', 'MXRecords', 'TXTRecords', 'SRVRecords',
+    'RecordId', 'Subdomain', 'IPV4Address', 'IPV6Address', 'RedirectDomain', 'MailServer',
+    'Priority', 'TextRecord', 'Service', 'Protocol', 'Weight', 'Port', 'Target',
+    // availability + orders
+    'ProductTypeName', 'UnitPrice', 'Promotion', 'PromotionPrice', 'Discount', 'Description',
+    'OrderId', 'TotalPrice',
+  ].map(k => [k.toLowerCase(), k])
+);
+
+// rename a response's keys (recursively) to the PascalCase names in NB_KEYS,
+// whatever casing NameBright sent. Unknown keys pass through unchanged.
+function canonicalKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalKeys);
+  if (value === null || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([k, v]) => [NB_KEYS.get(k.toLowerCase()) ?? k, canonicalKeys(v)])
+  );
 }
 
 /**
@@ -259,17 +295,19 @@ export class NameBrightRegistrar extends BaseRegistrar {
     return this.token;
   }
 
-  // issue an authenticated REST request, attaching a fresh bearer token
+  // issue an authenticated REST request, attaching a fresh bearer token. The
+  // response's keys are normalized to PascalCase (see NB_KEYS).
   private async authed<T>(
     config: Omit<RequestConfig, 'headers'>,
     opts?: RequestOptions
   ): Promise<T> {
     const token = await this.getToken(opts);
-    return this.http.request<T>({
+    const res = await this.http.request<unknown>({
       ...config,
       headers: { Authorization: `Bearer ${token}` },
       ...opts,
     });
+    return canonicalKeys(res) as T;
   }
 
   override async testConnection(opts?: RequestOptions): Promise<ConnectionResult> {
@@ -297,9 +335,10 @@ export class NameBrightRegistrar extends BaseRegistrar {
         reqOpts
       );
       // the response may be a bare array or a paged object; be lenient
-      const list = Array.isArray(data) ? data : (data?.Domains ?? data?.domains ?? []);
+      const list = Array.isArray(data) ? data : (data?.Domains ?? []);
 
-      for (const d of list) domains.push(this.toDomain(d));
+      // skip any row without a name rather than emit a blank domain
+      for (const d of list) if (d.DomainName) domains.push(this.toDomain(d));
 
       hasMore = list.length === perPage;
       page++;
@@ -340,7 +379,7 @@ export class NameBrightRegistrar extends BaseRegistrar {
       opts
     );
     if (Array.isArray(res)) return res.map(String);
-    return (res.NameServers ?? res.Nameservers ?? res.nameservers ?? []).map(String);
+    return (res.NameServers ?? []).map(String);
   }
 
   /**
@@ -523,10 +562,12 @@ export class NameBrightRegistrar extends BaseRegistrar {
   ): Promise<OperationResult> {
     try {
       const path = `account/domains/${encodeURIComponent(domainName)}`;
-      const current = await this.authed<NbDomain & { Category?: string; UpgradedDomain?: boolean }>(
-        { path },
-        opts
-      );
+      const current = await this.authed<NbDomain>({ path }, opts);
+      // an unreadable record would make the full-object PUT below reset the
+      // other flags to false, so refuse instead
+      if (!current.DomainName) {
+        return { success: false, message: `NameBright: could not read ${domainName} to update it` };
+      }
       const body = {
         DomainName: current.DomainName,
         Status: current.Status,
@@ -618,7 +659,7 @@ export class NameBrightRegistrar extends BaseRegistrar {
   // normalized Domain shape. Neither endpoint returns nameservers.
   private toDomain(d: NbDomain): Domain {
     return createDomain({
-      domainName: d.DomainName ?? d.domain,
+      domainName: d.DomainName,
       registrar: this.name,
       status: d.Status ?? 'ok',
       createdDate: d.RegistrationDate,

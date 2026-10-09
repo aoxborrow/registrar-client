@@ -421,3 +421,194 @@ describe('NameBright provider', () => {
     expect(res.success).toBe(false);
   });
 });
+
+// NameBright's live API returns camelCase JSON (seen 2026-10-09) where its docs
+// show PascalCase; the keys don't map by first letter alone (ipV4Address,
+// cnameRecords). These fixtures mirror the live response shapes.
+describe('NameBright provider (camelCase responses)', () => {
+  const token = { access_token: 't', token_type: 'bearer', expires_in: 1800 };
+  const liveDomain = (domainName: string) => ({
+    domainName,
+    status: 'Active',
+    expirationDate: '2026-11-25T15:15:44Z',
+    locked: true,
+    autoRenew: true,
+    whoIsPrivacy: true,
+    category: 'DropCatch',
+    upgradedDomain: false,
+    authCode: 'secret',
+  });
+
+  it('listDomains maps the camelCase list response', async () => {
+    const nb = namebright();
+    stubHttp(nb, req => {
+      if (req.path.includes('auth/token')) return token;
+      return {
+        domains: [liveDomain('one.com'), liveDomain('two.net')],
+        resultsTotal: 2,
+        currentPage: 1,
+      };
+    });
+    const domains = await nb.listDomains();
+    expect(domains.map(d => d.domainName)).toEqual(['one.com', 'two.net']);
+    expect(domains[0]).toMatchObject({
+      status: 'active',
+      locked: true,
+      autoRenew: true,
+      privacy: true,
+    });
+    expect(domains[0].expirationDate?.toISOString()).toBe('2026-11-25T15:15:44.000Z');
+    expect(domains[0].renewalDate?.toISOString()).toBe('2026-11-25T15:15:44.000Z');
+  });
+
+  it('listDomains skips rows without a domain name', async () => {
+    const nb = namebright();
+    stubHttp(nb, req => {
+      if (req.path.includes('auth/token')) return token;
+      return { domains: [liveDomain('one.com'), { status: 'Active' }] };
+    });
+    const domains = await nb.listDomains();
+    expect(domains.map(d => d.domainName)).toEqual(['one.com']);
+  });
+
+  it('getDomain and getAuthCode read the camelCase detail response', async () => {
+    const nb = namebright();
+    stubHttp(nb, req => (req.path.includes('auth/token') ? token : liveDomain('one.com')));
+    expect(await nb.getDomain('one.com')).toMatchObject({ domainName: 'one.com', locked: true });
+    expect(await nb.getAuthCode('one.com')).toBe('secret');
+  });
+
+  it('getNameservers reads nameServers', async () => {
+    const nb = namebright();
+    stubHttp(nb, req =>
+      req.path.includes('auth/token')
+        ? token
+        : { domainName: 'one.com', nameServers: ['ns1.example.com', 'ns2.example.com'] }
+    );
+    expect(await nb.getNameservers('one.com')).toEqual(['ns1.example.com', 'ns2.example.com']);
+  });
+
+  it('getContacts maps camelCase contact roles', async () => {
+    const nb = namebright();
+    const contact = (firstName: string) => ({
+      firstName,
+      lastName: 'Doe',
+      email: 'jane@example.com',
+      address1: '1 Main St',
+      city: 'Phoenix',
+      region: 'AZ',
+      country: 'US',
+      postalCode: '85001',
+      phoneCountry: 1,
+      phone: '4805551234',
+    });
+    stubHttp(nb, req =>
+      req.path.includes('auth/token')
+        ? token
+        : {
+            domainName: 'one.com',
+            technicalContact: contact('Tech'),
+            administrativeContact: contact('Admin'),
+            registrantContact: contact('Jane'),
+          }
+    );
+    const contacts = await nb.getContacts('one.com');
+    expect(contacts.registrant).toMatchObject({
+      firstName: 'Jane',
+      state: 'AZ',
+      postalCode: '85001',
+      phone: '+1.4805551234',
+    });
+    expect(contacts.admin?.firstName).toBe('Admin');
+    expect(contacts.tech?.firstName).toBe('Tech');
+  });
+
+  it('getDnsRecords maps camelCase record groups (ipV4Address, cnameRecords)', async () => {
+    const nb = namebright();
+    stubHttp(nb, req =>
+      req.path.includes('auth/token')
+        ? token
+        : {
+            domainName: 'one.com',
+            aRecords: [{ recordId: 1, subdomain: '@', ipV4Address: '192.0.2.1' }],
+            aaaaRecords: [{ recordId: 2, subdomain: '@', ipV6Address: '2001:db8::1' }],
+            cnameRecords: [{ recordId: 3, subdomain: 'www', redirectDomain: 'one.com' }],
+            mxRecords: [{ recordId: 4, subdomain: '@', mailServer: 'mx.one.com', priority: 10 }],
+            txtRecords: [{ recordId: 5, subdomain: '@', textRecord: 'v=spf1 -all' }],
+            srvRecords: [],
+          }
+    );
+    expect(await nb.getDnsRecords('one.com')).toEqual([
+      { type: 'A', name: '@', value: '192.0.2.1' },
+      { type: 'AAAA', name: '@', value: '2001:db8::1' },
+      { type: 'CNAME', name: 'www', value: 'one.com' },
+      { type: 'MX', name: '@', value: 'mx.one.com', priority: 10 },
+      { type: 'TXT', name: '@', value: 'v=spf1 -all' },
+    ]);
+  });
+
+  it('setDnsRecords deletes by the camelCase recordId', async () => {
+    const nb = namebright();
+    const calls = stubHttp(nb, req => {
+      if (req.path.includes('auth/token')) return token;
+      if (req.method) return {};
+      return { aRecords: [{ recordId: 7, subdomain: '@', ipV4Address: '192.0.2.1' }] };
+    });
+    const res = await nb.setDnsRecords('one.com', []);
+    expect(res.success).toBe(true);
+    expect(calls.find(c => c.method === 'DELETE')?.path).toBe(
+      'account/domains/one.com/hostrecords/a/7'
+    );
+  });
+
+  it('checkAvailability reads camelCase status and promotion price', async () => {
+    const nb = namebright();
+    stubHttp(nb, req =>
+      req.path.includes('auth/token')
+        ? token
+        : {
+            domainName: 'free.com',
+            productTypeName: 'Domain Registration',
+            status: 'AvailableForRegistration',
+            unitPrice: 12.99,
+            promotion: { promotionPrice: 9.99, discount: 3, description: 'Sale' },
+          }
+    );
+    expect(await nb.checkAvailability(['free.com'])).toEqual([
+      { domainName: 'free.com', available: true, price: 9.99, currency: 'USD' },
+    ]);
+  });
+
+  it('setAutoRenew read-merges the camelCase record and keeps the other flags', async () => {
+    const nb = namebright();
+    const calls = stubHttp(nb, req => {
+      if (req.path.includes('auth/token')) return token;
+      if (req.method === 'PUT') return {};
+      return liveDomain('one.com');
+    });
+    const res = await nb.setAutoRenew('one.com', false);
+    expect(res.success).toBe(true);
+    expect(calls.find(c => c.method === 'PUT')?.body).toMatchObject({
+      DomainName: 'one.com',
+      Status: 'Active',
+      ExpirationDate: '2026-11-25T15:15:44Z',
+      Locked: true,
+      AutoRenew: false,
+      WhoIsPrivacy: true,
+      Category: 'DropCatch',
+      UpgradedDomain: false,
+    });
+  });
+
+  it('setPrivacy refuses to PUT when the current record cannot be read', async () => {
+    const nb = namebright();
+    const calls = stubHttp(nb, req => {
+      if (req.path.includes('auth/token')) return token;
+      if (req.method === 'PUT') return {};
+      return { unexpected: true };
+    });
+    const res = await nb.setPrivacy('one.com', true);
+    expect(res.success).toBe(false);
+    expect(calls.some(c => c.method === 'PUT')).toBe(false);
+  });
+});
