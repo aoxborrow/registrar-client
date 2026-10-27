@@ -273,10 +273,13 @@ Two opt-in extended capabilities cover forwarding, both modelled as replace-all
 sets:
 
 - **Domain (URL) forwarding** — `getDomainForwarding` / `setDomainForwarding`
-  take `DomainForward[]` (`{ host, url, type }`). `host` is apex-relative (`@`,
-  `www`, …); `type` is `temporary` (302) or `permanent` (301). HTTPS targets work
-  wherever the provider issues a certificate for the domain (all supported
-  providers do).
+  take `DomainForward[]` (`{ host, url, type, https? }`). `host` is apex-relative
+  (`@`, `www`, …); `type` is `temporary` (302) or `permanent` (301). The target's
+  scheme is part of `url`. `https` is whether the _source_ host answers on HTTPS
+  (`off` / `on` / `only`, where `only` also redirects HTTP to HTTPS). Only Gandi
+  sets it per rule; Cloudflare is always `on`; other providers manage it
+  themselves, leave it unset on read, and reject an explicit value. Unset on
+  write keeps a rule's current mode.
 - **Email forwarding** — `getEmailForwarding` / `setEmailForwarding` take
   `EmailForward[]` (`{ alias, forwardTo }`). `alias` is the local part; `*` (or
   `@`) is the catch-all. This is alias→inbox **forwarding**, not mailbox hosting.

@@ -482,6 +482,17 @@ describe('Porkbun provider', () => {
     });
   });
 
+  it('setDomainForwarding rejects an explicit https mode before any write', async () => {
+    const pb = porkbun();
+    const calls = stubHttp(pb, () => ({ status: SUCCESS, forwards: [] }));
+    const res = await pb.setDomainForwarding('example.com', [
+      { host: '@', url: 'https://dest.com', type: 'permanent', https: 'on' },
+    ]);
+    expect(res.success).toBe(false);
+    expect(res.message).toMatch(/https "on" can't be set.*leave `https` unset/);
+    expect(calls).toHaveLength(0);
+  });
+
   it('setDomainForwarding with an empty list clears all forwards', async () => {
     const pb = porkbun();
     const calls = stubHttp(pb, req => {

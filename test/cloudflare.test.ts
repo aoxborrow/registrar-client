@@ -562,6 +562,22 @@ describe('Cloudflare provider', () => {
     expect(calls).toHaveLength(0); // failed fast, nothing written
   });
 
+  it('setDomainForwarding accepts https "on" (always on) and rejects other modes before any write', async () => {
+    const cf = cloudflare();
+    const calls = stubHttp(cf, () => ({ success: true, result: {} }));
+    const res = await cf.setDomainForwarding('example.com', [
+      { host: '@', url: 'https://dest.com', type: 'permanent', https: 'off' },
+    ]);
+    expect(res.success).toBe(false);
+    expect(res.message).toMatch(/https "off" can't be set.*supported: "on"/);
+    expect(calls).toHaveLength(0);
+    // 'on' passes the guard (it then proceeds to the zone lookup)
+    await cf.setDomainForwarding('example.com', [
+      { host: '@', url: 'https://dest.com', type: 'permanent', https: 'on' },
+    ]);
+    expect(calls.length).toBeGreaterThan(0);
+  });
+
   // --- email forwarding (Email Routing) ---
 
   it('getEmailForwarding maps forward rules + catch-all (skips drop/worker)', async () => {

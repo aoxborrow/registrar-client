@@ -48,11 +48,14 @@ domain"); `type` is `http301` (permanent) / `http302` (redirect) / `cloak`
   source host and errors (an opaque 500) if one already exists — most likely why
   the apex looked unsupported in the original sandbox run. The client sends
   `override: true` so Gandi replaces the record; forwarding a host requires it.
-- **Updates are PATCHed in place** (`type`/`url`, plus the rule's existing
-  `protocol`), so an https forward stays https. Creates and updates run before
+- `protocol` maps to `DomainForward.https` (`http`=`off`, `https`=`on`,
+  `httpsonly`=`only`).
+- **Updates are PATCHed in place** (`type`/`url`/`protocol`; with `https` unset
+  the rule's existing `protocol` is sent back), so an https forward stays https. Creates and updates run before
   deletes; a failure after some writes is reported as a partial update.
-- New rules omit `protocol` (Gandi defaults to `http`): sending `https` makes
-  Gandi provision a Let's Encrypt cert and **500s in the sandbox**.
+- A new rule with `https` unset omits `protocol` (Gandi defaults to `http`).
+  Asking for https makes Gandi provision a Let's Encrypt cert, which
+  **500s in the sandbox**.
 - **Live-verified (2026-10, production, reversible round-trip on one domain):**
   get→set of an unchanged apex rule makes no writes; POST with `override: true`
   on a fresh subdomain (201, Gandi adds a `webredir.vip.gandi.net.` CNAME);

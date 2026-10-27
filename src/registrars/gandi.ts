@@ -8,6 +8,7 @@ import type {
   Domain,
   DomainAvailability,
   DomainForward,
+  DomainForwardHttps,
   DomainForwardType,
   DsRecord,
   EmailForward,
@@ -153,6 +154,17 @@ const GANDI_TYPE_TO_FORWARD: Record<string, DomainForwardType> = {
   http301: 'permanent',
   http302: 'temporary',
   cloak: 'masked', // read-only; setDomainForwarding rejects it
+};
+// map our DomainForwardHttps to Gandi's webredir `protocol`, and back.
+const GANDI_PROTOCOL: Record<DomainForwardHttps, string> = {
+  off: 'http',
+  on: 'https',
+  only: 'httpsonly',
+};
+const GANDI_PROTOCOL_TO_HTTPS: Record<string, DomainForwardHttps> = {
+  http: 'off',
+  https: 'on',
+  httpsonly: 'only',
 };
 
 /**
@@ -627,8 +639,9 @@ export class GandiRegistrar extends BaseRegistrar {
    * Replace web/URL forwarding (full replace; empty clears). Diffs against the
    * current webredirs by host:
    * - a host that's new is created (POST),
-   * - a host whose url/type changed is updated in place (PATCH), keeping the
-   *   rule's existing `protocol` so an https forward stays https,
+   * - a host whose url/type/https changed is updated in place (PATCH); with
+   *   `https` unset it keeps the rule's existing `protocol`, so an https
+   *   forward stays https,
    * - a host that's no longer wanted is deleted (DELETE),
    * - an identical rule (apex included) is left untouched.
    * Creates and updates run before any delete, so a failure part-way never leaves
@@ -640,10 +653,11 @@ export class GandiRegistrar extends BaseRegistrar {
    * (POST then fails with an opaque 500), so creates send `override: true` to
    * let Gandi replace the host's record — forwarding the host is the point.
    *
-   * New rules omit `protocol` so Gandi applies its default (http): requesting
-   * `https` makes Gandi provision a Let's Encrypt certificate for the source
-   * host, which our normalized model doesn't express (and which the sandbox
-   * can't do — it 500s).
+   * `https` maps to Gandi's `protocol` (off=http, on=https, only=httpsonly).
+   * A new rule with `https` unset omits `protocol`, so Gandi applies its
+   * default (http). Asking for https makes Gandi provision a Let's Encrypt
+   * certificate for the source host; production does this, but the sandbox
+   * can't (it 500s).
    */
   override async setDomainForwarding(
     domainName: string,
@@ -652,7 +666,8 @@ export class GandiRegistrar extends BaseRegistrar {
   ): Promise<OperationResult> {
     const applied: string[] = [];
     try {
-      const settable = settableForwards(forwards); // reject masked before any write
+      // reject masked before any write
+      const settable = settableForwards(forwards, ['off', 'on', 'only']);
       const desired = new Map<string, SettableDomainForward>();
       for (const f of settable) {
         const host = normalizeForwardHost(f.host);
@@ -682,6 +697,7 @@ export class GandiRegistrar extends BaseRegistrar {
                   host: gandiHostToFqdn(host, domainName),
                   type: GANDI_FORWARD_TYPE[f.type],
                   url: f.url,
+                  ...(f.https ? { protocol: GANDI_PROTOCOL[f.https] } : {}),
                   override: true,
                 },
                 ...opts,
@@ -690,7 +706,9 @@ export class GandiRegistrar extends BaseRegistrar {
           continue;
         }
         const now = fromGandiWebredir(existing, domainName);
-        if (now.url === f.url && now.type === f.type) continue; // unchanged
+        const httpsSame = f.https === undefined || f.https === now.https;
+        if (now.url === f.url && now.type === f.type && httpsSame) continue; // unchanged
+        const protocol = f.https ? GANDI_PROTOCOL[f.https] : existing.protocol;
         writes.push({
           label: `update ${host}`,
           run: () =>
@@ -700,7 +718,7 @@ export class GandiRegistrar extends BaseRegistrar {
               body: {
                 type: GANDI_FORWARD_TYPE[f.type],
                 url: f.url,
-                ...(existing.protocol ? { protocol: existing.protocol } : {}),
+                ...(protocol ? { protocol } : {}),
               },
               ...opts,
             }),
@@ -992,10 +1010,12 @@ function normalizeForwardHost(host: string): string {
   return host ? host : '@';
 }
 function fromGandiWebredir(r: GandiWebredir, domain: string): DomainForward {
+  const https = GANDI_PROTOCOL_TO_HTTPS[(r.protocol ?? '').toLowerCase()];
   return {
     host: gandiFqdnToHost(r.host ?? domain, domain),
     url: r.url ?? '',
     type: GANDI_TYPE_TO_FORWARD[(r.type ?? '').toLowerCase()] ?? 'permanent',
+    ...(https ? { https } : {}),
   };
 }
 

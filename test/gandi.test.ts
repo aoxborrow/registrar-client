@@ -349,9 +349,9 @@ describe('Gandi provider', () => {
       { host: 'docs.example.com', type: 'cloak', url: 'https://b.com', protocol: 'http' },
     ]);
     expect(await g.getDomainForwarding('example.com')).toEqual([
-      { host: 'shop', url: 'https://a.com', type: 'permanent' },
+      { host: 'shop', url: 'https://a.com', type: 'permanent', https: 'off' },
       // cloaked forwarding is reported as read-only `masked`
-      { host: 'docs', url: 'https://b.com', type: 'masked' },
+      { host: 'docs', url: 'https://b.com', type: 'masked', https: 'off' },
     ]);
   });
 
@@ -361,8 +361,74 @@ describe('Gandi provider', () => {
       { host: 'example.com', type: 'http302', url: 'https://a.com', protocol: 'https' },
     ]);
     expect(await g.getDomainForwarding('example.com')).toEqual([
-      { host: '@', url: 'https://a.com', type: 'temporary' },
+      { host: '@', url: 'https://a.com', type: 'temporary', https: 'on' },
     ]);
+  });
+
+  it('getDomainForwarding maps protocol to https (httpsonly -> only; missing -> unset)', async () => {
+    const g = gandi();
+    stubHttp(g, () => [
+      { host: 'a.example.com', type: 'http301', url: 'https://a.com', protocol: 'httpsonly' },
+      { host: 'b.example.com', type: 'http301', url: 'https://b.com' },
+    ]);
+    expect(await g.getDomainForwarding('example.com')).toEqual([
+      { host: 'a', url: 'https://a.com', type: 'permanent', https: 'only' },
+      { host: 'b', url: 'https://b.com', type: 'permanent' },
+    ]);
+  });
+
+  it('setDomainForwarding sends protocol for a new rule only when https is set', async () => {
+    const g = gandi();
+    const calls = stubHttp(g, req => (req.method === undefined ? [] : ''));
+    const res = await g.setDomainForwarding('example.com', [
+      { host: 'a', url: 'https://a.com', type: 'permanent', https: 'only' },
+      { host: 'b', url: 'https://b.com', type: 'permanent' },
+    ]);
+    expect(res.success).toBe(true);
+    expect(calls.filter(c => c.method === 'POST').map(c => c.body)).toEqual([
+      {
+        host: 'a.example.com',
+        type: 'http301',
+        url: 'https://a.com',
+        protocol: 'httpsonly',
+        override: true,
+      },
+      { host: 'b.example.com', type: 'http301', url: 'https://b.com', override: true },
+    ]);
+  });
+
+  it('setDomainForwarding PATCHes a rule whose https mode alone changed', async () => {
+    const g = gandi();
+    const calls = stubHttp(g, req =>
+      req.method === undefined
+        ? [{ host: 'example.com', type: 'http301', url: 'https://a.com', protocol: 'http' }]
+        : ''
+    );
+    const res = await g.setDomainForwarding('example.com', [
+      { host: '@', url: 'https://a.com', type: 'permanent', https: 'on' },
+    ]);
+    expect(res.success).toBe(true);
+    expect(calls.filter(c => c.method)).toEqual([
+      expect.objectContaining({
+        method: 'PATCH',
+        path: '/domain/domains/example.com/webredirs/example.com',
+        body: { type: 'http301', url: 'https://a.com', protocol: 'https' },
+      }),
+    ]);
+  });
+
+  it('setDomainForwarding treats unset https as "keep" (no write for an otherwise identical rule)', async () => {
+    const g = gandi();
+    const calls = stubHttp(g, req =>
+      req.method === undefined
+        ? [{ host: 'example.com', type: 'http301', url: 'https://a.com', protocol: 'httpsonly' }]
+        : ''
+    );
+    const res = await g.setDomainForwarding('example.com', [
+      { host: '@', url: 'https://a.com', type: 'permanent' },
+    ]);
+    expect(res.success).toBe(true);
+    expect(calls.filter(c => c.method)).toEqual([]);
   });
 
   it('setDomainForwarding diffs: POST new, PATCH changed, DELETE removed, skip identical', async () => {

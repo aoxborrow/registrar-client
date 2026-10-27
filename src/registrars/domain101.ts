@@ -26,7 +26,7 @@ import type {
   RequestOptions,
   TldPricing,
 } from '../types';
-import { createDomain, filterDomains, normalizeDomain } from '../utils';
+import { createDomain, filterDomains, normalizeDomain, unsupportedForwardHttps } from '../utils';
 
 // 101domain Client API 1.1.0, https://api.101domain.com/api/documentation
 interface Envelope<T> {
@@ -516,6 +516,8 @@ export class Domain101Registrar extends BaseRegistrar {
       throw new ConfigurationError(
         '101domain: only one permanent apex forwarding rule is supported'
       );
+    if (forwards[0]?.https !== undefined)
+      throw new ConfigurationError(`101domain: ${unsupportedForwardHttps(forwards[0].https)}`);
     if (forwards.length) {
       let url: URL;
       try {
