@@ -51,18 +51,29 @@ domain"); `type` is `http301` (permanent) / `http302` (redirect) / `cloak`
 - `protocol` maps to `DomainForward.https` (`http`=`off`, `https`=`on`,
   `httpsonly`=`only`).
 - **Updates are PATCHed in place** (`type`/`url`/`protocol`; with `https` unset
-  the rule's existing `protocol` is sent back), so an https forward stays https. Creates and updates run before
-  deletes; a failure after some writes is reported as a partial update.
+  the rule's existing `protocol` is sent back), so an https forward stays
+  https. Creates and updates run before deletes; a failure after some writes
+  is reported as a partial update.
 - A new rule with `https` unset omits `protocol` (Gandi defaults to `http`).
   Asking for https makes Gandi provision a Let's Encrypt cert, which
   **500s in the sandbox**.
-- **Live-verified (2026-10, production, reversible round-trip on one domain):**
-  get→set of an unchanged apex rule makes no writes; POST with `override: true`
-  on a fresh subdomain (201, Gandi adds a `webredir.vip.gandi.net.` CNAME);
-  PATCH on a subdomain and on the apex (200, updated in place, `created_at`
-  kept); DELETE (200, also removes the CNAME Gandi added). **Not yet verified:**
-  an apex _create_ over an existing apex record, and PATCH on an https rule —
-  the sandbox's LiveDNS 500s on every call as of 2026-10, so webredir POSTs
+- **Switching a live rule to https takes it offline until the cert is issued.**
+  Gandi moves the host's A record from its http redirector (`217.70.184.38`) to
+  its https one (`.55`), which refuses both http and https for the host until
+  the certificate exists. In a 2026-10 live test (apex of a production domain)
+  no cert was issued and the forward was unreachable for the full 10 minutes
+  before it was switched back to http (which restored `.38` immediately). With
+  a 3h A-record TTL, resolvers that cached `.55` keep failing after a revert.
+  Turn https on when a brief outage is acceptable, and check `cert_status`.
+- **Live-verified (2026-10, production, reversible round-trips on one
+  domain):** get→set of an unchanged apex rule makes no writes; POST with
+  `override: true` on a fresh subdomain (201, Gandi adds a
+  `webredir.vip.gandi.net.` CNAME); PATCH on a subdomain and on the apex (200,
+  updated in place, `created_at` kept); PATCH of `protocol` alone
+  (http→https→http); a url change with `https` unset keeps the rule's https
+  `protocol`; DELETE (200, also removes the CNAME Gandi added). **Not yet
+  verified:** an apex _create_ over an existing apex record. The sandbox can't
+  cover it: as of 2026-10 its LiveDNS 500s on every call, so webredir POSTs
   500 there for any host.
 
 ## Overview
