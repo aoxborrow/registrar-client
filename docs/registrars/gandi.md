@@ -53,9 +53,14 @@ domain"); `type` is `http301` (permanent) / `http302` (redirect) / `cloak`
   deletes; a failure after some writes is reported as a partial update.
 - New rules omit `protocol` (Gandi defaults to `http`): sending `https` makes
   Gandi provision a Let's Encrypt cert and **500s in the sandbox**.
-- Apex create and PATCH follow Gandi's published API docs but haven't been
-  live-verified yet: as of 2026-10 the sandbox's LiveDNS 500s on every call
-  (even a records GET), so every webredir POST 500s there too.
+- **Live-verified (2026-10, production, reversible round-trip on one domain):**
+  get→set of an unchanged apex rule makes no writes; POST with `override: true`
+  on a fresh subdomain (201, Gandi adds a `webredir.vip.gandi.net.` CNAME);
+  PATCH on a subdomain and on the apex (200, updated in place, `created_at`
+  kept); DELETE (200, also removes the CNAME Gandi added). **Not yet verified:**
+  an apex _create_ over an existing apex record, and PATCH on an https rule —
+  the sandbox's LiveDNS 500s on every call as of 2026-10, so webredir POSTs
+  500 there for any host.
 
 ## Overview
 
