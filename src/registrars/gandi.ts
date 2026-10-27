@@ -657,7 +657,9 @@ export class GandiRegistrar extends BaseRegistrar {
    * A new rule with `https` unset omits `protocol`, so Gandi applies its
    * default (http). Asking for https makes Gandi provision a Let's Encrypt
    * certificate for the source host; production does this, but the sandbox
-   * can't (it 500s).
+   * can't (it 500s). Gandi repoints the host at its https redirector at once,
+   * and that refuses the host until the certificate exists, so switching a
+   * live rule to https can leave it unreachable for a while (see gandi.md).
    */
   override async setDomainForwarding(
     domainName: string,
