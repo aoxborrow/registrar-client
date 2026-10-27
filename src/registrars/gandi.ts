@@ -20,7 +20,12 @@ import type {
   TransferDomainInput,
 } from '../types';
 import { REST_SAFE_METHODS } from '../http';
-import { createDomain, filterDomains, settableForwards } from '../utils';
+import {
+  createDomain,
+  filterDomains,
+  settableForwards,
+  type SettableDomainForward,
+} from '../utils';
 import { toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
@@ -130,7 +135,8 @@ interface GandiForward {
 
 // a web-forwarding (URL redirect) entry from GET
 // /v5/domain/domains/{fqdn}/webredirs. `host` is the full FQDN of the source
-// subdomain; `type` is Gandi's redirect kind (http301/http302/cloak).
+// host (the bare domain for the apex); `type` is Gandi's redirect kind
+// (http301/http302/cloak); `protocol` is http/https/httpsonly.
 interface GandiWebredir {
   host?: string;
   type?: string;
@@ -176,7 +182,7 @@ export class GandiRegistrar extends BaseRegistrar {
   static readonly supportsSandbox = true;
   // On top of core: transfer-out auth code (`authinfo`), DNSSEC read/disable
   // (LiveDNS keys), email forwarding, and web/URL forwarding (webredirs;
-  // per-subdomain, no apex). Note core `setPrivacy` disabling is a no-op for
+  // per host, apex included). Note core `setPrivacy` disabling is a no-op for
   // individual (natural-person) registrants — Gandi keeps WHOIS obfuscation on
   // for GDPR regardless of the request.
   static readonly extendedFeatures: readonly RegistrarFeature[] = [
@@ -605,84 +611,137 @@ export class GandiRegistrar extends BaseRegistrar {
 
   /**
    * Read web/URL forwarding via GET /domain/domains/{fqdn}/webredirs. Gandi keys
-   * each redirect by the full FQDN of the source subdomain; we normalize that back
-   * to a host relative to the apex (e.g. `shop.example.com` -> `shop`).
+   * each redirect by the full FQDN of the source host; we normalize that back to
+   * a host relative to the apex (e.g. `shop.example.com` -> `shop`, and the bare
+   * domain -> `@`).
    */
   override async getDomainForwarding(
     domainName: string,
     opts?: RequestOptions
   ): Promise<DomainForward[]> {
-    const redirs = await this.http.request<GandiWebredir[]>({
-      path: `/domain/domains/${domainName}/webredirs`,
-      ...opts,
-    });
-    return (redirs ?? []).map(r => ({
-      host: gandiFqdnToHost(r.host ?? domainName, domainName),
-      url: r.url ?? '',
-      type: GANDI_TYPE_TO_FORWARD[(r.type ?? '').toLowerCase()] ?? 'permanent',
-    }));
+    const redirs = await this.listWebredirs(domainName, opts);
+    return redirs.map(r => fromGandiWebredir(r, domainName));
   }
 
   /**
-   * Replace web/URL forwarding (full replace; empty clears). Gandi's webredirs
-   * endpoint has no update — only create (POST) and delete (DELETE by FQDN) — so
-   * this diffs against the current set: delete entries that are gone or changed,
-   * then create the desired ones that aren't already present identically.
+   * Replace web/URL forwarding (full replace; empty clears). Diffs against the
+   * current webredirs by host:
+   * - a host that's new is created (POST),
+   * - a host whose url/type changed is updated in place (PATCH), keeping the
+   *   rule's existing `protocol` so an https forward stays https,
+   * - a host that's no longer wanted is deleted (DELETE),
+   * - an identical rule (apex included) is left untouched.
+   * Creates and updates run before any delete, so a failure part-way never leaves
+   * a host that was meant to keep forwarding without a rule. A failure after some
+   * writes landed is reported as a partial update listing what was applied.
    *
-   * Gandi only supports forwarding a subdomain, not the apex; an apex host ("@")
-   * throws rather than silently failing with a 500 from the API.
+   * The apex (`@`) is the bare domain FQDN. Creating a redirect needs Gandi's own
+   * DNS record at the source host, and the apex nearly always has one already
+   * (POST then fails with an opaque 500), so creates send `override: true` to
+   * let Gandi replace the host's record — forwarding the host is the point.
+   *
+   * New rules omit `protocol` so Gandi applies its default (http): requesting
+   * `https` makes Gandi provision a Let's Encrypt certificate for the source
+   * host, which our normalized model doesn't express (and which the sandbox
+   * can't do — it 500s).
    */
   override async setDomainForwarding(
     domainName: string,
     forwards: DomainForward[],
     opts?: RequestOptions
   ): Promise<OperationResult> {
+    const applied: string[] = [];
     try {
       const settable = settableForwards(forwards); // reject masked before any write
+      const desired = new Map<string, SettableDomainForward>();
       for (const f of settable) {
-        if (!f.host || f.host === '@') {
-          throw new Error(
-            `${this.name}: web forwarding requires a subdomain host; Gandi cannot forward the apex ("@")`
-          );
+        const host = normalizeForwardHost(f.host);
+        if (desired.has(host)) {
+          throw new Error(`${this.name}: duplicate web forwarding host "${host}"`);
         }
+        desired.set(host, { ...f, host });
       }
-      const current = await this.getDomainForwarding(domainName, opts);
-      const same = (a: DomainForward, b: DomainForward): boolean =>
-        a.host === b.host && a.url === b.url && a.type === b.type;
+      const current = new Map<string, GandiWebredir>();
+      for (const r of await this.listWebredirs(domainName, opts)) {
+        current.set(gandiFqdnToHost(r.host ?? domainName, domainName), r);
+      }
 
-      // delete current entries that are no longer wanted, or whose url/type changed
-      for (const existing of current) {
-        if (!settable.some(f => same(f, existing))) {
-          await this.http.request({
-            method: 'DELETE',
-            path: `/domain/domains/${domainName}/webredirs/${gandiHostToFqdn(existing.host, domainName)}`,
-            ...opts,
+      const writes: { label: string; run: () => Promise<unknown> }[] = [];
+      const webredirPath = (host: string): string =>
+        `/domain/domains/${domainName}/webredirs/${gandiHostToFqdn(host, domainName)}`;
+      for (const [host, f] of desired) {
+        const existing = current.get(host);
+        if (!existing) {
+          writes.push({
+            label: `create ${host}`,
+            run: () =>
+              this.http.request({
+                method: 'POST',
+                path: `/domain/domains/${domainName}/webredirs`,
+                body: {
+                  host: gandiHostToFqdn(host, domainName),
+                  type: GANDI_FORWARD_TYPE[f.type],
+                  url: f.url,
+                  override: true,
+                },
+                ...opts,
+              }),
           });
+          continue;
         }
+        const now = fromGandiWebredir(existing, domainName);
+        if (now.url === f.url && now.type === f.type) continue; // unchanged
+        writes.push({
+          label: `update ${host}`,
+          run: () =>
+            this.http.request({
+              method: 'PATCH',
+              path: webredirPath(host),
+              body: {
+                type: GANDI_FORWARD_TYPE[f.type],
+                url: f.url,
+                ...(existing.protocol ? { protocol: existing.protocol } : {}),
+              },
+              ...opts,
+            }),
+        });
       }
-      // create desired entries that aren't already present identically
-      for (const f of settable) {
-        if (!current.some(c => same(c, f))) {
-          await this.http.request({
-            method: 'POST',
-            path: `/domain/domains/${domainName}/webredirs`,
-            // `protocol` is intentionally omitted so Gandi applies its default
-            // (http). Requesting `https` makes Gandi provision a Let's Encrypt
-            // certificate for the source host, which our normalized model doesn't
-            // express (and which the sandbox can't do — it 500s).
-            body: {
-              host: gandiHostToFqdn(f.host, domainName),
-              type: GANDI_FORWARD_TYPE[f.type],
-              url: f.url,
-            },
-            ...opts,
-          });
+      for (const host of current.keys()) {
+        if (desired.has(host)) continue;
+        writes.push({
+          label: `delete ${host}`,
+          run: () => this.http.request({ method: 'DELETE', path: webredirPath(host), ...opts }),
+        });
+      }
+
+      for (const w of writes) {
+        try {
+          await w.run();
+        } catch (error) {
+          if (applied.length === 0) throw error;
+          const rest = writes.slice(applied.length + 1).map(x => x.label);
+          return {
+            success: false,
+            message:
+              `Domain forwarding partially updated: ${w.label} failed ` +
+              `(${toRegistrarError(error).message}); applied: ${applied.join(', ')}` +
+              (rest.length ? `; not attempted: ${rest.join(', ')}` : ''),
+          };
         }
+        applied.push(w.label);
       }
       return { success: true, message: 'Domain forwarding updated successfully' };
     } catch (error) {
       return { success: false, message: toRegistrarError(error).message };
     }
+  }
+
+  private async listWebredirs(domainName: string, opts?: RequestOptions): Promise<GandiWebredir[]> {
+    const redirs = await this.http.request<GandiWebredir[]>({
+      path: `/domain/domains/${domainName}/webredirs`,
+      ...opts,
+    });
+    return redirs ?? [];
   }
 
   override async setAutoRenew(
@@ -927,6 +986,17 @@ function gandiFqdnToHost(fqdn: string, domain: string): string {
   if (fqdn === domain) return '@';
   const suffix = `.${domain}`;
   return fqdn.endsWith(suffix) ? fqdn.slice(0, -suffix.length) : fqdn;
+}
+// our apex spelling: an empty host also means the apex.
+function normalizeForwardHost(host: string): string {
+  return host ? host : '@';
+}
+function fromGandiWebredir(r: GandiWebredir, domain: string): DomainForward {
+  return {
+    host: gandiFqdnToHost(r.host ?? domain, domain),
+    url: r.url ?? '',
+    type: GANDI_TYPE_TO_FORWARD[(r.type ?? '').toLowerCase()] ?? 'permanent',
+  };
 }
 
 function fromGandiContact(c: GandiContact | undefined): Contact | undefined {

@@ -42,8 +42,8 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
 - **Gandi** `setPrivacy(false)` is a no-op for individual registrants (WHOIS stays
   obfuscated for GDPR); `updateNameservers` returns 202 with a 12-24h propagation
   delay; `registerDomain` requires the ISO 3166-2 `owner.state` (`US-CA`, not
-  `CA`); web forwarding is subdomain-only (no apex) and `protocol: https` 500s in
-  the sandbox. See `docs/registrars/gandi.md`.
+  `CA`); web forwarding (apex included) PATCHes changed rules and keeps their
+  `protocol`; new rules omit it since `protocol: https` 500s in the sandbox. See `docs/registrars/gandi.md`.
 - **GoDaddy** is hybrid v3/v1 (v3 in prod with a PAT, v1 for management + all of
   OTE, which has no v3). Live-confirmed on a real prod domain (a $1.19 `.xyz`):
   - **Availability/pricing**: v3 wraps results in `items` (not `domains`), prices

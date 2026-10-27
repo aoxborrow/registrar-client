@@ -38,13 +38,24 @@ domain + auth code, not reproducible in the sandbox).
   GDPR. The request is well-formed; the outcome is Gandi policy.
 
 **Web / URL forwarding (`webredirs`) — discovered + built live:**
-`GET/POST/DELETE /v5/domain/domains/{fqdn}/webredirs[/{fqdn}]`. `host` is the full
-FQDN of the source subdomain; `type` is `http301` (permanent) / `http302`
-(redirect) / `cloak` (frame). **Per-subdomain only** — the apex (`@` / bare
-domain) 500s, so the client rejects it up front. **No PUT** — updating a redirect
-is delete-then-recreate. Sending `protocol: https` makes Gandi provision a
-Let's Encrypt cert and **500s in the sandbox**, so the client omits `protocol`
-(Gandi defaults to `http`).
+`GET/POST /v5/domain/domains/{fqdn}/webredirs` and
+`GET/PATCH/DELETE .../webredirs/{host}`. `host` is the full FQDN of the source
+host — the bare domain for the apex (a literal `@` 400s "not part of the
+domain"); `type` is `http301` (permanent) / `http302` (redirect) / `cloak`
+(frame); `protocol` is `http` / `https` / `httpsonly`.
+
+- **Create needs the host's DNS record.** POST creates Gandi's record at the
+  source host and errors (an opaque 500) if one already exists — most likely why
+  the apex looked unsupported in the original sandbox run. The client sends
+  `override: true` so Gandi replaces the record; forwarding a host requires it.
+- **Updates are PATCHed in place** (`type`/`url`, plus the rule's existing
+  `protocol`), so an https forward stays https. Creates and updates run before
+  deletes; a failure after some writes is reported as a partial update.
+- New rules omit `protocol` (Gandi defaults to `http`): sending `https` makes
+  Gandi provision a Let's Encrypt cert and **500s in the sandbox**.
+- Apex create and PATCH follow Gandi's published API docs but haven't been
+  live-verified yet: as of 2026-10 the sandbox's LiveDNS 500s on every call
+  (even a records GET), so every webredir POST 500s there too.
 
 ## Overview
 
@@ -61,29 +72,29 @@ There is no separate "IP allowlisting" documented for the v5 API. Requests are o
 
 ## Feature Support
 
-| Feature                                     | Support | Notes / endpoint                                                                                                                                                                                                                         |
-| ------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Test connection / verify credentials        | ~       | No dedicated "whoami" endpoint documented for Domain API; typically verified via `GET /v5/organization/user-info` or any low-cost authenticated GET (e.g. list domains).                                                                 |
-| List domains                                | ✓       | `GET /v5/domain/domains` (filter/sort supported)                                                                                                                                                                                         |
-| Get single domain details                   | ✓       | `GET /v5/domain/domains/{domain}` (contacts, status, nameservers, dates)                                                                                                                                                                 |
-| Check domain availability                   | ✓       | `GET /v5/domain/check` — availability + pricing across processes (create/renew/transfer)                                                                                                                                                 |
-| Get domain/TLD pricing                      | ✓       | Returned as part of `GET /v5/domain/check`; also `GET /v5/domain/tlds` for TLD-level rules                                                                                                                                               |
-| Register a new domain                       | ✓       | `POST /v5/domain/domains` — owner/admin/tech/bill contacts + nameservers in payload                                                                                                                                                      |
-| Renew a domain                              | ✓       | Documented under Domain API renewal operations (procedure endpoint per domain)                                                                                                                                                           |
-| Auto-renew toggle                           | ✓       | `PATCH /v5/domain/domains/{domain}/autorenew`                                                                                                                                                                                            |
-| Transfer domain in                          | ✓       | Domain API transfer-in procedure (submit authinfo/EPP code + contacts)                                                                                                                                                                   |
-| Transfer out / get auth/EPP code            | ✓       | `PUT /v5/domain/domains/{domain}/authinfo` — (re)generates auth code, emailed/available to registrant                                                                                                                                    |
-| Update nameservers                          | ✓       | `PUT /v5/domain/domains/{domain}/nameservers` (or via LiveDNS `GET /v5/livedns/domains/{fqdn}/nameservers`)                                                                                                                              |
-| Get nameservers                             | ✓       | `GET /v5/domain/domains/{domain}/nameservers`                                                                                                                                                                                            |
-| Lock / unlock domain (transfer lock)        | ~       | Exposed via domain status flags (`clientTransferProhibited` etc.) rather than a single dedicated toggle endpoint; set through domain update payload.                                                                                     |
-| Get/set WHOIS privacy                       | ~       | Gandi masks personal WHOIS data by default per ICANN/GDPR rules rather than an explicit per-domain on/off toggle in all cases; some TLD-specific privacy controls exist in the domain contact payload.                                   |
-| Update contact info (registrant/admin/tech) | ✓       | Via `POST/PATCH` on domain contacts / `POST /v5/domain/changeowner/{domain}` for ownership change (with FOA email flow)                                                                                                                  |
-| DNS record management                       | ✓       | LiveDNS API: `GET/POST/PUT/DELETE /v5/livedns/domains/{fqdn}/records[/{name}[/{type}]]` — full zone or per-record CRUD                                                                                                                   |
-| DNSSEC management                           | ✓       | LiveDNS: `GET/POST/PATCH/DELETE /v5/livedns/domains/{fqdn}/keys[/{id}]`                                                                                                                                                                  |
-| Glue / host records                         | ✓       | Domain API glue-records endpoint — dict of nameserver → list of IPs                                                                                                                                                                      |
-| Email forwarding / mailbox provisioning     | ✓       | Mailbox API (beta): `.../v5/mailbox/forwards` for forwards (requires ≥1 mailbox on source domain, capped at 1000 forwards/domain); Email API (current) for mailbox provisioning                                                          |
-| Domain forwarding / URL redirect            | ✓       | Dedicated web-forwarding endpoint `GET/POST/DELETE /v5/domain/domains/{fqdn}/webredirs[/{fqdn}]`; per-subdomain only (no apex), `type` = `http301`/`http302`/`cloak`. No PUT (update = delete + recreate). Verified live in the sandbox. |
-| Webhooks / event notifications              | ✗       | No webhook/event-notification system found in current v5 REST docs; legacy XML-RPC "Notification API" (v3.3.38) exists but is not part of v5                                                                                             |
+| Feature                                     | Support | Notes / endpoint                                                                                                                                                                                                                                                                              |
+| ------------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Test connection / verify credentials        | ~       | No dedicated "whoami" endpoint documented for Domain API; typically verified via `GET /v5/organization/user-info` or any low-cost authenticated GET (e.g. list domains).                                                                                                                      |
+| List domains                                | ✓       | `GET /v5/domain/domains` (filter/sort supported)                                                                                                                                                                                                                                              |
+| Get single domain details                   | ✓       | `GET /v5/domain/domains/{domain}` (contacts, status, nameservers, dates)                                                                                                                                                                                                                      |
+| Check domain availability                   | ✓       | `GET /v5/domain/check` — availability + pricing across processes (create/renew/transfer)                                                                                                                                                                                                      |
+| Get domain/TLD pricing                      | ✓       | Returned as part of `GET /v5/domain/check`; also `GET /v5/domain/tlds` for TLD-level rules                                                                                                                                                                                                    |
+| Register a new domain                       | ✓       | `POST /v5/domain/domains` — owner/admin/tech/bill contacts + nameservers in payload                                                                                                                                                                                                           |
+| Renew a domain                              | ✓       | Documented under Domain API renewal operations (procedure endpoint per domain)                                                                                                                                                                                                                |
+| Auto-renew toggle                           | ✓       | `PATCH /v5/domain/domains/{domain}/autorenew`                                                                                                                                                                                                                                                 |
+| Transfer domain in                          | ✓       | Domain API transfer-in procedure (submit authinfo/EPP code + contacts)                                                                                                                                                                                                                        |
+| Transfer out / get auth/EPP code            | ✓       | `PUT /v5/domain/domains/{domain}/authinfo` — (re)generates auth code, emailed/available to registrant                                                                                                                                                                                         |
+| Update nameservers                          | ✓       | `PUT /v5/domain/domains/{domain}/nameservers` (or via LiveDNS `GET /v5/livedns/domains/{fqdn}/nameservers`)                                                                                                                                                                                   |
+| Get nameservers                             | ✓       | `GET /v5/domain/domains/{domain}/nameservers`                                                                                                                                                                                                                                                 |
+| Lock / unlock domain (transfer lock)        | ~       | Exposed via domain status flags (`clientTransferProhibited` etc.) rather than a single dedicated toggle endpoint; set through domain update payload.                                                                                                                                          |
+| Get/set WHOIS privacy                       | ~       | Gandi masks personal WHOIS data by default per ICANN/GDPR rules rather than an explicit per-domain on/off toggle in all cases; some TLD-specific privacy controls exist in the domain contact payload.                                                                                        |
+| Update contact info (registrant/admin/tech) | ✓       | Via `POST/PATCH` on domain contacts / `POST /v5/domain/changeowner/{domain}` for ownership change (with FOA email flow)                                                                                                                                                                       |
+| DNS record management                       | ✓       | LiveDNS API: `GET/POST/PUT/DELETE /v5/livedns/domains/{fqdn}/records[/{name}[/{type}]]` — full zone or per-record CRUD                                                                                                                                                                        |
+| DNSSEC management                           | ✓       | LiveDNS: `GET/POST/PATCH/DELETE /v5/livedns/domains/{fqdn}/keys[/{id}]`                                                                                                                                                                                                                       |
+| Glue / host records                         | ✓       | Domain API glue-records endpoint — dict of nameserver → list of IPs                                                                                                                                                                                                                           |
+| Email forwarding / mailbox provisioning     | ✓       | Mailbox API (beta): `.../v5/mailbox/forwards` for forwards (requires ≥1 mailbox on source domain, capped at 1000 forwards/domain); Email API (current) for mailbox provisioning                                                                                                               |
+| Domain forwarding / URL redirect            | ✓       | Dedicated web-forwarding endpoint `GET/POST/DELETE /v5/domain/domains/{fqdn}/webredirs[/{fqdn}]`; per host (apex = bare domain), `type` = `http301`/`http302`/`cloak`, `protocol` = `http`/`https`/`httpsonly`; PATCH updates in place. Subdomain create/delete verified live in the sandbox. |
+| Webhooks / event notifications              | ✗       | No webhook/event-notification system found in current v5 REST docs; legacy XML-RPC "Notification API" (v3.3.38) exists but is not part of v5                                                                                                                                                  |
 
 ## Notable / Unique Features
 

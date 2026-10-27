@@ -231,7 +231,7 @@ not a claim of available API endpoints. See [101domain](docs/registrars/101domai
   it can't be returned synchronously.
 - **ʲ** Dynadot and NameSilo forward the whole domain (a single `@` rule);
   clearing a forward restores the default nameservers.
-- **ᵏ** Gandi web redirects are subdomain-only — the apex (`@`) is rejected.
+- **ᵏ** Gandi web redirects are per host, apex included; creating one replaces the host's DNS record.
 - **ˡ** GoDaddy domain forwarding uses the v2 customer-scoped API, so it requires
   a `customerId` (the customer UUID, or a numeric shopper ID the client resolves to
   the UUID via an sso-key-only lookup); the old v1 forwarding route was removed.
