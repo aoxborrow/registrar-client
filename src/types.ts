@@ -295,6 +295,14 @@ export interface EmailForward {
 //                 it at all, so the library never creates one.
 export type DomainForwardType = 'temporary' | 'permanent' | 'masked';
 
+// Whether the forward's SOURCE host answers on HTTPS (the provider holds a
+// certificate for it); the destination's scheme is part of `url`.
+//   off  — HTTP only.
+//   on   — HTTP and HTTPS.
+//   only — HTTPS, with HTTP requests redirected to HTTPS.
+// Only some providers let you choose; see `DomainForward.https`.
+export type DomainForwardHttps = 'off' | 'on' | 'only';
+
 // A URL/domain forwarding rule: requests to `host` at the domain are redirected
 // to `url`.
 export interface DomainForward {
@@ -305,6 +313,12 @@ export interface DomainForward {
   url: string;
   // the redirect style
   type: DomainForwardType;
+  // source-host HTTPS mode, when the provider exposes it per rule (Gandi; on
+  // Cloudflare it is always 'on'). Reads leave it unset when the provider has no
+  // such setting. On write, unset keeps the rule's current mode (or the
+  // provider's default for a new rule); a value the provider can't apply is
+  // rejected before any write.
+  https?: DomainForwardHttps;
 }
 
 // A DNSSEC delegation-signer (DS) record published at the parent zone. Fields

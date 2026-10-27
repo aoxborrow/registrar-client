@@ -1,5 +1,6 @@
 import type {
   DomainForward,
+  DomainForwardHttps,
   Domain,
   DomainInput,
   RegistrationConsent,
@@ -18,14 +19,33 @@ export type SettableDomainForward = DomainForward & { type: 'temporary' | 'perma
 export const MASKED_FORWARD_UNSUPPORTED =
   'masked/framed forwarding is not supported by this library; use "temporary" or "permanent"';
 
-// Guard for `setDomainForwarding`: reject any masked/framed forward up front (so
-// no partial write happens) and narrow the list to the settable types. Providers
-// call this before writing.
-export function settableForwards(forwards: DomainForward[]): SettableDomainForward[] {
+// Guard for `setDomainForwarding`: reject any masked/framed forward, and any
+// `https` mode outside `httpsModes` (what the provider can apply), up front (so
+// no partial write happens), and narrow the list to the settable types.
+// Providers call this before writing.
+export function settableForwards(
+  forwards: DomainForward[],
+  httpsModes: readonly DomainForwardHttps[] = []
+): SettableDomainForward[] {
   for (const f of forwards) {
     if (f.type === 'masked') throw new Error(MASKED_FORWARD_UNSUPPORTED);
+    if (f.https !== undefined && !httpsModes.includes(f.https)) {
+      throw new Error(unsupportedForwardHttps(f.https, httpsModes));
+    }
   }
   return forwards as SettableDomainForward[];
+}
+
+export function unsupportedForwardHttps(
+  mode: DomainForwardHttps,
+  httpsModes: readonly DomainForwardHttps[] = []
+): string {
+  return (
+    `forwarding https "${mode}" can't be set on this provider` +
+    (httpsModes.length
+      ? ` (supported: ${httpsModes.map(m => `"${m}"`).join(', ')})`
+      : '; leave `https` unset to use its default')
+  );
 }
 
 // guard for register/transfer: registration forms a legal contract with the

@@ -98,15 +98,15 @@ Which provider declares each extended feature is in the README's
 [Supported functionality](../../README.md#supported-functionality) table; the notes
 below capture the per-feature caveats behind those cells.
 
-| `Feature`             | Notes                                                                                                   |
-| --------------------- | ------------------------------------------------------------------------------------------------------- |
-| `GetAuthCode`         | transfer-out EPP code returned synchronously; NameSilo/NC only email it; Porkbun gates it behind the UI |
-| `GetDnssec`           | read whether DNSSEC is enabled (DS / key records)                                                       |
-| `DisableDnssec`       | turn DNSSEC off; no enable / key management (out of scope)                                              |
-| `GetEmailForwarding`  | read counterpart of `SetEmailForwarding`                                                                |
-| `SetEmailForwarding`  | alias redirect only — **distinct from a mailbox**; CF uses Email Routing                                |
-| `GetDomainForwarding` | read counterpart of `SetDomainForwarding`                                                               |
-| `SetDomainForwarding` | `temporary`/`permanent` only (`masked` is read-only); Gandi `webredirs` (subdomain-only); CF via Rules  |
+| `Feature`             | Notes                                                                                                                   |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `GetAuthCode`         | transfer-out EPP code returned synchronously; NameSilo/NC only email it; Porkbun gates it behind the UI                 |
+| `GetDnssec`           | read whether DNSSEC is enabled (DS / key records)                                                                       |
+| `DisableDnssec`       | turn DNSSEC off; no enable / key management (out of scope)                                                              |
+| `GetEmailForwarding`  | read counterpart of `SetEmailForwarding`                                                                                |
+| `SetEmailForwarding`  | alias redirect only — **distinct from a mailbox**; CF uses Email Routing                                                |
+| `GetDomainForwarding` | read counterpart of `SetDomainForwarding`                                                                               |
+| `SetDomainForwarding` | `temporary`/`permanent` only (`masked` is read-only); Gandi `webredirs` (per host, apex ok, `https` mode); CF via Rules |
 
 **Implementation status:** every declared extended feature above is now
 implemented on its provider(s). **Dynadot**, **Gandi**, and **Porkbun** are
@@ -123,10 +123,10 @@ Two provider-specific limitations worth noting: **NameSilo** dropped
 than returning it) and reads only the apex URL forward (no forwarding-list
 endpoint); **Dynadot** and **NameSilo** forward the whole domain / apex, so their
 `DomainForward` support is a single `@` rule and clearing restores default
-nameservers. **Gandi** is the inverse — its `webredirs` forward per-subdomain and
-cannot forward the apex (`@` is rejected), and updating a redirect is
-delete-then-recreate (no PUT). Modeling note: core `setPrivacy` / lock are
-sometimes "on by policy" rather than a toggle (Gandi, Cloudflare), so those
+nameservers. **Gandi** `webredirs` are per host (apex included, as the bare
+domain); a changed redirect is PATCHed in place so its http/https `protocol`
+survives, and creates take over the host's DNS record (`override`). Modeling
+note: core `setPrivacy` / lock are sometimes "on by policy" rather than a toggle (Gandi, Cloudflare), so those
 setters treat an already-correct state as idempotent success; on Gandi,
 `setPrivacy(false)` is additionally a no-op for individual registrants (WHOIS
 obfuscation stays on for GDPR).

@@ -570,6 +570,14 @@ describe('101domain DNS reconciliation', () => {
 });
 
 describe('101domain URL forwarding', () => {
+  it('rejects an explicit https mode before any request', async () => {
+    await expect(
+      provider().setDomainForwarding('example.com', [
+        { host: '@', type: 'permanent', url: 'https://target.example/', https: 'only' },
+      ])
+    ).rejects.toThrow(/https "only" can't be set/);
+  });
+
   it('creates, edits and clears permanent apex forwarding without treating missing domains as empty rules', async () => {
     const mock = responses(
       success(raw),

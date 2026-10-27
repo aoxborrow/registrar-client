@@ -575,7 +575,8 @@ export class CloudflareRegistrar extends BaseRegistrar {
     opts?: RequestOptions
   ): Promise<OperationResult> {
     try {
-      const settable = settableForwards(forwards); // reject masked before any write
+      // reject masked before any write; HTTPS is always on (Universal SSL)
+      const settable = settableForwards(forwards, ['on']);
       const zone = await this.requireZone(domainName, opts);
       const existing = await this.getRedirectRuleset(zone.id, opts);
 
