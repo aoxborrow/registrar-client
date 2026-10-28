@@ -580,8 +580,12 @@ export class DynadotRegistrar extends BaseRegistrar {
   }
 
   // Auto-renew via the renew_option endpoint. The accepted write values are
-  // "auto" (auto-renew), "donot" (do not renew), and "reset" (manual renewal) —
-  // note these differ from the read values ("auto-renew" etc.).
+  // "auto" (auto-renew), "donot" (do not renew), and "reset" (manual renewal);
+  // they read back as "auto-renew", "do not renew", and "manual renewal". Off
+  // writes "reset": off means "won't renew automatically", and "donot" would
+  // also stop Dynadot's expiration reminder emails, so this never writes it.
+  // "reset" is always manual renewal, even when the account's default renew
+  // option is auto (sandbox-verified 2026-10-28).
   override async setAutoRenew(
     domainName: string,
     enabled: boolean,
@@ -590,7 +594,7 @@ export class DynadotRegistrar extends BaseRegistrar {
     return this.mutate(
       'PUT',
       `/restful/v2/domains/${encodeURIComponent(domainName)}/renew_option`,
-      { renew_option: enabled ? 'auto' : 'donot' },
+      { renew_option: enabled ? 'auto' : 'reset' },
       `Auto-renew ${enabled ? 'enabled' : 'disabled'} successfully`,
       opts
     );
