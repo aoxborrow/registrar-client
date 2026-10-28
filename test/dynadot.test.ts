@@ -370,6 +370,33 @@ describe('Dynadot provider (RESTful v2)', () => {
     });
   });
 
+  it('setAutoRenew(false) writes "reset" (manual renewal), never "donot"', async () => {
+    const dy = dynadot();
+    const calls = stubHttp(dy, () => ok({}));
+    const res = await dy.setAutoRenew('example.com', false);
+    expect(res).toEqual({ success: true, message: 'Auto-renew disabled successfully' });
+    expect(calls[0]).toMatchObject({
+      method: 'PUT',
+      path: '/restful/v2/domains/example.com/renew_option',
+      body: { renew_option: 'reset' },
+    });
+  });
+
+  it('reads only "auto-renew" as autoRenew; "manual renewal" and "do not renew" are off', async () => {
+    const dy = dynadot();
+    stubHttp(dy, () =>
+      ok({
+        domain_info_list: [
+          { domain_name: 'a.com', renew_option: 'auto-renew' },
+          { domain_name: 'b.com', renew_option: 'manual renewal' },
+          { domain_name: 'c.com', renew_option: 'do not renew' },
+        ],
+      })
+    );
+    const domains = await dy.listDomains();
+    expect(domains.map(d => d.autoRenew)).toEqual([true, false, false]);
+  });
+
   it('registerDomain/transferIn require consent and POST the nested v2 bodies', async () => {
     const dy = dynadot();
     const calls = stubHttp(dy, () => ok({}));
