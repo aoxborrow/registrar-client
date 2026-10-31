@@ -19,7 +19,7 @@ import type {
 } from '../types';
 import { REST_SAFE_METHODS } from '../http';
 import { createDomain, filterDomains, requireConsent, settableForwards } from '../utils';
-import { NotFoundError, NotImplementedError, toRegistrarError } from '../errors';
+import { NotFoundError, NotImplementedError, RegistrarError, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
@@ -484,11 +484,13 @@ export class DynadotRegistrar extends BaseRegistrar {
     domain: string,
     opts?: RequestOptions
   ): Promise<{ renewal: number; currency: string } | null> {
+    // .ai requires a two-year renewal. TldPricing remains an annual estimate.
+    const years = domain.toLowerCase().endsWith('.ai') ? 2 : 1;
     const params = new URLSearchParams({
       key: this.credentials.apiKey,
       command: 'renew',
       domain,
-      duration: '1',
+      duration: String(years),
       price_check: '1',
     });
     try {
@@ -499,9 +501,14 @@ export class DynadotRegistrar extends BaseRegistrar {
       if (info?.Status !== 'price_check_success' || !info.PriceInfo) return null;
       const match = info.PriceInfo.match(/Renew Fee:\s*([\d.]+)\s+in\s+([A-Za-z]{3})/);
       if (!match) return null;
-      const renewal = Number(match[1]);
-      return Number.isNaN(renewal) ? null : { renewal, currency: match[2].toUpperCase() };
-    } catch {
+      const renewal = Number(match[1]) / years;
+      return Number.isFinite(renewal) && renewal >= 0
+        ? { renewal, currency: match[2].toUpperCase() }
+        : null;
+    } catch (error) {
+      // Preserve cooldown/retry classification; an optional quote must not
+      // hide rate limits and immediately issue a second API request.
+      if (error instanceof RegistrarError && error.shouldRetry()) throw error;
       return null;
     }
   }
