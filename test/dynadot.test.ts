@@ -242,7 +242,7 @@ describe('Dynadot provider (RESTful v2)', () => {
     expect(calls[0].path).toContain('domain=proxy.fast');
   });
 
-  it('getPricing falls back to bulk_search when the domain is not in the account', async () => {
+  it('getPricing falls back to single search when the domain is not in the account', async () => {
     const dy = dynadot();
     stubHttp(dy, req => {
       // price_check fails for a name not in the account -> fall through.
@@ -256,18 +256,14 @@ describe('Dynadot provider (RESTful v2)', () => {
         };
       }
       return ok({
-        domain_result_list: [
+        domain_name: 'example.com',
+        price_list: [
           {
-            domain_name: 'example.com',
-            price_list: [
-              {
-                currency: 'USD',
-                unit: '(price/1 year)',
-                registration_price: '10.88',
-                renewal_price: '12.99',
-                transfer_price: '9.50',
-              },
-            ],
+            currency: 'USD',
+            unit: '(price/1 year)',
+            registration_price: '10.88',
+            renewal_price: '12.99',
+            transfer_price: '9.50',
           },
         ],
       });

@@ -21,18 +21,9 @@ const available = () =>
     code: 200,
     message: 'Success',
     data: {
-      domain_result_list: [
-        {
-          domain_name: 'fixture.com',
-          price_list: [
-            {
-              unit: '(price/1 year)',
-              currency: 'USD',
-              renewal_price: '14.25',
-            },
-          ],
-        },
-      ],
+      domain_name: 'fixture.com',
+      available: 'Yes',
+      price_list: [{ unit: '(price/1 year)', currency: 'USD', renewal_price: '14.25' }],
     },
   });
 
@@ -85,7 +76,7 @@ describe('Dynadot price-only renewal terms and retryable errors', () => {
       .mockResolvedValueOnce(available());
     expect((await make(fetcher).getPricing('fixture.com')).renewal).toBe(14.25);
     expect(fetcher).toHaveBeenCalledTimes(2);
-    expect(urlOf(fetcher.mock.calls[1][0]).pathname).toBe('/restful/v2/domains/bulk_search');
+    expect(urlOf(fetcher.mock.calls[1][0]).pathname).toBe('/restful/v2/domains/fixture.com/search');
   });
 
   it('still falls back for a non-owned name when the optional price check returns 404', async () => {
