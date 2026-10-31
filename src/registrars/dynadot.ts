@@ -82,7 +82,9 @@ interface V2DnssecInfo {
 }
 
 // one order from GET .../transfer_status. `transfer_status` is a display label
-// ("None", "Pre Sale Domain", …), and unset dates read back as -1.
+// ("None", "Pre Sale Domain", …), and unset dates read back as -1. A
+// transfer-away order waiting on the owner reads "None", with no
+// expiration_date (production, 2026-10-31).
 interface V2TransferStatus {
   order_id?: string | number;
   transfer_status?: string;
@@ -209,7 +211,8 @@ export class DynadotRegistrar extends BaseRegistrar {
   // On top of core: transfer-out auth code and approval, DNSSEC read/disable,
   // and email + domain (URL) forwarding. All implemented on the v2 transport and
   // verified in the Dynadot sandbox (transfer-out approval only up to "no such
-  // order": the sandbox can't create an outbound transfer).
+  // order": the sandbox can't create an outbound transfer; a real pending
+  // one's read was checked in production).
   static readonly extendedFeatures: readonly RegistrarFeature[] = [
     Feature.GetAuthCode,
     Feature.GetTransferOut,
@@ -1075,8 +1078,9 @@ function toTransferOut(t: V2TransferStatus): TransferOut {
 }
 
 // Dynadot documents its transfer statuses only as display labels, and none for
-// transfer-away, so match on words. Negatives first: "Not Approved" is a
-// rejection, and pending before approved: "Waiting For Approval" still waits.
+// transfer-away; a waiting one reads "None", the rest are unseen. So match on
+// words. Negatives first: "Not Approved" is a rejection, and pending before
+// approved: "Waiting For Approval" still waits.
 function transferOutStatus(label: string): TransferOutStatus {
   const s = label.toLowerCase();
   if (/den(y|ied)|reject|refus|not approved|nack/.test(s)) return 'rejected';

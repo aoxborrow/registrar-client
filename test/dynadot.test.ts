@@ -469,11 +469,11 @@ describe('Dynadot provider (RESTful v2)', () => {
     const calls = stubHttp(dy, () =>
       ok({
         domain_transfer_status_list: [
+          // the shape a real pending transfer-away order reads back with
           {
             order_id: '423',
-            transfer_status: 'Pending',
+            transfer_status: 'None',
             order_created_date: 1793435331420,
-            expiration_date: 1793867331420,
             order_completed_date: -1,
           },
         ],
@@ -481,14 +481,28 @@ describe('Dynadot provider (RESTful v2)', () => {
     );
     expect(await dy.getTransferOut('example.com')).toEqual({
       status: 'pending',
-      rawStatus: 'Pending',
+      rawStatus: 'None',
       id: '423',
       requestedDate: new Date(1793435331420),
-      expirationDate: new Date(1793867331420),
+      expirationDate: null,
       completedDate: null,
     });
     expect(calls[0]).toMatchObject({ method: 'GET', path: AWAY_PATH });
     expect(calls[0].headers?.['X-Signature']).toBe(expectedSignature(AWAY_PATH));
+  });
+
+  it('getTransferOut maps an expiration_date when Dynadot sends one', async () => {
+    const dy = dynadot();
+    stubHttp(dy, () =>
+      ok({
+        domain_transfer_status_list: [
+          { order_id: '9', transfer_status: 'None', expiration_date: 1793867331420 },
+        ],
+      })
+    );
+    expect(await dy.getTransferOut('example.com')).toMatchObject({
+      expirationDate: new Date(1793867331420),
+    });
   });
 
   it('getTransferOut prefers an open order over a newer finished one', async () => {

@@ -237,7 +237,8 @@ not a claim of available API endpoints. See [101domain](docs/registrars/101domai
 - **ᵏ** Gandi web redirects are per host, apex included; creating one replaces the host's DNS record.
 - **ⁿ** Transfer-out approval answers a transfer another registrar requested with
   the auth code. Dynadot's is sandbox-verified only up to "no such order" (its
-  sandbox can't start an outbound transfer). GoDaddy (v2, needs a `customerId`)
+  sandbox can't start an outbound transfer); a real pending one's read was
+  checked in production. GoDaddy (v2, needs a `customerId`)
   and Gandi have approve and reject endpoints, and Name.com a reject, none wired
   up yet; the rest leave it to the dashboard or the transfer email, and release
   the domain after about 5 days. See each registrar's doc.

@@ -123,9 +123,10 @@ synchronously on the domain-detail response (`authCode` / `AuthCode`);
 docs but not live-verified (no sandbox credentials available).
 **Dynadot**'s transfer-out approval (`GetTransferOut` / `ApproveTransferOut` /
 `RejectTransferOut`, 2026-10-31) is sandbox-verified only up to "no such order":
-the sandbox can't start an outbound transfer, and Dynadot documents no
+the sandbox can't start an outbound transfer. Dynadot documents no
 transfer-away status labels, so they're matched by their words (`rawStatus`
-keeps the original). Two provider-specific limitations worth noting: **NameSilo** dropped
+keeps the original); a real pending order, read once in production, says
+`None`. Two provider-specific limitations worth noting: **NameSilo** dropped
 `GetAuthCode` (its `retrieveAuthCode` emails the code to the registrant rather
 than returning it) and reads only the apex URL forward (no forwarding-list
 endpoint); **Dynadot** and **NameSilo** forward the whole domain / apex, so their
