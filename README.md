@@ -187,6 +187,9 @@ are the guaranteed contract; **extended** methods are opt-in per provider.
 | Extended method       | CF  | DY  | GA  | GD  | NB  | NC  | NS  | PB  | SP  | NM  | 101 |
 | --------------------- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `getAuthCode`         | ✗   | ✓   | ✓   | ✓   | ✓   | ✗ⁱ  | ✗ⁱ  | ✗   | ✓   | ✓   | ✗   |
+| `getTransferOut`      | ✗   | ✓ⁿ  | ✗   | ✗ⁿ  | ✗   | ✗   | ✗   | ✗   | ✗   | ✗   | ✗   |
+| `approveTransferOut`  | ✗   | ✓ⁿ  | ✗ⁿ  | ✗ⁿ  | ✗   | ✗   | ✗   | ✗   | ✗   | ✗   | ✗   |
+| `rejectTransferOut`   | ✗   | ✓ⁿ  | ✗ⁿ  | ✗ⁿ  | ✗   | ✗   | ✗   | ✗   | ✗   | ✗ⁿ  | ✗   |
 | `getDnssec`           | ✗   | ✓   | ✓   | ✗   | ✗   | ✗   | ✓   | ✓   | ✗   | ✗ᵐ  | ✗   |
 | `disableDnssec`       | ✗   | ✓   | ✓   | ✗   | ✗   | ✗   | ✓   | ✓   | ✗   | ✗ᵐ  | ✗   |
 | `getEmailForwarding`  | ✓   | ✓   | ✓   | ✗   | ✗   | ✓   | ✓   | ✗   | ✗   | ✗ᵐ  | ✗   |
@@ -232,6 +235,13 @@ not a claim of available API endpoints. See [101domain](docs/registrars/101domai
 - **ʲ** Dynadot and NameSilo forward the whole domain (a single `@` rule);
   clearing a forward restores the default nameservers.
 - **ᵏ** Gandi web redirects are per host, apex included; creating one replaces the host's DNS record.
+- **ⁿ** Transfer-out approval answers a transfer another registrar requested with
+  the auth code. Dynadot's is sandbox-verified only up to "no such order" (its
+  sandbox can't start an outbound transfer); a real pending one's read was
+  checked in production. GoDaddy (v2, needs a `customerId`)
+  and Gandi have approve and reject endpoints, and Name.com a reject, none wired
+  up yet; the rest leave it to the dashboard or the transfer email, and release
+  the domain after about 5 days. See each registrar's doc.
 - **ˡ** GoDaddy domain forwarding uses the v2 customer-scoped API, so it requires
   a `customerId` (the customer UUID, or a numeric shopper ID the client resolves to
   the UUID via an sso-key-only lookup); the old v1 forwarding route was removed.
@@ -334,6 +344,19 @@ and Spaceship take a full contact set on registration (omitted roles fall back t
 the registrant); Namecheap requires all four roles; Dynadot and Porkbun use the
 account's default WHOIS contact. Transfers carry over the existing contacts, so
 most providers need only the auth code (`TransferDomainInput`).
+
+Going the other way, a sold or departing name leaves with its auth code
+(`getAuthCode`). When the buyer's registrar requests it, the losing registrar
+holds the transfer for a few days unless the owner answers it; where the API
+allows, `getTransferOut` reads that request and `approveTransferOut` /
+`rejectTransferOut` answer it:
+
+```ts
+if (provider.supports(Feature.GetTransferOut)) {
+  const transfer = await provider.getTransferOut('example.com'); // null if none
+  if (transfer?.status === 'pending') await provider.approveTransferOut('example.com');
+}
+```
 
 > `registerDomain` is implemented for **every bundled provider**, and `transferIn`
 > for every one whose API has a transfer endpoint (all except **Cloudflare** and

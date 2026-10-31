@@ -48,6 +48,9 @@ export const Feature = {
 
   // --- extended (opt-in; declared per provider) ---
   GetAuthCode: 'getAuthCode', // retrieve transfer auth/EPP code (transfer out)
+  GetTransferOut: 'getTransferOut', // read an outbound transfer another registrar requested
+  ApproveTransferOut: 'approveTransferOut', // release a pending outbound transfer now
+  RejectTransferOut: 'rejectTransferOut', // refuse a pending outbound transfer
   GetDnssec: 'getDnssec', // read whether DNSSEC is enabled (DS / key records)
   DisableDnssec: 'disableDnssec', // turn DNSSEC off (no enable / key management)
   GetEmailForwarding: 'getEmailForwarding', // read alias-style email forwarding rules
@@ -85,6 +88,9 @@ export const CORE_FEATURES = [
 // of these via its static `extendedFeatures`.
 export const EXTENDED_FEATURES = [
   Feature.GetAuthCode,
+  Feature.GetTransferOut,
+  Feature.ApproveTransferOut,
+  Feature.RejectTransferOut,
   Feature.GetDnssec,
   Feature.DisableDnssec,
   Feature.GetEmailForwarding,
@@ -137,6 +143,9 @@ export const FEATURE_CALLS: Record<
   getDnsRecords: { intent: 'read', optsIndex: 1 },
   setDnsRecords: { intent: 'write', optsIndex: 2 },
   getAuthCode: { intent: 'write', optsIndex: 1 },
+  getTransferOut: { intent: 'read', optsIndex: 1 },
+  approveTransferOut: { intent: 'write', optsIndex: 1 },
+  rejectTransferOut: { intent: 'write', optsIndex: 1 },
   getDnssec: { intent: 'read', optsIndex: 1 },
   disableDnssec: { intent: 'write', optsIndex: 1 },
   getEmailForwarding: { intent: 'read', optsIndex: 1 },

@@ -343,6 +343,33 @@ export interface DnssecStatus {
   dsRecords: DsRecord[];
 }
 
+// Where an outbound transfer stands at the losing registrar. A transfer-out
+// starts when another registrar requests the domain with its auth code:
+//   pending   — waiting on the owner: approve it to release the domain now, or
+//               reject it. Left alone, most registrars release it after 5 days.
+//   approved  — released to the gaining registrar, not yet completed
+//   rejected  — refused by the owner or the registrar
+//   completed — the domain has left the account
+//   cancelled — withdrawn, failed or timed out on the gaining side
+//   unknown   — a status label this library doesn't recognise (see `rawStatus`)
+export type TransferOutStatus =
+  'pending' | 'approved' | 'rejected' | 'completed' | 'cancelled' | 'unknown';
+
+// An outbound transfer of a domain, as the losing registrar reports it.
+export interface TransferOut {
+  status: TransferOutStatus;
+  // the registrar's own status label, verbatim
+  rawStatus: string;
+  // the registrar's reference for the transfer (Dynadot: the order id)
+  id?: string;
+  // the registrar taking the domain, when reported
+  gainingRegistrar?: string;
+  requestedDate: Date | null;
+  // when the transfer request lapses or is released without action
+  expirationDate: Date | null;
+  completedDate: Date | null;
+}
+
 // The core interface every registrar implementation fulfils. `BaseRegistrar`
 // (src/registrar.ts) provides the shared plumbing and `NotImplementedError`
 // defaults; concrete providers under src/registrars/ extend it.
@@ -477,6 +504,17 @@ export interface Registrar {
   // retrieve the transfer authorization (EPP/auth) code used to transfer the
   // domain away to another registrar
   getAuthCode(domainName: string, opts?: RequestOptions): Promise<string>;
+
+  // read the domain's most recent outbound transfer (one another registrar
+  // requested with the auth code); null when there is none on record
+  getTransferOut(domainName: string, opts?: RequestOptions): Promise<TransferOut | null>;
+
+  // approve a pending outbound transfer, releasing the domain to the gaining
+  // registrar now instead of after the registrar's waiting period
+  approveTransferOut(domainName: string, opts?: RequestOptions): Promise<OperationResult>;
+
+  // reject (deny) a pending outbound transfer; the domain stays put
+  rejectTransferOut(domainName: string, opts?: RequestOptions): Promise<OperationResult>;
 
   // read DNSSEC status for a domain (whether it's enabled, plus any DS records)
   getDnssec(domainName: string, opts?: RequestOptions): Promise<DnssecStatus>;

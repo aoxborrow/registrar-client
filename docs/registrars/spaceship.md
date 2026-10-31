@@ -38,6 +38,15 @@ Long-running operations (register, transfer, renew, restore) are asynchronous: t
 | Domain forwarding / URL redirect                    | ✗       | Not documented as a distinct API capability                                                                                                                                                                   |
 | Webhooks / event notifications                      | ✗       | Not documented; async operations must be polled, not pushed                                                                                                                                                   |
 
+## Transfer-out approval (researched 2026-10-31)
+
+**Not available through the API.** The only transfer endpoints are transfer-in,
+auth code and lock. `GET /v1/domains/{domain}/transfer` (`domains:transfer`
+scope) reports a transfer's `direction`, but `"in"` is its only value, and
+`eppStatuses` lists only `client*` statuses, never `pendingTransfer`. Owners
+approve early in the Spaceship Domain Manager; otherwise the transfer completes
+after the usual ~5 days (Spaceship's own help pages weren't reachable to confirm).
+
 ## Notable / Unique Features
 
 - **SellerHub (domain marketplace/aftermarket)** — endpoints to list domains for sale, manage checkout links, and pull sold-domain reports (`POST /sellerhub/checkout-links`, `GET/POST/PATCH/DELETE /sellerhub/domains`, `GET /sellerhub/domains/reports/sold`, plus SafePay escrow transaction endpoints). Generic name suggestion: `listDomainForSale(config)` / `getMarketplaceListings()`.
@@ -67,3 +76,5 @@ Verified against the production account with a `domains:transfer`-scoped key:
 - https://docs.spaceship.dev/
 - https://registry.terraform.io/providers/namecheap/spaceship/0.0.2/docs
 - https://apis.io/apis/spaceship/spaceship-domain-management-api/
+- https://docs.spaceship.dev/
+- https://www.dynadot.com/help/question/transfer-domain-from-Spaceship

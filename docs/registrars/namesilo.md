@@ -99,6 +99,16 @@ NameSilo offers a single, free, comprehensive HTTP API: every operation is invok
 
 **General response envelope**: both XML and JSON responses share the same shape — a `request` echo (operation + requester IP) and a `reply` block containing at minimum `code` (numeric status; `300` = success family) and `detail` (human-readable status string), plus operation-specific fields. Non-2xx/error conditions are signaled via non-300 `code` values rather than HTTP status codes (all calls return HTTP 200).
 
+## Transfer-out approval (researched 2026-10-31)
+
+**Not available through the API.** The transfer operations (`transferDomain`,
+`checkTransferStatus`, `transferUpdateChangeEPPCode`,
+`transferUpdateResendAdminEmail`, `transferUpdateResubmitToRegistry`) are all
+inbound, `domainPush` moves a name between NameSilo accounts, and
+`getDomainInfo`'s `status` documents only `Active`. In the web UI, Transfer
+Manager → Pending Outbound Transfers approves one (it completes in about 15
+minutes); left alone, it completes in 5–7 days.
+
 ## Notable / Unique Features
 
 - **Registered/glue nameservers as first-class objects** — `addRegisteredNameServer` / `modifyRegisteredNameServer` / `deleteRegisteredNameServer` / `listRegisteredNameServers` manage custom host records (e.g. `ns1.example.com` with its own IP) independently of `changeNameServers`, which just points a domain at existing nameservers. Suggested generic methods: `createGlueRecord(host, ips[])`, `updateGlueRecord(host, ips[])`, `deleteGlueRecord(host)`, `listGlueRecords()`.
@@ -185,3 +195,5 @@ permanent (NameSilo exposes no delete endpoint), so each run leaves a
 - https://www.namesilo.com/api-reference/pages?uid=domains/domain-unlock
 - https://www.namesilo.com/api-reference/pages?uid=account/get-account-balance
 - https://pkg.go.dev/github.com/nrdcg/namesilo (third-party client used to cross-check operation names/params)
+- https://www.namesilo.com/api-reference/pages?uid=domains/get-domain-info
+- https://www.namesilo.com/support/v2/articles/account-options/transfer-manager
