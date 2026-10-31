@@ -612,3 +612,61 @@ describe('NameBright provider (camelCase responses)', () => {
     expect(calls.some(c => c.method === 'PUT')).toBe(false);
   });
 });
+
+describe('NameBright listDomains paging', () => {
+  const token = { access_token: 't', token_type: 'bearer', expires_in: 1800 };
+  const names = (n: number) => Array.from({ length: n }, (_, i) => `d${i}.com`);
+
+  // A server that ignores domainsPerPage and serves `size` rows per page. Past
+  // the end it returns `pastEnd` (an empty page by default).
+  function pagedServer(
+    all: string[],
+    size: number,
+    opts: { total?: boolean; pastEnd?: 'empty' | 'repeatLast' } = {}
+  ) {
+    return (req: RequestConfig) => {
+      if (req.path.includes('auth/token')) return token;
+      const page = Number(req.query?.page ?? 1);
+      const lastPage = Math.max(1, Math.ceil(all.length / size));
+      const p = page > lastPage && opts.pastEnd === 'repeatLast' ? lastPage : page;
+      const rows = all.slice((p - 1) * size, p * size).map(domainName => ({ domainName }));
+      return opts.total === false
+        ? { domains: rows }
+        : { domains: rows, resultsTotal: all.length, currentPage: page };
+    };
+  }
+
+  it('keeps paging when the server ignores domainsPerPage (10 per page, resultsTotal 32)', async () => {
+    const nb = namebright();
+    const calls = stubHttp(nb, pagedServer(names(32), 10));
+    const domains = await nb.listDomains();
+    expect(domains.map(d => d.domainName)).toEqual(names(32));
+    // stops as soon as resultsTotal is reached: pages 1-4, no extra request
+    expect(calls.filter(c => c.path === 'account/domains')).toHaveLength(4);
+  });
+
+  it('without resultsTotal, pages until an empty page', async () => {
+    const nb = namebright();
+    stubHttp(nb, pagedServer(names(23), 10, { total: false }));
+    expect((await nb.listDomains()).map(d => d.domainName)).toEqual(names(23));
+  });
+
+  it('without resultsTotal, stops when a page only repeats domains already seen', async () => {
+    const nb = namebright();
+    const calls = stubHttp(nb, pagedServer(names(15), 10, { total: false, pastEnd: 'repeatLast' }));
+    const domains = await nb.listDomains();
+    expect(domains.map(d => d.domainName)).toEqual(names(15));
+    expect(calls.filter(c => c.path === 'account/domains').length).toBeLessThanOrEqual(3);
+  });
+
+  it('throws rather than returning a partial list when paging never ends', async () => {
+    const nb = namebright();
+    let n = 0;
+    stubHttp(nb, req =>
+      req.path.includes('auth/token')
+        ? token
+        : { domains: Array.from({ length: 10 }, () => ({ domainName: `x${n++}.com` })) }
+    );
+    await expect(nb.listDomains()).rejects.toThrow(/paging/i);
+  });
+});
