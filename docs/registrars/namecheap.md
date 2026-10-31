@@ -75,6 +75,15 @@ Auth is via query-string parameters on every request — no bearer tokens or sig
 | Domain forwarding / URL redirect            | ✓       | Implemented via `domains.dns.setHosts` special record types `URL` (302), `URL301` (permanent), and `FRAME` (masked redirect)                                                                                                                  |
 | Webhooks / event notifications              | ✗       | No webhook/event-subscription capability documented; API is pull/poll-only                                                                                                                                                                    |
 
+## Transfer-out approval (researched 2026-10-31)
+
+**Not available through the API.** The `domains.transfer.*` methods (`create`,
+`getStatus`, `updateStatus`, `getList`) all work on inbound transfer orders, and
+Namecheap's help center says outgoing transfer statuses aren't shown in the
+account at all. The registry approves the transfer automatically 5 days after it
+starts; the owner can release it sooner (or cancel it) from the transfer-out
+notification email.
+
 ## Notable / Unique Features
 
 - **WhoisGuard privacy as a distinct manageable entity** (own get/enable/disable/renew/changeEmail lifecycle, separate from the domain itself) — generic name: `getPrivacyStatus(domain)` / `setPrivacy(domain, enabled)`.
@@ -113,3 +122,5 @@ Auth is via query-string parameters on every request — no bearer tokens or sig
 - [API - FAQ](https://www.namecheap.com/support/knowledgebase/article.aspx/9739/63/api-faq/)
 - [What is DNSSEC?](https://www.namecheap.com/support/knowledgebase/article.aspx/9717/2232/what-is-dnssec/)
 - [Types of Domain Redirects](https://www.namecheap.com/support/knowledgebase/article.aspx/9604/2237/types-of-domain-redirects-301-302-url-redirects-url-frame-and-cname/)
+- https://www.namecheap.com/support/knowledgebase/article.aspx/580/83/transfer-statuses/
+- https://www.namecheap.com/support/knowledgebase/article.aspx/10692/8/how-do-i-transfer-a-domain-from-namecheap-to-spaceship/

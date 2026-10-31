@@ -93,6 +93,16 @@ on an update-locked domain (`clientUpdateProhibited`) returns "This domain is
 currently update-locked"; the API can't remove that lock, and an unlocked
 nameserver change is not yet verified.
 
+## Transfer-out approval (researched 2026-10-31)
+
+**Not available through the API**, as far as public sources show (the API
+reference sits behind a bot check, and 101domain lists the API as search, DNS
+and account data). The control panel shows a pending outbound transfer as
+"Transfer Out Pending"; the matching `GET /domains` `status` value is
+unconfirmed — the client already maps `XFER_AWAY` and `XFER_IN_*`, so it is
+likely an `XFER_*` value. Owners approve or reject under Domain Names → the
+domain → "Please Approve/Deny this transfer" (not every extension offers it).
+
 ## Sources checked 2026-10-06
 
 - [OpenAPI 1.1.0](https://api.101domain.com/api/documentation)
@@ -100,3 +110,4 @@ nameserver change is not yet verified.
 - [Endpoint reference](https://help.101domain.com/kb/api-endpoints-reference)
 - [DNS writes](https://help.101domain.com/kb/dns-record-and-name-server-management-api-write-endpoints)
 - [Account quotas](https://help.101domain.com/kb/api-key-limits)
+- [Approving or rejecting a transfer out](https://help.101domain.com/kb/how-to-approve-or-reject-a-domain-transfer-out-fro) (checked 2026-10-31)

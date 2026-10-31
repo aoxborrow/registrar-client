@@ -101,6 +101,9 @@ below capture the per-feature caveats behind those cells.
 | `Feature`             | Notes                                                                                                                   |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `GetAuthCode`         | transfer-out EPP code returned synchronously; NameSilo/NC only email it; Porkbun gates it behind the UI                 |
+| `GetTransferOut`      | read the latest outbound transfer (status, dates); null when none. Dynadot only; GoDaddy v2 could                       |
+| `ApproveTransferOut`  | release a pending outbound transfer now. Dynadot; GoDaddy v2 and Gandi have endpoints, not wired up                     |
+| `RejectTransferOut`   | deny a pending outbound transfer. Dynadot; GoDaddy v2, Gandi and Name.com have endpoints, not wired up                  |
 | `GetDnssec`           | read whether DNSSEC is enabled (DS / key records)                                                                       |
 | `DisableDnssec`       | turn DNSSEC off; no enable / key management (out of scope)                                                              |
 | `GetEmailForwarding`  | read counterpart of `SetEmailForwarding`                                                                                |
@@ -118,7 +121,12 @@ production accounts (2026-08-29) — both return the transfer/EPP code
 synchronously on the domain-detail response (`authCode` / `AuthCode`);
 **NameSilo**'s remaining forwarding feature is implemented from verified endpoint
 docs but not live-verified (no sandbox credentials available).
-Two provider-specific limitations worth noting: **NameSilo** dropped
+**Dynadot**'s transfer-out approval (`GetTransferOut` / `ApproveTransferOut` /
+`RejectTransferOut`, 2026-10-31) is sandbox-verified only up to "no such order":
+the sandbox can't start an outbound transfer. Dynadot documents no
+transfer-away status labels, so they're matched by their words (`rawStatus`
+keeps the original); a real pending order, read once in production, says
+`None`. Two provider-specific limitations worth noting: **NameSilo** dropped
 `GetAuthCode` (its `retrieveAuthCode` emails the code to the registrant rather
 than returning it) and reads only the apex URL forward (no forwarding-list
 endpoint); **Dynadot** and **NameSilo** forward the whole domain / apex, so their

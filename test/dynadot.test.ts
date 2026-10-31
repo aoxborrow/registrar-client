@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { createHmac } from 'node:crypto';
-import { createRegistrar, ConsentRequiredError, NotImplementedError } from '../src/index';
+import {
+  createRegistrar,
+  ConsentRequiredError,
+  Feature,
+  NotFoundError,
+  NotImplementedError,
+} from '../src/index';
 import type { RequestConfig } from '../src/http';
 
 // Stub the provider's HttpClient so no network calls happen. `handler` receives
@@ -447,6 +453,183 @@ describe('Dynadot provider (RESTful v2)', () => {
     expect(await dy.getAuthCode('example.com')).toBe('EPP-SECRET');
     expect(calls[0].method).toBe('GET');
     expect(calls[0].path).toBe('/restful/v2/domains/example.com/transfer_auth_code');
+  });
+
+  it('declares the transfer-out features', () => {
+    const dy = dynadot();
+    expect(dy.supports(Feature.GetTransferOut)).toBe(true);
+    expect(dy.supports(Feature.ApproveTransferOut)).toBe(true);
+    expect(dy.supports(Feature.RejectTransferOut)).toBe(true);
+  });
+
+  const AWAY_PATH = '/restful/v2/domains/example.com/transfer_status?transfer_type=transfer_away';
+
+  it('getTransferOut reads the transfer_away orders and maps status and dates', async () => {
+    const dy = dynadot();
+    const calls = stubHttp(dy, () =>
+      ok({
+        domain_transfer_status_list: [
+          // the shape a real pending transfer-away order reads back with
+          {
+            order_id: '423',
+            transfer_status: 'None',
+            order_created_date: 1793435331420,
+            order_completed_date: -1,
+          },
+        ],
+      })
+    );
+    expect(await dy.getTransferOut('example.com')).toEqual({
+      status: 'pending',
+      rawStatus: 'None',
+      id: '423',
+      requestedDate: new Date(1793435331420),
+      expirationDate: null,
+      completedDate: null,
+    });
+    expect(calls[0]).toMatchObject({ method: 'GET', path: AWAY_PATH });
+    expect(calls[0].headers?.['X-Signature']).toBe(expectedSignature(AWAY_PATH));
+  });
+
+  it('getTransferOut maps an expiration_date when Dynadot sends one', async () => {
+    const dy = dynadot();
+    stubHttp(dy, () =>
+      ok({
+        domain_transfer_status_list: [
+          { order_id: '9', transfer_status: 'None', expiration_date: 1793867331420 },
+        ],
+      })
+    );
+    expect(await dy.getTransferOut('example.com')).toMatchObject({
+      expirationDate: new Date(1793867331420),
+    });
+  });
+
+  it('getTransferOut prefers an open order over a newer finished one', async () => {
+    const dy = dynadot();
+    stubHttp(dy, () =>
+      ok({
+        domain_transfer_status_list: [
+          { order_id: 1, transfer_status: 'Denied', order_created_date: 1000 },
+          { order_id: 3, transfer_status: 'Cancelled', order_created_date: 3000 },
+          { order_id: 2, transfer_status: 'Waiting', order_created_date: 2000 },
+        ],
+      })
+    );
+    expect(await dy.getTransferOut('example.com')).toMatchObject({ id: '2', status: 'pending' });
+  });
+
+  it('getTransferOut returns the latest order when none is open', async () => {
+    const dy = dynadot();
+    stubHttp(dy, () =>
+      ok({
+        domain_transfer_status_list: [
+          { order_id: 1, transfer_status: 'Denied', order_created_date: 1000 },
+          { order_id: 3, transfer_status: 'Transferred Away', order_created_date: 3000 },
+        ],
+      })
+    );
+    expect(await dy.getTransferOut('example.com')).toMatchObject({ id: '3', status: 'completed' });
+  });
+
+  it('getTransferOut returns null on a 404 (no transfer-away order)', async () => {
+    const dy = dynadot();
+    stubHttp(dy, () => {
+      throw new NotFoundError('Can not find the transferring order in the domain.');
+    });
+    expect(await dy.getTransferOut('example.com')).toBeNull();
+    stubHttp(dy, () => ({
+      code: 404,
+      error: { description: 'Can not find the transferring order' },
+    }));
+    expect(await dy.getTransferOut('example.com')).toBeNull();
+  });
+
+  it('maps transfer status labels by their words', async () => {
+    const dy = dynadot();
+    const cases: [string, string][] = [
+      ['None', 'pending'],
+      ['Waiting For Approval', 'pending'],
+      ['Approved', 'approved'],
+      ['Not Approved', 'rejected'],
+      ['Denied', 'rejected'],
+      ['Cancelled', 'cancelled'],
+      ['Failed', 'cancelled'],
+      ['Transferred Away', 'completed'],
+      ['Pre Sale Domain', 'unknown'],
+    ];
+    for (const [label, status] of cases) {
+      stubHttp(dy, () =>
+        ok({ domain_transfer_status_list: [{ order_id: 9, transfer_status: label }] })
+      );
+      expect((await dy.getTransferOut('example.com'))?.status, label).toBe(status);
+    }
+  });
+
+  it('a finished date makes an unrecognised label completed', async () => {
+    const dy = dynadot();
+    stubHttp(dy, () =>
+      ok({
+        domain_transfer_status_list: [
+          { order_id: 9, transfer_status: 'Pre Sale Domain', order_completed_date: 1793435331420 },
+        ],
+      })
+    );
+    expect(await dy.getTransferOut('example.com')).toMatchObject({ status: 'completed' });
+  });
+
+  it('approveTransferOut answers the open order with approve: true', async () => {
+    const dy = dynadot();
+    const calls = stubHttp(dy, req =>
+      req.method === 'GET'
+        ? ok({ domain_transfer_status_list: [{ order_id: '423', transfer_status: 'Pending' }] })
+        : { code: 200, message: 'Success' }
+    );
+    const res = await dy.approveTransferOut('example.com');
+    expect(res).toEqual({ success: true, message: 'Transfer of example.com approved' });
+    expect(calls[0].path).toBe(AWAY_PATH);
+    const body = { domain_name: 'example.com', approve: true };
+    expect(calls[1]).toMatchObject({
+      method: 'POST',
+      path: '/restful/v2/orders/423/authorize_transfer_away',
+      body,
+    });
+    expect(calls[1].headers?.['X-Signature']).toBe(
+      expectedSignature('/restful/v2/orders/423/authorize_transfer_away', JSON.stringify(body))
+    );
+  });
+
+  it('rejectTransferOut answers the open order with approve: false', async () => {
+    const dy = dynadot();
+    const calls = stubHttp(dy, req =>
+      req.method === 'GET'
+        ? ok({ domain_transfer_status_list: [{ order_id: '423', transfer_status: 'Pending' }] })
+        : { code: 200, message: 'Success' }
+    );
+    const res = await dy.rejectTransferOut('example.com');
+    expect(res).toEqual({ success: true, message: 'Transfer of example.com rejected' });
+    expect(calls[1].body).toEqual({ domain_name: 'example.com', approve: false });
+  });
+
+  it('approveTransferOut fails without a POST when there is no transfer-out', async () => {
+    const dy = dynadot();
+    const calls = stubHttp(dy, () => {
+      throw new NotFoundError('Can not find the transferring order in the domain.');
+    });
+    const res = await dy.approveTransferOut('example.com');
+    expect(res).toEqual({ success: false, message: 'No transfer-out of example.com to answer' });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('approveTransferOut surfaces Dynadot refusing the order', async () => {
+    const dy = dynadot();
+    stubHttp(dy, req =>
+      req.method === 'GET'
+        ? ok({ domain_transfer_status_list: [{ order_id: '423', transfer_status: 'Pending' }] })
+        : { code: 409, error: { description: 'Domain can not approve transfer out.' } }
+    );
+    const res = await dy.approveTransferOut('example.com');
+    expect(res).toEqual({ success: false, message: 'Domain can not approve transfer out.' });
   });
 
   it('getDnssec maps dnssec_info_list and parses "(code)" labels', async () => {

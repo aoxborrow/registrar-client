@@ -65,6 +65,16 @@ Base URL: `https://api.porkbun.com/api/json/v3` (IPv4-only fallback: `https://ap
 
 6. **Unlock domain** — **not supported**, same reasoning as above; no toggle endpoint anywhere in the v3.16 spec.
 
+## Transfer-out approval (researched 2026-10-31)
+
+**Not available through the API** (checked against the v3 OpenAPI spec, 3.66).
+`getTransfer` / `listTransfers` / `cancelTransfer` and the
+`domain.transfer.completed` webhook are all inbound; `domain/get`'s `status` is a
+free string; `GET /dns/preflight/{domain}?intent=transfer-out` only checks DNS
+before leaving. In the dashboard: Domain Management → Details → Registrar
+Transfer → Approve / Reject Transfer Out, within five days of the request; left
+alone, the transfer completes after about five days.
+
 ## Notable / Unique Features
 
 - **Dry-run previews** — `dryRun: true` on `domain/create`, `domain/renew`, and `domain/transfer` validates everything (funds, eligibility, price) and returns the would-be cost without creating an order or charging. Suggested generic method: pass a `dryRun` option through `registerDomain`/`renewDomain`/`transferIn`.
@@ -90,3 +100,6 @@ Base URL: `https://api.porkbun.com/api/json/v3` (IPv4-only fallback: `https://ap
 - https://porkbun.com/api/json/v3/documentation
 - https://porkbun.com/api/json/v3/spec (OpenAPI 3.0 JSON spec, `info.version` 3.16)
 - https://porkbun.com/account/api
+- https://porkbun.com/api/json/v3/spec
+- https://kb.porkbun.com/article/139-how-to-approve-an-outbound-transfer-from-porkbun
+- https://kb.porkbun.com/article/114-how-to-cancel-an-outbound-transfer-from-porkbun
