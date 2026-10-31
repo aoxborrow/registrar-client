@@ -118,6 +118,31 @@ Two auth schemes coexist: the legacy `sso-key {API_KEY}:{API_SECRET}` header (us
 | Domain forwarding / URL redirect            | ✓       | **v2 customer-scoped** `/v2/customers/{customerId}/domains/forwards/{fqdn}` (verified live 2026-08-29; the old v1 `/v1/domains/forwards/{fqdn}` 404s). Per-fqdn `PUT`/`DELETE` (204); requires `customerId` (customer UUID, or a numeric shopper ID resolved via an sso-key-only `GET /v1/shoppers/{id}?includes=customerId` lookup). Write enum is `REDIRECT_PERMANENT`/`REDIRECT_TEMPORARY`; reads return `PERMANENT_REDIRECT`/`TEMPORARY_REDIRECT`; `MASKED` is read-only. |
 | Webhooks / event notifications              | ~       | v2 adds "async operation tracking — action queues, status polling, notifications" — notification mechanism unclear (polling vs. push webhook) from available docs.                                                                                                                                                                                                                                                                                                            |
 
+## Transfer-out approval (researched 2026-10-31, not implemented)
+
+GoDaddy's **v2** customer-scoped API can read, approve and reject a pending
+outbound transfer. All three need the `customerId` (as domain forwarding does),
+so they are not wired up yet. Verified in the published OpenAPI spec
+(`domains-v2.json`); not live-tested.
+
+- **Read:** `GET /v2/customers/{customerId}/domains/{domain}?includes=actions` lists
+  an `actions[]` entry with `type: "TRANSFER_OUT"` while a transfer-out is in
+  progress (`status` ACCEPTED / AWAITING / PENDING / SUCCESS / FAILED / CANCELLED);
+  `GET .../domains/{domain}/actions/TRANSFER_OUT` reads that action alone. The
+  domain's own `status` turns `PENDING_TRANSFER` (direction not stated). v1's
+  `GET /v1/domains?statuses=` filter accepts `PENDING_TRANSFER_OUT` (plus `_ACK`,
+  `_NACK`, …). v3 can't tell: its `PENDING_TRANSFER` is documented as inbound only.
+- **Approve:** `POST /v2/customers/{customerId}/domains/{domain}/transferOutAccept`
+  (no body) → 202; poll `.../actions/TRANSFER_OUT_ACCEPT`.
+- **Reject:** `POST .../domains/{domain}/transferOutReject?reason=` → 202; `reason`
+  is optional, one of `EVIDENCE_OF_FRAUD`, `URDP_ACTION` (sic), `COURT_ORDER`,
+  `DISPUTE_OVER_IDENTITY`, `NO_PAYMENT_FOR_PREVIOUS_REGISTRATION_PERIOD`,
+  `WRITTEN_OBJECTION`, `TRANSFERRED_WITHIN_SIXTY_DAYS`.
+- `POST .../domains/{domain}/transferOut?registrar=` is something else: a
+  registrar-initiated push for ccTLDs like .uk.
+- **Left alone:** GoDaddy releases the transfer within seven days. In the
+  dashboard: Transfers → Transfers Out → Approve Transfer (completes in 15–30 min).
+
 ## Notable / Unique Features
 
 - **Quote-then-execute registration (v3)**: price is locked via a `quoteToken` before purchase, then executed with an idempotency key — reduces race conditions between availability check and purchase. Generic method: `quoteRegistration(domain, params)` → `executeRegistration(quoteToken, idempotencyKey)`.
@@ -147,3 +172,5 @@ Two auth schemes coexist: the legacy `sso-key {API_KEY}:{API_SECRET}` header (us
 - https://www.godaddy.com/resources/news/introducing-the-godaddy-developer-platform-domain-apis-for-developers-and-their-agents
 - https://community.letsencrypt.org/t/godaddy-no-longer-allows-api-access-to-clients-e-g-for-dns-based-cert-renewal-if-you-have-less-than-50-domains/219377
 - https://www.godaddy.com/legal/agreements/godaddy-api-terms-of-use
+- https://developer.godaddy.com/openapi/domains-v2.json
+- https://www.godaddy.com/help/accept-or-decline-a-transfer-away-from-godaddy-6040
