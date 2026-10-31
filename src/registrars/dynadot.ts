@@ -19,7 +19,13 @@ import type {
 } from '../types';
 import { REST_SAFE_METHODS } from '../http';
 import { createDomain, filterDomains, requireConsent, settableForwards } from '../utils';
-import { NotFoundError, NotImplementedError, toRegistrarError } from '../errors';
+import {
+  NotFoundError,
+  NotImplementedError,
+  InvalidResponseError,
+  RegistrarError,
+  toRegistrarError,
+} from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
@@ -178,6 +184,8 @@ const SUPPORTED_DNS_TYPES = new Set(['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'S
  * Dynadot sandbox (`api-sandbox.dynadot.com`), which mirrors the API.
  */
 export class DynadotRegistrar extends BaseRegistrar {
+  private classicPricingRejectedUntil = 0;
+  private readonly restPricingUnsupported = new Map<string, number>();
   readonly name = 'dynadot';
   // a REST API: GET and HEAD never change state
   static override readonly safeMethods = REST_SAFE_METHODS;
@@ -433,8 +441,8 @@ export class DynadotRegistrar extends BaseRegistrar {
    * `price_check=1` returns the exact renewal fee — premium names included —
    * without renewing. `bulk_search` (the v2 pricing path) only quotes names
    * *available to register*, so it can't price an owned domain's renewal. We try
-   * the price check first and fall back to `bulk_search` for names not in the
-   * account (e.g. pricing a domain before registering it).
+   * compatible classic price-only quotes first. When unavailable, single-domain
+   * REST search retains owned-name prices that bulk_search omits.
    */
   override async getPricing(tldOrDomain: string, opts?: RequestOptions): Promise<TldPricing> {
     if (!tldOrDomain.includes('.')) {
@@ -443,32 +451,53 @@ export class DynadotRegistrar extends BaseRegistrar {
           'Dynadot v2 has no standalone per-TLD price endpoint'
       );
     }
-    const tld = tldOrDomain.slice(tldOrDomain.indexOf('.') + 1);
+    const tld = tldOrDomain.slice(tldOrDomain.indexOf('.') + 1).toLowerCase();
 
-    // Owned domain: the price-check renew quote is the exact renewal (premium
-    // included). Skips bulk_search, which returns nothing for a registered name.
-    const checked = await this.renewPriceCheck(tldOrDomain, opts);
-    if (checked) {
-      return { tld, currency: checked.currency, renewal: checked.renewal };
+    // Preserve working exact legacy quotes. Remember a rejected classic key
+    // so REST-only credentials do not keep producing failed API3 requests.
+    if (this.classicPricingRejectedUntil <= Date.now()) {
+      const checked = await this.renewPriceCheck(tldOrDomain, opts);
+      if (checked) return { tld, currency: checked.currency, renewal: checked.renewal };
     }
 
-    // Not in the account — fall back to bulk_search for available-name pricing.
-    const list = encodeURIComponent(tldOrDomain);
-    const data = await this.read<{ domain_result_list?: V2SearchResult[] }>(
-      'GET',
-      `/restful/v2/domains/bulk_search?domain_name_list=${list}&show_price=true`,
-      undefined,
-      opts
-    );
-    const result = (data.domain_result_list ?? [])[0];
-    const price = oneYearPrice(result?.price_list);
-    return {
-      tld,
-      currency: price?.currency ?? 'USD',
-      registration: price?.registration,
-      renewal: price?.renewal,
-      transfer: price?.transfer,
-    };
+    // Single search returns per-name renewal prices even for taken names.
+    // bulk_search omits those prices; repeatedly trying an incompatible
+    // classic key also contributes to Dynadot's failed-request IP limit.
+    let restPrice: TldPricing | undefined;
+    let restError: unknown;
+    if ((this.restPricingUnsupported.get(tld) ?? 0) > Date.now()) {
+      restError = new NotImplementedError(`Dynadot: REST pricing is unavailable for .${tld}`);
+    } else {
+      try {
+        const data = await this.read<V2SearchResult>(
+          'GET',
+          `/restful/v2/domains/${encodeURIComponent(tldOrDomain.toLowerCase())}/search?show_price=true&currency=usd`,
+          undefined,
+          opts
+        );
+        if (data.domain_name?.toLowerCase() !== tldOrDomain.toLowerCase()) {
+          throw new InvalidResponseError('Dynadot pricing returned a different domain');
+        }
+        const price = annualSearchPrice(data.price_list, tld.toLowerCase());
+        restPrice = {
+          tld,
+          currency: price?.currency ?? 'USD',
+          registration: price?.registration,
+          renewal: price?.renewal,
+          transfer: price?.transfer,
+        };
+        if (restPrice.renewal !== undefined) return restPrice;
+      } catch (error) {
+        if (error instanceof RegistrarError && error.shouldRetry()) throw error;
+        restError = error;
+        if (error instanceof Error && /This TLD isn't supported via the API/i.test(error.message)) {
+          this.restPricingUnsupported.set(tld, Date.now() + 60 * 60_000);
+          restError = new NotImplementedError(`Dynadot: REST pricing is unavailable for .${tld}`);
+        }
+      }
+    }
+    if (restError) throw toRegistrarError(restError);
+    return restPrice ?? { tld, currency: 'USD' };
   }
 
   /**
@@ -484,24 +513,38 @@ export class DynadotRegistrar extends BaseRegistrar {
     domain: string,
     opts?: RequestOptions
   ): Promise<{ renewal: number; currency: string } | null> {
+    // .ai requires a two-year renewal. TldPricing remains an annual estimate.
+    const years = domain.toLowerCase().endsWith('.ai') ? 2 : 1;
     const params = new URLSearchParams({
       key: this.credentials.apiKey,
       command: 'renew',
       domain,
-      duration: '1',
+      duration: String(years),
       price_check: '1',
     });
     try {
       const res = await this.http.request<{
-        RenewResponse?: { Status?: string; PriceInfo?: string };
+        RenewResponse?: { Status?: string; PriceInfo?: string; Error?: string };
+        Response?: { Error?: string };
       }>({ method: 'GET', path: `/api3.json?${params.toString()}`, ...opts });
       const info = res.RenewResponse;
+      if ((res.Response?.Error ?? info?.Error)?.trim().toLowerCase() === 'invalid key') {
+        this.classicPricingRejectedUntil = Date.now() + 60 * 60_000;
+        return null;
+      }
       if (info?.Status !== 'price_check_success' || !info.PriceInfo) return null;
       const match = info.PriceInfo.match(/Renew Fee:\s*([\d.]+)\s+in\s+([A-Za-z]{3})/);
       if (!match) return null;
-      const renewal = Number(match[1]);
-      return Number.isNaN(renewal) ? null : { renewal, currency: match[2].toUpperCase() };
-    } catch {
+      const renewal = Number(match[1]) / years;
+      return Number.isFinite(renewal) && renewal >= 0
+        ? { renewal, currency: match[2].toUpperCase() }
+        : null;
+    } catch (error) {
+      // Preserve cooldown/retry classification; an optional quote must not
+      // hide rate limits and immediately issue a second API request.
+      if (error instanceof RegistrarError && error.shouldRetry()) throw error;
+      if (error instanceof RegistrarError && error.status === 401)
+        this.classicPricingRejectedUntil = Date.now() + 60 * 60_000;
       return null;
     }
   }
@@ -1011,6 +1054,36 @@ function isPrivacyOn(privacy: string | undefined): boolean {
   const p = (privacy ?? '').toLowerCase();
   if (!p || p.includes('off') || p.startsWith('no')) return false;
   return p.includes('full') || p.includes('partial') || p.includes('privacy');
+}
+
+// A full-domain renewal estimate must have an explicit supported annual term.
+// .ai's mandatory two-year renewal is divided by two; registration/transfer
+// products are reported only for a one-year entry, preserving their term.
+function annualSearchPrice(
+  prices: V2Price[] | undefined,
+  tld: string
+): { currency: string; registration?: number; renewal?: number; transfer?: number } | undefined {
+  if (!Array.isArray(prices)) return undefined;
+  const entry =
+    prices.find(p => /\b1\s*year\b/i.test(p.unit ?? '')) ??
+    (tld === 'ai' ? prices.find(p => /\b2\s*years?\b/i.test(p.unit ?? '')) : undefined);
+  if (!entry || typeof entry.currency !== 'string' || !/^[A-Z]{3}$/i.test(entry.currency))
+    return undefined;
+  const years = /\b1\s*year\b/i.test(entry.unit ?? '') ? 1 : 2;
+  const valid = (raw: unknown): number | undefined => {
+    if (typeof raw !== 'number' && (typeof raw !== 'string' || !/^\d+(?:\.\d+)?$/.test(raw.trim())))
+      return undefined;
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n : undefined;
+  };
+  const renewal = valid(entry.renewal_price);
+  return {
+    currency: entry.currency.toUpperCase(),
+    ...(years === 1
+      ? { registration: valid(entry.registration_price), transfer: valid(entry.transfer_price) }
+      : {}),
+    renewal: renewal === undefined ? undefined : renewal / years,
+  };
 }
 
 // pick the 1-year price entry (falling back to the first), mapping to numbers
