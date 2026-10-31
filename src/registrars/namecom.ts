@@ -55,6 +55,7 @@ interface NamecomDomain {
   privacyEnabled?: boolean;
   nameservers?: string[];
   contacts?: Partial<Record<keyof ContactSet, NamecomContact>>;
+  renewalPrice?: number | null;
 }
 interface NamecomPricing {
   premium?: boolean;
@@ -249,7 +250,34 @@ export class NamecomRegistrar extends BaseRegistrar {
         transfer: price(entry.transferInPrice),
       };
     }
-    const result = await this.domainPricing(name, 1, opts);
+    let result: NamecomPricing;
+    try {
+      result = await this.domainPricing(name, 1, opts);
+    } catch (error) {
+      // Core rejects .in at :getPricing but still returns the authenticated
+      // owner's one-year renewal price on the exact domain-list record. Keep
+      // this verified annual-term fallback narrow; never estimate a premium
+      // name from general TLD pricing or reinterpret another registry's term.
+      if (
+        !(error instanceof RegistrarError) ||
+        error.status !== 422 ||
+        name.slice(name.indexOf('.') + 1) !== 'in'
+      )
+        throw error;
+      const owned = await this.http.request<{ domains?: NamecomDomain[] }>({
+        path: '/domains',
+        query: { domainName: name, includeRenewalPrice: true, perPage: 1, page: 1 },
+        ...opts,
+      });
+      const exact = Array.isArray(owned.domains)
+        ? owned.domains.filter(
+            d => typeof d.domainName === 'string' && d.domainName.toLowerCase() === name
+          )
+        : [];
+      const renewal = exact.length === 1 ? price(exact[0].renewalPrice) : undefined;
+      if (renewal === undefined) throw error;
+      return { tld: 'in', currency: 'USD', renewal };
+    }
     return {
       tld: name.slice(name.indexOf('.') + 1),
       currency: 'USD',
