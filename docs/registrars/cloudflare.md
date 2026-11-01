@@ -127,6 +127,13 @@ Standard Cloudflare API auth, applied at the account level:
 - No documented Registrar-specific rate limits; assume standard Cloudflare API-wide rate limits apply.
 - Two whole generations of API coexist right now: the deprecated `domains` resource (list/get/update — supports `auto_renew`, `locked`, `privacy` toggles) sunsets 2026-09-27, while the new `domain-search`/`domain-check`/`registrations` family is additive-only so far (no update/lock/privacy/renew endpoints confirmed on it yet). Implementors should watch for the new resource to absorb those lifecycle operations before the old one is removed, since a gap currently exists between what's deprecated and what's replaced it.
 
+## Transfer-out approval (2026-10-31)
+
+**Not available through the API.** Cloudflare Registrar has no transfer
+endpoints in either direction (see the table above: the auth code itself is
+dashboard-only), so an outbound transfer is answered in the dashboard or left to
+complete after the usual five days.
+
 ## Sources
 
 - https://developers.cloudflare.com/registrar/

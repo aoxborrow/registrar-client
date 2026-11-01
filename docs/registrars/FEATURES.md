@@ -101,9 +101,9 @@ below capture the per-feature caveats behind those cells.
 | `Feature`             | Notes                                                                                                                   |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `GetAuthCode`         | transfer-out EPP code returned synchronously; NameSilo/NC only email it; Porkbun gates it behind the UI                 |
-| `GetTransferOut`      | read the latest outbound transfer (status, dates); null when none. Dynadot only; GoDaddy v2 could                       |
-| `ApproveTransferOut`  | release a pending outbound transfer now. Dynadot; GoDaddy v2 and Gandi have endpoints, not wired up                     |
-| `RejectTransferOut`   | deny a pending outbound transfer. Dynadot; GoDaddy v2, Gandi and Name.com have endpoints, not wired up                  |
+| `GetTransferOut`      | read the latest outbound transfer (status, dates); null when none. Dynadot, GoDaddy v2, Gandi                           |
+| `ApproveTransferOut`  | release a pending outbound transfer now. Dynadot, GoDaddy v2, Gandi                                                     |
+| `RejectTransferOut`   | deny a pending outbound transfer. Dynadot, GoDaddy v2, Gandi; Name.com could                                            |
 | `GetDnssec`           | read whether DNSSEC is enabled (DS / key records)                                                                       |
 | `DisableDnssec`       | turn DNSSEC off; no enable / key management (out of scope)                                                              |
 | `GetEmailForwarding`  | read counterpart of `SetEmailForwarding`                                                                                |
@@ -126,7 +126,12 @@ docs but not live-verified (no sandbox credentials available).
 the sandbox can't start an outbound transfer. Dynadot documents no
 transfer-away status labels, so they're matched by their words (`rawStatus`
 keeps the original); a real pending order, read once in production, says
-`None`. Two provider-specific limitations worth noting: **NameSilo** dropped
+`None`. **GoDaddy**'s (v2: recent `actions`, `transferOutAccept` /
+`transferOutReject`, 2026-10-31) needs a `customerId`; with one, the actions read
+is live-verified on domains with no transfer (`[]`), the rest is from the
+published v2 spec. **Gandi**'s reads a `pendingTransfer` status (shape
+live-verified) and answers with `POST .../transferout`, sending the auth code
+back; neither has met a real transfer-out yet. Two provider-specific limitations worth noting: **NameSilo** dropped
 `GetAuthCode` (its `retrieveAuthCode` emails the code to the registrant rather
 than returning it) and reads only the apex URL forward (no forwarding-list
 endpoint); **Dynadot** and **NameSilo** forward the whole domain / apex, so their

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createRegistrar } from '../src/index';
+import { createRegistrar, Feature } from '../src/index';
 import type { RequestConfig } from '../src/http';
 
 // Stub the provider's HttpClient so no network calls happen.
@@ -264,6 +264,65 @@ describe('Gandi provider', () => {
     const calls = stubHttp(g, () => ({ fqdn: 'example.com', authinfo: 's3cr3t-epp' }));
     expect(await g.getAuthCode('example.com')).toBe('s3cr3t-epp');
     expect(calls[0].path).toBe('/domain/domains/example.com');
+  });
+
+  it('declares the transfer-out features', () => {
+    const g = gandi();
+    expect(g.supports(Feature.GetTransferOut)).toBe(true);
+    expect(g.supports(Feature.ApproveTransferOut)).toBe(true);
+    expect(g.supports(Feature.RejectTransferOut)).toBe(true);
+  });
+
+  it('getTransferOut reads a pendingTransfer status as a pending transfer-out', async () => {
+    const g = gandi();
+    const calls = stubHttp(g, () => ({
+      fqdn: 'example.com',
+      status: ['clientTransferProhibited', 'pendingTransfer'],
+    }));
+    expect(await g.getTransferOut('example.com')).toEqual({
+      status: 'pending',
+      rawStatus: 'pendingTransfer',
+      requestedDate: null,
+      expirationDate: null,
+      completedDate: null,
+    });
+    expect(calls[0].path).toBe('/domain/domains/example.com');
+  });
+
+  it('getTransferOut is null without pendingTransfer', async () => {
+    const g = gandi();
+    stubHttp(g, () => ({ fqdn: 'example.com', status: ['clientTransferProhibited'] }));
+    expect(await g.getTransferOut('example.com')).toBeNull();
+  });
+
+  it('approveTransferOut and rejectTransferOut send the answer with the current auth code', async () => {
+    const g = gandi();
+    const calls = stubHttp(g, req =>
+      req.method === 'POST'
+        ? { message: 'accepted' }
+        : { fqdn: 'example.com', status: ['pendingTransfer'], authinfo: 's3cr3t-epp' }
+    );
+    expect(await g.approveTransferOut('example.com')).toEqual({
+      success: true,
+      message: 'Transfer of example.com approved',
+    });
+    expect(calls[1]).toMatchObject({
+      method: 'POST',
+      path: '/domain/domains/example.com/transferout',
+      body: { accept: true, authinfo: 's3cr3t-epp' },
+    });
+    expect((await g.rejectTransferOut('example.com')).success).toBe(true);
+    expect(calls[3].body).toEqual({ accept: false, authinfo: 's3cr3t-epp' });
+  });
+
+  it('approveTransferOut answers nothing when no transfer-out is pending', async () => {
+    const g = gandi();
+    const calls = stubHttp(g, () => ({ fqdn: 'example.com', status: [], authinfo: 'x' }));
+    expect(await g.approveTransferOut('example.com')).toEqual({
+      success: false,
+      message: 'No transfer-out of example.com to answer',
+    });
+    expect(calls.some(c => c.method === 'POST')).toBe(false);
   });
 
   it('getDnssec parses the DS line from LiveDNS keys and ignores deleted keys', async () => {

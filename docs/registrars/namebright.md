@@ -120,6 +120,13 @@ NameBright offers a real, public, self-service REST API (JSON) for domain manage
 - Bearer tokens expire every 30 minutes; long-running batch jobs must refresh tokens mid-run and handle 401s gracefully.
 - No documented sandbox/test mode was found — build against production carefully, using low-risk read calls (`GET /rest/account`, `GET /rest/account/domains`) first to validate credentials before attempting any mutating call.
 
+## Transfer-out approval (researched 2026-10-31)
+
+**Not available through the API.** The OpenAPI document
+(`/documentation/current/doc.json`) has only account-to-account pushes within
+NameBright (`/inboundpush/*`, `/outboundpush/*`: pending, completed, initiate,
+accept, decline, cancel), no answer to another registrar's transfer request.
+
 ## Sources
 
 - https://api.namebright.com/rest/Help
