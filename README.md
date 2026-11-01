@@ -187,9 +187,9 @@ are the guaranteed contract; **extended** methods are opt-in per provider.
 | Extended method       | CF  | DY  | GA  | GD  | NB  | NC  | NS  | PB  | SP  | NM  | 101 |
 | --------------------- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `getAuthCode`         | ✗   | ✓   | ✓   | ✓   | ✓   | ✗ⁱ  | ✗ⁱ  | ✗   | ✓   | ✓   | ✗   |
-| `getTransferOut`      | ✗   | ✓ⁿ  | ✗   | ✗ⁿ  | ✗   | ✗   | ✗   | ✗   | ✗   | ✗   | ✗   |
-| `approveTransferOut`  | ✗   | ✓ⁿ  | ✗ⁿ  | ✗ⁿ  | ✗   | ✗   | ✗   | ✗   | ✗   | ✗   | ✗   |
-| `rejectTransferOut`   | ✗   | ✓ⁿ  | ✗ⁿ  | ✗ⁿ  | ✗   | ✗   | ✗   | ✗   | ✗   | ✗ⁿ  | ✗   |
+| `getTransferOut`      | ✗   | ✓ⁿ  | ✓ⁿ  | ✓ⁿ  | ✗   | ✗   | ✗   | ✗   | ✗   | ✗   | ✗   |
+| `approveTransferOut`  | ✗   | ✓ⁿ  | ✓ⁿ  | ✓ⁿ  | ✗   | ✗   | ✗   | ✗   | ✗   | ✗   | ✗   |
+| `rejectTransferOut`   | ✗   | ✓ⁿ  | ✓ⁿ  | ✓ⁿ  | ✗   | ✗   | ✗   | ✗   | ✗   | ✗ⁿ  | ✗   |
 | `getDnssec`           | ✗   | ✓   | ✓   | ✗   | ✗   | ✗   | ✓   | ✓   | ✗   | ✗ᵐ  | ✗   |
 | `disableDnssec`       | ✗   | ✓   | ✓   | ✗   | ✗   | ✗   | ✓   | ✓   | ✗   | ✗ᵐ  | ✗   |
 | `getEmailForwarding`  | ✓   | ✓   | ✓   | ✗   | ✗   | ✓   | ✓   | ✗   | ✗   | ✗ᵐ  | ✗   |
@@ -238,10 +238,13 @@ not a claim of available API endpoints. See [101domain](docs/registrars/101domai
 - **ⁿ** Transfer-out approval answers a transfer another registrar requested with
   the auth code. Dynadot's is sandbox-verified only up to "no such order" (its
   sandbox can't start an outbound transfer); a real pending one's read was
-  checked in production. GoDaddy (v2, needs a `customerId`)
-  and Gandi have approve and reject endpoints, and Name.com a reject, none wired
-  up yet; the rest leave it to the dashboard or the transfer email, and release
-  the domain after about 5 days. See each registrar's doc.
+  checked in production. GoDaddy's uses the v2 customer-scoped API, so it needs a
+  `customerId` as forwarding does (ˡ); it reads the domain's recent actions, with
+  no expiry date. Gandi has no transfer-out to read: a `pendingTransfer` status
+  reads as pending, with no dates, and approving sends the current auth code
+  back. Neither has been tried on a real transfer yet. Name.com can only reject
+  (not wired up); the rest leave it to the dashboard or the transfer email, and
+  release the domain after about 5 days. See each registrar's doc.
 - **ˡ** GoDaddy domain forwarding uses the v2 customer-scoped API, so it requires
   a `customerId` (the customer UUID, or a numeric shopper ID the client resolves to
   the UUID via an sso-key-only lookup); the old v1 forwarding route was removed.

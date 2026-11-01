@@ -118,12 +118,32 @@ Two auth schemes coexist: the legacy `sso-key {API_KEY}:{API_SECRET}` header (us
 | Domain forwarding / URL redirect            | ✓       | **v2 customer-scoped** `/v2/customers/{customerId}/domains/forwards/{fqdn}` (verified live 2026-08-29; the old v1 `/v1/domains/forwards/{fqdn}` 404s). Per-fqdn `PUT`/`DELETE` (204); requires `customerId` (customer UUID, or a numeric shopper ID resolved via an sso-key-only `GET /v1/shoppers/{id}?includes=customerId` lookup). Write enum is `REDIRECT_PERMANENT`/`REDIRECT_TEMPORARY`; reads return `PERMANENT_REDIRECT`/`TEMPORARY_REDIRECT`; `MASKED` is read-only. |
 | Webhooks / event notifications              | ~       | v2 adds "async operation tracking — action queues, status polling, notifications" — notification mechanism unclear (polling vs. push webhook) from available docs.                                                                                                                                                                                                                                                                                                            |
 
-## Transfer-out approval (researched 2026-10-31, not implemented)
+## Transfer-out approval (implemented 2026-10-31)
 
 GoDaddy's **v2** customer-scoped API can read, approve and reject a pending
-outbound transfer. All three need the `customerId` (as domain forwarding does),
-so they are not wired up yet. Verified in the published OpenAPI spec
-(`domains-v2.json`); not live-tested.
+outbound transfer, and all three need the `customerId`, as domain forwarding
+does. `getTransferOut` reads the domain's recent actions
+(`GET .../domains/{domain}/actions`): the latest `TRANSFER_OUT` gives the status
+(AWAITING / PENDING / ACCEPTED → pending, SUCCESS → completed, FAILED /
+CANCELLED → cancelled), and a `TRANSFER_OUT_ACCEPT` or `_REJECT` logged after
+it that didn't fail turns an open one approved or rejected. `approveTransferOut`
+and `rejectTransferOut` POST `transferOutAccept` / `transferOutReject` (no reason)
+and don't poll the 202's action.
+
+**Verified live (2026-10-31, read-only):** a PAT with the customer UUID reads
+v2 (`200`); the actions list, and `actions/TRANSFER_OUT`, come back `[]` on
+domains with nothing in progress (not 404); `?includes=actions` leaves the key
+out when empty. A real transfer-out, and the accept and reject calls, are from
+the spec only.
+
+**A PAT can't find the customer UUID on its own.** v2 refuses the numeric
+shopper ID (`403 ACCESS_DENIED`), the shopper lookup that turns it into the
+UUID is sso-key only (`401` with a PAT), and neither the v1 nor the v3 domain
+responses carry it (v3 items have no id fields; responses add only
+`x-request-id`). So with a PAT alone, transfer-out approval and forwarding need
+the UUID itself as `customerId`.
+
+From the spec:
 
 - **Read:** `GET /v2/customers/{customerId}/domains/{domain}?includes=actions` lists
   an `actions[]` entry with `type: "TRANSFER_OUT"` while a transfer-out is in
