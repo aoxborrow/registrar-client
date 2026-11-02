@@ -213,6 +213,52 @@ describe('Name.com portfolio and pricing', () => {
     expect(url.searchParams.get('tlds')).toBe('co.uk');
     expect(url.searchParams.get('duration')).toBe('1');
   });
+  it('reads an owned .in renewal price from the exact domain record after a 422', async () => {
+    const mock = responses(Response.json({ message: 'TLD not supported' }, { status: 422 }), {
+      domains: [{ domainName: 'Owned-Price.IN', renewalPrice: 21.42 }],
+    });
+    expect(await provider().getPricing('owned-price.in')).toEqual({
+      tld: 'in',
+      currency: 'USD',
+      renewal: 21.42,
+    });
+    const url = new URL(requestUrl(mock.mock.calls[1][0]));
+    expect(url.pathname).toBe('/core/v1/domains');
+    expect(url.searchParams.get('domainName')).toBe('owned-price.in');
+    expect(url.searchParams.get('includeRenewalPrice')).toBe('true');
+    expect(url.searchParams.get('perPage')).toBe('1');
+  });
+  it('keeps the owned .in fallback in the sandbox and preserves a zero price', async () => {
+    const mock = responses(Response.json({ message: 'TLD not supported' }, { status: 422 }), {
+      domains: [{ domainName: 'owned-price.in', renewalPrice: 0 }],
+    });
+    expect((await provider({ environment: 'sandbox' }).getPricing('owned-price.in')).renewal).toBe(
+      0
+    );
+    expect(new URL(requestUrl(mock.mock.calls[1][0])).hostname).toBe('api.dev.name.com');
+  });
+  it.each([
+    [{ domainName: 'owned-price.in', renewalPrice: null }],
+    [{ domainName: 'owned-price.in', renewalPrice: -1 }],
+    [{ domainName: 'owned-price.in', renewalPrice: '21.42' }],
+    [{ domainName: 'owned-price.in' }],
+    [{ domainName: 'other.in', renewalPrice: 21.42 }],
+  ])('keeps the .in 422 rather than substitute an invalid owned quote (%o)', async record => {
+    responses(Response.json({ message: 'TLD not supported' }, { status: 422 }), {
+      domains: [record],
+    });
+    await expect(provider().getPricing('owned-price.in')).rejects.toMatchObject({ status: 422 });
+  });
+  it.each([401, 403, 429, 500])('does not read the owned record after HTTP %s', async status => {
+    const mock = responses(Response.json({ message: 'upstream detail' }, { status }));
+    await expect(provider().getPricing('owned-price.in')).rejects.toThrow();
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
+  it('keeps a 422 for any TLD other than .in', async () => {
+    const mock = responses(Response.json({ message: 'unsupported term' }, { status: 422 }));
+    await expect(provider().getPricing('owned-price.ai')).rejects.toMatchObject({ status: 422 });
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
   it('does not substitute unsupported or wrong-term TLD pricing', async () => {
     responses({ pricing: [{ tld: 'ai', duration: 2, renewalPrice: 160 }] });
     await expect(provider().getPricing('ai')).rejects.toBeInstanceOf(NotFoundError);
