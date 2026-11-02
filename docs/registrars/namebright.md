@@ -8,7 +8,9 @@ Confirmed against a real production account (API access enabled). This resolves
 the "unconfirmed" caveats scattered through the research notes below.
 
 **Reads** — all working: `testConnection` (`GET /account`), `listDomains`
-(paged via `page` + `domainsPerPage`, max 100), `getDomain`, `getNameservers`,
+(paged via `page`; `domainsPerPage` is sent but ignored, as `domainsPerPage=1`
+still returned all 4 rows on 2026-11-02, so paging runs to `ResultsTotal`, an
+empty page, or a page with nothing new), `getDomain`, `getNameservers`,
 `getContacts`, `getDnsRecords`, `checkAvailability`, `getAuthCode`. Notes:
 
 - `GET /account/domains/{domain}` returns the `AccountDomain` shape
