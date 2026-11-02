@@ -132,7 +132,7 @@ export class NamecomRegistrar extends BaseRegistrar {
   static readonly supportsSandbox = true;
   static readonly configFields: ConfigField[] = [
     { name: 'username', label: 'Username', type: 'text', required: true },
-    { name: 'apiToken', label: 'API token', type: 'password', required: true },
+    { name: 'apiToken', label: 'API Token', type: 'password', required: true },
   ];
   static readonly helpText =
     'Get an API token at https://www.name.com/account/settings/api. ' +
