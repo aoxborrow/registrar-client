@@ -26,6 +26,7 @@ import {
   NotImplementedError,
   InvalidResponseError,
   RegistrarError,
+  failedResult,
   toRegistrarError,
 } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
@@ -341,7 +342,7 @@ export class DynadotRegistrar extends BaseRegistrar {
         message: ok ? successMessage : (env.error?.description ?? env.message ?? 'Request failed'),
       };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -355,7 +356,7 @@ export class DynadotRegistrar extends BaseRegistrar {
       );
       return { success: true, message: 'Connection successful' };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -936,7 +937,7 @@ export class DynadotRegistrar extends BaseRegistrar {
     try {
       transfer = await this.getTransferOut(domainName, opts);
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
     if (!transfer?.id || !OPEN_TRANSFER_OUT.has(transfer.status)) {
       return { success: false, message: `No transfer-out of ${domainName} to answer` };

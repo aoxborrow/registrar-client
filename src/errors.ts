@@ -23,6 +23,20 @@ export function toRegistrarError(error: unknown): RegistrarError {
   return wrapped;
 }
 
+// a failed ConnectionResult/OperationResult for a caught error: its message
+// (or `message`), plus its `status` when it has one (a wrapped plain Error has -1)
+export function failedResult(
+  error: unknown,
+  message?: string
+): { success: false; message: string; status?: number } {
+  const err = toRegistrarError(error);
+  return {
+    success: false,
+    message: message ?? err.message,
+    ...(err.status > 0 ? { status: err.status } : {}),
+  };
+}
+
 // base error class for registrar client errors
 // `status` mirrors an HTTP-style status code where meaningful
 export class RegistrarError extends Error {

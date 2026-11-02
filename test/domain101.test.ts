@@ -676,6 +676,7 @@ describe('101domain read-only API keys', () => {
       success: false,
       message:
         '101domain: this API key does not have the dns_write scope. Create a key with dns_write to change DNS records and nameservers.',
+      status: 403,
     });
     expect(mock).toHaveBeenCalledTimes(1);
   });

@@ -18,7 +18,7 @@ import {
   AuthenticationError,
   InvalidResponseError,
   NotImplementedError,
-  toRegistrarError,
+  failedResult,
 } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
@@ -321,7 +321,7 @@ export class NameBrightRegistrar extends BaseRegistrar {
       await this.authed({ path: 'account' }, opts);
       return { success: true, message: 'Connection successful' };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -569,7 +569,7 @@ export class NameBrightRegistrar extends BaseRegistrar {
         message: `Domain ${domainName} ${verb} successfully (order ${order.OrderId})`,
       };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -608,7 +608,7 @@ export class NameBrightRegistrar extends BaseRegistrar {
       await this.authed({ method: 'PUT', path, body }, opts);
       return { success: true, message: successMessage };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -633,7 +633,7 @@ export class NameBrightRegistrar extends BaseRegistrar {
       }
       return { success: true, message: 'Nameservers updated successfully' };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -677,7 +677,7 @@ export class NameBrightRegistrar extends BaseRegistrar {
       }
       return { success: true, message: 'DNS records updated successfully' };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 

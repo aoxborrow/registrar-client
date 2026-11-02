@@ -18,7 +18,7 @@ import type {
   TransferDomainInput,
 } from '../types';
 import { asRead, createDomain, filterDomains, normalizeDomain, settableForwards } from '../utils';
-import { NotFoundError, NotImplementedError, toRegistrarError } from '../errors';
+import { NotFoundError, NotImplementedError, failedResult } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
@@ -253,7 +253,7 @@ export class PorkbunRegistrar extends BaseRegistrar {
         ? { success: true, message: 'Connection successful' }
         : { success: false, message: res.message ?? 'Unknown error' };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -694,7 +694,7 @@ export class PorkbunRegistrar extends BaseRegistrar {
       }
       return { success: true, message: 'DNSSEC disabled successfully' };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -764,7 +764,7 @@ export class PorkbunRegistrar extends BaseRegistrar {
       }
       return { success: true, message: 'Domain forwarding updated successfully' };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 }

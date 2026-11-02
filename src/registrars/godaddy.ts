@@ -26,6 +26,7 @@ import {
   ConsentRequiredError,
   NotFoundError,
   NotImplementedError,
+  failedResult,
   toRegistrarError,
 } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
@@ -383,7 +384,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
       }
       return { success: true, message: 'Connection successful' };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -639,7 +640,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
       });
       if (reg.operationId) await this.pollOperation(reg.operationId, opts);
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
     // Post-registration: the minimal body can't carry these, so apply the
     // caller's intent now. GoDaddy registers with the account's default
@@ -884,15 +885,14 @@ export class GoDaddyRegistrar extends BaseRegistrar {
       // with no reliable IP source), so surface a clear, actionable error instead
       // of silently failing. Paid DBP still cancels through the DELETE above.
       if (err.status === 409) {
-        return {
-          success: false,
-          message:
-            `${this.name}: this domain uses free WHOIS privacy (Free DBP), which the API ` +
+        return failedResult(
+          err,
+          `${this.name}: this domain uses free WHOIS privacy (Free DBP), which the API ` +
             'only disables by exposing the WHOIS via a consent block (agreedAt + agreedBy IP ' +
-            '+ agreementKeys) that setPrivacy cannot supply; disable it in the GoDaddy dashboard.',
-        };
+            '+ agreementKeys) that setPrivacy cannot supply; disable it in the GoDaddy dashboard.'
+        );
       }
-      return { success: false, message: err.message };
+      return failedResult(err);
     }
   }
 
@@ -1044,7 +1044,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
       }
       return { success: true, message: 'DNS records updated successfully' };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -1179,7 +1179,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
       }
       return { success: true, message: 'Domain forwarding updated successfully' };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -1244,7 +1244,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     try {
       customerId = await this.resolveCustomerId(opts);
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
     return this.mutate(
       { method: 'POST', path: `${this.domainPathV2(customerId, domainName)}/${action}` },
@@ -1312,7 +1312,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
       await this.http.request({ ...req, ...opts });
       return { success: true, message: successMessage };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 }

@@ -28,7 +28,7 @@ import {
   settableForwards,
   type SettableDomainForward,
 } from '../utils';
-import { toRegistrarError } from '../errors';
+import { failedResult, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
@@ -235,7 +235,7 @@ export class GandiRegistrar extends BaseRegistrar {
       await this.http.request<GandiDomain[]>({ path: '/domain/domains', ...opts });
       return { success: true, message: 'Connection successful' };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -559,7 +559,7 @@ export class GandiRegistrar extends BaseRegistrar {
         ...opts,
       });
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
     if (!pendingTransferOut(d)) {
       return { success: false, message: `No transfer-out of ${domainName} to answer` };
@@ -613,7 +613,7 @@ export class GandiRegistrar extends BaseRegistrar {
       }
       return { success: true, message: 'DNSSEC disabled successfully' };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -692,7 +692,7 @@ export class GandiRegistrar extends BaseRegistrar {
       }
       return { success: true, message: 'Email forwarding updated successfully' };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -815,19 +815,18 @@ export class GandiRegistrar extends BaseRegistrar {
         } catch (error) {
           if (applied.length === 0) throw error;
           const rest = writes.slice(applied.length + 1).map(x => x.label);
-          return {
-            success: false,
-            message:
-              `Domain forwarding partially updated: ${w.label} failed ` +
+          return failedResult(
+            error,
+            `Domain forwarding partially updated: ${w.label} failed ` +
               `(${toRegistrarError(error).message}); applied: ${applied.join(', ')}` +
-              (rest.length ? `; not attempted: ${rest.join(', ')}` : ''),
-          };
+              (rest.length ? `; not attempted: ${rest.join(', ')}` : '')
+          );
         }
         applied.push(w.label);
       }
       return { success: true, message: 'Domain forwarding updated successfully' };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -863,7 +862,7 @@ export class GandiRegistrar extends BaseRegistrar {
       if (!enabled && /no autorenew record/i.test(message)) {
         return { success: true, message: 'Auto-renew disabled successfully' };
       }
-      return { success: false, message };
+      return failedResult(error);
     }
   }
 
@@ -1009,7 +1008,7 @@ export class GandiRegistrar extends BaseRegistrar {
       await this.http.request({ ...req, ...opts });
       return { success: true, message: successMessage };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 }

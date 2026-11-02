@@ -560,9 +560,21 @@ lookup a write performs first in `asRead(opts)`. The existing providers under
 
 ## Errors
 
-All failures throw a typed subclass of `RegistrarError` (`AuthenticationError`,
+Failures throw a typed subclass of `RegistrarError` (`AuthenticationError`,
 `NotFoundError`, `RateLimitError`, `TimeoutError`, `NotImplementedError`, …),
-each carrying an HTTP-style `status`.
+each carrying an HTTP-style `status`. `testConnection` returns a result
+instead, and so do most providers' writes: `{ success: false, message }`. When
+the failure came from one of those errors, the result keeps its `status`, so
+you can branch without reading the message:
+
+```ts
+const result = await client.testConnection();
+if (!result.success && result.status === 401) {
+  // the registrar rejected the credentials
+}
+```
+
+A failure the registrar reports inside a successful reply has no `status`.
 
 ## Retries
 

@@ -7,7 +7,7 @@ import {
   OutcomeUnknownError,
   ParsingError,
   RegistrarError,
-  toRegistrarError,
+  failedResult,
 } from '../errors';
 import { Feature, type RegistrarFeature } from '../features';
 import { HttpClient, REST_SAFE_METHODS, type RequestConfig } from '../http';
@@ -196,7 +196,7 @@ export class Domain101Registrar extends BaseRegistrar {
       });
       return { success: true, message: 'Connection successful' };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -589,8 +589,7 @@ function invalid(part: string): InvalidResponseError {
 }
 function failed(error: unknown): OperationResult {
   return {
-    success: false,
-    message: toRegistrarError(error).message,
+    ...failedResult(error),
     ...(error instanceof OutcomeUnknownError ? { outcome: 'unknown' as const } : {}),
   };
 }

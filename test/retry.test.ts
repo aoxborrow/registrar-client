@@ -162,7 +162,7 @@ describe.each([
       expect((settled.error as OutcomeUnknownError).feature).toBe('renewDomain');
       expect((settled.error as OutcomeUnknownError).shouldRetry()).toBe(false);
     } else {
-      expect(settled.result).toMatchObject({ success: false, outcome: 'unknown' });
+      expect(settled.result).toMatchObject({ success: false, outcome: 'unknown', status: 504 });
       expect(settled.result.message).toMatch(/may or may not have been applied/);
     }
   });

@@ -25,7 +25,7 @@ import {
   requireConsent,
   settableForwards,
 } from '../utils';
-import { toRegistrarError } from '../errors';
+import { failedResult } from '../errors';
 import { ensureArray, parseXml } from '../xml';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
@@ -276,7 +276,7 @@ export class NamecheapRegistrar extends BaseRegistrar {
         ? { success: true, message: 'Connection successful' }
         : { success: false, message: errorText(res) ?? 'Unknown error' };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 

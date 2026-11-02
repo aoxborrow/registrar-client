@@ -6,6 +6,7 @@ import {
   ParsingError,
   RateLimitError,
   RegistrarError,
+  failedResult,
   toRegistrarError,
 } from '../errors';
 import { Feature, type RegistrarFeature } from '../features';
@@ -170,7 +171,7 @@ export class NamecomRegistrar extends BaseRegistrar {
       await this.http.request({ path: '/domains', query: { perPage: 1, page: 1 }, ...opts });
       return { success: true, message: 'Connection successful' };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -484,10 +485,10 @@ export class NamecomRegistrar extends BaseRegistrar {
       }
       return { success: true, message: 'DNS records updated successfully' };
     } catch (error) {
-      return {
-        success: false,
-        message: `${toRegistrarError(error).message}. DNS replacement is not atomic; read the zone before retrying.`,
-      };
+      return failedResult(
+        error,
+        `${toRegistrarError(error).message}. DNS replacement is not atomic; read the zone before retrying.`
+      );
     }
   }
 
@@ -559,7 +560,7 @@ export class NamecomRegistrar extends BaseRegistrar {
       await this.http.request({ ...req, ...opts });
       return { success: true, message: 'Domain updated successfully' };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
   private async purchase(
@@ -606,14 +607,13 @@ export class NamecomRegistrar extends BaseRegistrar {
         e.status >= 500 ||
         e.name === 'AbortError' ||
         e instanceof ParsingError;
-      return {
-        success: false,
-        message:
-          e.message +
+      return failedResult(
+        e,
+        e.message +
           (uncertain
             ? '. Outcome unknown; check Name.com orders and domain/transfer status before retrying.'
-            : ''),
-      };
+            : '')
+      );
     }
   }
 }
