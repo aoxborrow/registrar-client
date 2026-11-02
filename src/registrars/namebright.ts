@@ -332,12 +332,14 @@ export class NameBrightRegistrar extends BaseRegistrar {
     const domains: Domain[] = [];
     const seen = new Set<string>();
     // domainsPerPage is a request, not a promise: NameBright has been seen serving
-    // 10 rows per page regardless of it. So the end of the list is never inferred
-    // from a short page. It's taken from ResultsTotal when present, otherwise from
-    // an empty page or a page that adds nothing new (a server repeating its last
-    // page past the end).
+    // 10 rows per page regardless of it (live: domainsPerPage=1 still returned
+    // every row of a 4-domain account, 2026-11-02). So the end of the list is never
+    // inferred from a short page. It's taken from ResultsTotal when present,
+    // otherwise from an empty page or a page that adds nothing new (a server
+    // repeating its last page past the end). The page cap only stops a runaway
+    // pager: at 10 rows a page it still allows 100,000 domains.
     const perPage = 100;
-    const maxPages = 1000;
+    const maxPages = 10_000;
 
     for (let page = 1; ; page++) {
       if (page > maxPages) {

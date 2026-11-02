@@ -645,6 +645,13 @@ describe('NameBright listDomains paging', () => {
     expect(calls.filter(c => c.path === 'account/domains')).toHaveLength(4);
   });
 
+  it('lists a large account past 1,000 pages of 10 when resultsTotal covers it', async () => {
+    const nb = namebright();
+    const calls = stubHttp(nb, pagedServer(names(12_005), 10));
+    expect(await nb.listDomains()).toHaveLength(12_005);
+    expect(calls.filter(c => c.path === 'account/domains')).toHaveLength(1201);
+  });
+
   it('without resultsTotal, pages until an empty page', async () => {
     const nb = namebright();
     stubHttp(nb, pagedServer(names(23), 10, { total: false }));
