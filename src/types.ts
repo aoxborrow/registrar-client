@@ -74,6 +74,11 @@ export interface RegistrarOptions extends Partial<RegistrarClientOptions> {
 export interface ConnectionResult {
   success: boolean;
   message: string;
+  // On a failure caught from a `RegistrarError`: its `status` (401 for
+  // credentials the registrar rejects, 429 for a rate limit, …), so callers
+  // can branch without reading the message. Absent on success, and when the
+  // failure has no status (a logical error in a 200 reply, a plain Error).
+  status?: number;
 }
 
 // result of a mutating operation (renew, nameserver update, lock/unlock)
@@ -88,6 +93,9 @@ export interface OperationResult {
   // change may or may not have been applied: re-read the domain before trying
   // again. The library never re-sends such a request itself.
   outcome?: 'unknown';
+  // On a failure caught from a `RegistrarError`: its `status`, as on
+  // `ConnectionResult` (504 with `outcome: 'unknown'`).
+  status?: number;
 }
 
 // a configuration field a registrar needs (used to build credential UIs generically)

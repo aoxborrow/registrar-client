@@ -17,7 +17,7 @@ import type {
 } from '../types';
 import { REST_SAFE_METHODS } from '../http';
 import { createDomain, filterDomains, normalizeDomain, settableForwards } from '../utils';
-import { NotImplementedError, toRegistrarError } from '../errors';
+import { NotImplementedError, failedResult, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
@@ -235,7 +235,7 @@ export class CloudflareRegistrar extends BaseRegistrar {
         ? { success: true, message: 'Connection successful' }
         : { success: false, message: res.errors?.[0]?.message ?? 'Request failed' };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -398,7 +398,7 @@ export class CloudflareRegistrar extends BaseRegistrar {
       }
       return { success: true, message: 'DNS records updated successfully' };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -634,7 +634,7 @@ export class CloudflareRegistrar extends BaseRegistrar {
             message: res.errors?.[0]?.message ?? 'Failed to update domain forwarding',
           };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -851,7 +851,7 @@ export class CloudflareRegistrar extends BaseRegistrar {
         : '';
       return { success: true, message: `Email forwarding updated successfully${note}` };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -944,7 +944,7 @@ export class CloudflareRegistrar extends BaseRegistrar {
         })`,
       };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -1059,7 +1059,7 @@ export class CloudflareRegistrar extends BaseRegistrar {
         message: res.success ? 'Domain updated successfully' : 'Failed to update domain',
       };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 }

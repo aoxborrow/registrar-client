@@ -16,7 +16,7 @@ import type {
 } from '../types';
 import { REST_SAFE_METHODS } from '../http';
 import { createDomain, filterDomains, requireConsent, sleep } from '../utils';
-import { NotImplementedError, toRegistrarError } from '../errors';
+import { NotImplementedError, failedResult } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
@@ -176,7 +176,7 @@ export class SpaceshipRegistrar extends BaseRegistrar {
       });
       return { success: true, message: 'Connection successful' };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -296,7 +296,7 @@ export class SpaceshipRegistrar extends BaseRegistrar {
       });
       return { success: true, message: `Domain ${domainName} registration requested successfully` };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -328,7 +328,7 @@ export class SpaceshipRegistrar extends BaseRegistrar {
       });
       return { success: true, message: `Domain ${domainName} transfer requested successfully` };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -470,7 +470,7 @@ export class SpaceshipRegistrar extends BaseRegistrar {
       });
       return { success: true, message: 'Contacts updated successfully' };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -526,7 +526,7 @@ export class SpaceshipRegistrar extends BaseRegistrar {
       }
       return { success: true, message: 'DNS records updated successfully' };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -634,7 +634,7 @@ export class SpaceshipRegistrar extends BaseRegistrar {
       await this.http.request({ ...req, ...opts });
       return { success: true, message: successMessage };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 }

@@ -19,7 +19,7 @@ import type {
   TransferDomainInput,
 } from '../types';
 import { asRead, createDomain, filterDomains, settableForwards } from '../utils';
-import { NotFoundError, toRegistrarError } from '../errors';
+import { NotFoundError, failedResult } from '../errors';
 import { ensureArray, parseXml } from '../xml';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
@@ -217,7 +217,7 @@ export class NameSiloRegistrar extends BaseRegistrar {
         ? { success: true, message: 'Connection successful' }
         : { success: false, message: replyDetail(res) };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -504,7 +504,7 @@ export class NameSiloRegistrar extends BaseRegistrar {
       }
       return { success: true, message: 'DNSSEC disabled successfully' };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 
@@ -598,7 +598,7 @@ export class NameSiloRegistrar extends BaseRegistrar {
       }
       return { success: true, message: 'Email forwarding updated successfully' };
     } catch (error) {
-      return { success: false, message: toRegistrarError(error).message };
+      return failedResult(error);
     }
   }
 

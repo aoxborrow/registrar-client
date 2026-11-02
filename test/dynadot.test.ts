@@ -656,7 +656,11 @@ describe('Dynadot provider (RESTful v2)', () => {
       httpError(409, 'Domain can not approve transfer out.')
     );
     const res = await dynadot().approveTransferOut('example.com');
-    expect(res).toEqual({ success: false, message: 'Domain can not approve transfer out.' });
+    expect(res).toEqual({
+      success: false,
+      message: 'Domain can not approve transfer out.',
+      status: 409,
+    });
     expect(mock).toHaveBeenCalledTimes(2);
   });
 
@@ -672,6 +676,17 @@ describe('Dynadot provider (RESTful v2)', () => {
     // without an envelope, the shared client's message stands
     respond(new Response('Bad Request', { status: 400 }));
     await expect(dynadot().getTransferOut('example')).rejects.toThrow(/failed with 400/);
+  });
+
+  it('a rejected key fails the connection test with its status and description', async () => {
+    const description =
+      'The provided API key is invalid, expired, or missing. Please verify your key is correct and active.';
+    respond(httpError(401, description));
+    expect(await dynadot().testConnection()).toEqual({
+      success: false,
+      message: description,
+      status: 401,
+    });
   });
 
   it('getDnssec maps dnssec_info_list and parses "(code)" labels', async () => {
