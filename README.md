@@ -407,7 +407,10 @@ Pricing uses account-level USD amounts before VAT. Domain registration and renew
 quotes explicitly request one year; unavailable/null products remain undefined.
 Transfer prices cover the registry's transfer term, which may exceed one year.
 Bare compound strings such as `co.uk` are interpreted as domains; use `.co.uk` for
-TLD pricing. Availability is restricted to standard/registry-premium registration,
+TLD pricing. Core's `:getPricing` answers an owned `.in` domain with 422 "TLD not
+supported", so that one case reads the renewal price from the exact owned record
+(`GET /domains?domainName=…&includeRenewalPrice=true`) and leaves registration and
+transfer undefined; any other 422 is thrown as is. Availability is restricted to standard/registry-premium registration,
 batched in groups of 50; its discovery price covers the TLD minimum term, so no
 one-year `period` is inferred.
 
