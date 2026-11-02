@@ -16,9 +16,11 @@ import type {
   RequestOptions,
   TldPricing,
   TransferDomainInput,
+  TransferOut,
+  TransferOutStatus,
 } from '../types';
 import { REST_SAFE_METHODS } from '../http';
-import { createDomain, filterDomains, settableForwards } from '../utils';
+import { createDomain, filterDomains, parseDate, settableForwards } from '../utils';
 import {
   ConfigurationError,
   ConsentRequiredError,
@@ -110,6 +112,19 @@ interface GoDaddyForward {
   type?: string;
   url?: string;
   mask?: { title?: string; description?: string; keywords?: string };
+}
+
+// One entry of the v2 recent-actions list,
+// GET /v2/customers/{customerId}/domains/{domain}/actions (`[]` when there are
+// none, verified live 2026-10-31). An outbound transfer shows as a TRANSFER_OUT
+// action while it's in progress; answering it logs TRANSFER_OUT_ACCEPT or
+// TRANSFER_OUT_REJECT. `status` is ACCEPTED / AWAITING / PENDING / SUCCESS /
+// FAILED / CANCELLED.
+interface GoDaddyAction {
+  type?: string;
+  status?: string;
+  createdAt?: string;
+  completedAt?: string;
 }
 
 // normalized DomainForwardType → the token the v2 write endpoint expects
@@ -299,17 +314,22 @@ export class GoDaddyRegistrar extends BaseRegistrar {
   ];
   // GoDaddy's OTE ("Operational Test Environment") is its sandbox
   static readonly supportsSandbox = true;
-  // Beyond core: domain forwarding and transfer-out auth code (the `authCode`
-  // field on the v1 domain-detail response). Forwarding uses the v2
-  // customer-scoped route /v2/customers/{customerId}/domains/forwards/{fqdn}
-  // (the old v1 /v1/domains/forwards routes now 404); it requires `customerId`
-  // to be configured — verified live 2026-08-29. DNSSEC has no dedicated
+  // Beyond core: domain forwarding, transfer-out auth code (the `authCode`
+  // field on the v1 domain-detail response) and transfer-out approval.
+  // Forwarding uses the v2 customer-scoped route
+  // /v2/customers/{customerId}/domains/forwards/{fqdn} (the old v1
+  // /v1/domains/forwards routes now 404); it requires `customerId` to be
+  // configured — verified live 2026-08-29. Transfer-out approval is v2
+  // customer-scoped too, so it needs `customerId` as well. DNSSEC has no dedicated
   // endpoint (DS records go through the generic DNS API), and there's no
   // glue-record, email, or push-webhook API.
   static readonly extendedFeatures: readonly RegistrarFeature[] = [
     Feature.GetAuthCode,
     Feature.GetDomainForwarding,
     Feature.SetDomainForwarding,
+    Feature.GetTransferOut,
+    Feature.ApproveTransferOut,
+    Feature.RejectTransferOut,
   ];
 
   // true → prefer the v3 API (production + PAT). false → all calls use v1
@@ -1046,8 +1066,9 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     const configured = this.credentials.customerId?.trim();
     if (!configured) {
       throw new ConfigurationError(
-        `${this.name}: domain forwarding uses the v2 customer-scoped API, which ` +
-          'requires a customer ID. Set `customerId` to your GoDaddy customer UUID ' +
+        `${this.name}: domain forwarding and transfer-out approval use the v2 ` +
+          'customer-scoped API, which requires a customer ID. Set `customerId` to ' +
+          'your GoDaddy customer UUID ' +
           '(or your numeric shopper/account ID, which will be resolved to the UUID).'
       );
     }
@@ -1167,6 +1188,71 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     return `/v2/customers/${encodeURIComponent(customerId)}/domains/forwards/${encodeURIComponent(fqdn)}`;
   }
 
+  // the v2 customer-scoped path for a domain
+  private domainPathV2(customerId: string, domainName: string): string {
+    return `/v2/customers/${encodeURIComponent(customerId)}/domains/${encodeURIComponent(domainName)}`;
+  }
+
+  /**
+   * The domain's latest outbound transfer, read from its recent actions
+   * (GET /v2/customers/{customerId}/domains/{domain}/actions): the TRANSFER_OUT
+   * action, and an accept or reject logged after it. Null when there is no
+   * TRANSFER_OUT on record. GoDaddy reports no expiry; left alone, it releases
+   * the domain within seven days. Shapes from the published v2 spec; a real
+   * transfer-out is not yet seen live.
+   */
+  override async getTransferOut(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<TransferOut | null> {
+    const customerId = await this.resolveCustomerId(opts);
+    const actions = await this.http.request<GoDaddyAction[]>({
+      path: `${this.domainPathV2(customerId, domainName)}/actions`,
+      ...opts,
+    });
+    return toTransferOut(Array.isArray(actions) ? actions : []);
+  }
+
+  /**
+   * Approves the pending outbound transfer, releasing the domain now
+   * (POST .../transferOutAccept → 202). GoDaddy answers 409 when none is
+   * pending.
+   */
+  override async approveTransferOut(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    return this.answerTransferOut(domainName, 'transferOutAccept', 'approved', opts);
+  }
+
+  // Rejects the pending outbound transfer (POST .../transferOutReject, with no
+  // reason); the domain stays in the account.
+  override async rejectTransferOut(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    return this.answerTransferOut(domainName, 'transferOutReject', 'rejected', opts);
+  }
+
+  private async answerTransferOut(
+    domainName: string,
+    action: 'transferOutAccept' | 'transferOutReject',
+    answer: string,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    let customerId: string;
+    try {
+      customerId = await this.resolveCustomerId(opts);
+    } catch (error) {
+      return { success: false, message: toRegistrarError(error).message };
+    }
+    return this.mutate(
+      { method: 'POST', path: `${this.domainPathV2(customerId, domainName)}/${action}` },
+      `Transfer of ${domainName} ${answer}`,
+      opts
+    );
+  }
+
   /**
    * Transfer authorization (EPP) code. GoDaddy exposes it as the `authCode`
    * field on the v1 domain-detail response; transfers were never moved to v3,
@@ -1229,6 +1315,48 @@ export class GoDaddyRegistrar extends BaseRegistrar {
       return { success: false, message: toRegistrarError(error).message };
     }
   }
+}
+
+// --- transfer-out mapping ---
+
+// GoDaddy's recent actions → the domain's latest transfer-out. The TRANSFER_OUT
+// action carries the transfer; while it's open, the latest accept or reject
+// logged after it (unless that failed) says how it was answered.
+function toTransferOut(actions: GoDaddyAction[]): TransferOut | null {
+  const time = (a: GoDaddyAction) => parseDate(a.createdAt)?.getTime() ?? 0;
+  const byLatest = (types: string[]) =>
+    actions.filter(a => types.includes(a.type ?? '')).sort((a, b) => time(b) - time(a));
+  const transfer = byLatest(['TRANSFER_OUT'])[0];
+  if (!transfer) return null;
+  const answer = byLatest(['TRANSFER_OUT_ACCEPT', 'TRANSFER_OUT_REJECT']).find(
+    a => time(a) >= time(transfer) && !/^(FAILED|CANCELLED)$/i.test(a.status ?? '')
+  );
+  const rejected = answer?.type === 'TRANSFER_OUT_REJECT';
+  const rawStatus = transfer.status ?? '';
+  let status: TransferOutStatus;
+  switch (rawStatus.toUpperCase()) {
+    case 'ACCEPTED':
+    case 'AWAITING':
+    case 'PENDING':
+      status = !answer ? 'pending' : rejected ? 'rejected' : 'approved';
+      break;
+    case 'SUCCESS':
+      status = 'completed';
+      break;
+    case 'FAILED':
+    case 'CANCELLED':
+      status = rejected ? 'rejected' : 'cancelled';
+      break;
+    default:
+      status = 'unknown';
+  }
+  return {
+    status,
+    rawStatus,
+    requestedDate: parseDate(transfer.createdAt),
+    expirationDate: null,
+    completedDate: status === 'completed' ? parseDate(transfer.completedAt) : null,
+  };
 }
 
 // --- contact mapping between GoDaddy's shape and the normalized Contact ---

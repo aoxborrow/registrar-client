@@ -74,6 +74,7 @@ describe('feature classification', () => {
         'getDnssec',
         'getEmailForwarding',
         'getDomainForwarding',
+        'getTransferOut',
       ].sort()
     );
     // regenerating an auth code can invalidate the previous one

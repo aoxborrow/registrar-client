@@ -19,6 +19,7 @@ import type {
   RequestOptions,
   TldPricing,
   TransferDomainInput,
+  TransferOut,
 } from '../types';
 import { REST_SAFE_METHODS } from '../http';
 import {
@@ -78,6 +79,8 @@ interface GandiDomain {
   contacts?: GandiContacts;
   nameserver?: { current?: string; hosts?: string[] };
   nameservers?: string[];
+  // the transfer auth code (detail endpoint only)
+  authinfo?: string;
 }
 
 // one record set from `GET /v5/livedns/domains/{fqdn}/records`; a set can hold
@@ -192,9 +195,9 @@ export class GandiRegistrar extends BaseRegistrar {
   ];
   // Gandi's v5 API offers a sandbox at api.sandbox.gandi.net (separate account)
   static readonly supportsSandbox = true;
-  // On top of core: transfer-out auth code (`authinfo`), DNSSEC read/disable
-  // (LiveDNS keys), email forwarding, and web/URL forwarding (webredirs;
-  // per host, apex included). Note core `setPrivacy` disabling is a no-op for
+  // On top of core: transfer-out auth code (`authinfo`) and approval, DNSSEC
+  // read/disable (LiveDNS keys), email forwarding, and web/URL forwarding
+  // (webredirs; per host, apex included). Note core `setPrivacy` disabling is a no-op for
   // individual (natural-person) registrants — Gandi keeps WHOIS obfuscation on
   // for GDPR regardless of the request.
   static readonly extendedFeatures: readonly RegistrarFeature[] = [
@@ -205,6 +208,9 @@ export class GandiRegistrar extends BaseRegistrar {
     Feature.SetEmailForwarding,
     Feature.GetDomainForwarding,
     Feature.SetDomainForwarding,
+    Feature.GetTransferOut,
+    Feature.ApproveTransferOut,
+    Feature.RejectTransferOut,
   ];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
@@ -498,6 +504,75 @@ export class GandiRegistrar extends BaseRegistrar {
       ...opts,
     });
     return d.authinfo ?? '';
+  }
+
+  /**
+   * The domain's pending outbound transfer. Gandi has no transfer-out resource
+   * to read: a domain in the account carries the documented `pendingTransfer`
+   * EPP status while another registrar's request waits (inbound transfers live
+   * under /domain/transferin, so on a domain you hold it's outbound — inferred,
+   * not documented). Gandi reports no dates for it, and nothing once it's
+   * answered or done, so this reads `pending` or null.
+   */
+  override async getTransferOut(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<TransferOut | null> {
+    const d = await this.http.request<GandiDomain>({
+      path: `/domain/domains/${domainName}`,
+      ...opts,
+    });
+    return pendingTransferOut(d);
+  }
+
+  /**
+   * Approves the pending outbound transfer, releasing the domain now instead of
+   * after Gandi's five days: POST .../transferout with `accept: true` and the
+   * domain's current auth code, which Gandi requires back (→ 202).
+   */
+  override async approveTransferOut(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    return this.answerTransferOut(domainName, true, opts);
+  }
+
+  // Declines the pending outbound transfer (`accept: false`, no reason); the
+  // domain stays in the account.
+  override async rejectTransferOut(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    return this.answerTransferOut(domainName, false, opts);
+  }
+
+  // One read for both the pending status and the auth code the answer needs.
+  private async answerTransferOut(
+    domainName: string,
+    accept: boolean,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    let d: GandiDomain;
+    try {
+      d = await this.http.request<GandiDomain>({
+        path: `/domain/domains/${domainName}`,
+        ...opts,
+      });
+    } catch (error) {
+      return { success: false, message: toRegistrarError(error).message };
+    }
+    if (!pendingTransferOut(d)) {
+      return { success: false, message: `No transfer-out of ${domainName} to answer` };
+    }
+    return this.mutate(
+      {
+        method: 'POST',
+        path: `/domain/domains/${domainName}/transferout`,
+        body: { accept, authinfo: d.authinfo ?? '' },
+      },
+      `Transfer of ${domainName} ${accept ? 'approved' : 'rejected'}`,
+      opts
+    );
   }
 
   /**
@@ -937,6 +1012,19 @@ export class GandiRegistrar extends BaseRegistrar {
       return { success: false, message: toRegistrarError(error).message };
     }
   }
+}
+
+// A pending outbound transfer, from the domain's `pendingTransfer` EPP status.
+function pendingTransferOut(d: GandiDomain): TransferOut | null {
+  const statuses = Array.isArray(d.status) ? d.status : d.status ? [d.status] : [];
+  if (!statuses.includes('pendingTransfer')) return null;
+  return {
+    status: 'pending',
+    rawStatus: 'pendingTransfer',
+    requestedDate: null,
+    expirationDate: null,
+    completedDate: null,
+  };
 }
 
 // map a Gandi contact into the normalized Contact shape. Gandi has no distinct

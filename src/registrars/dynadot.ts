@@ -16,10 +16,17 @@ import type {
   RequestOptions,
   TldPricing,
   TransferDomainInput,
+  TransferOut,
+  TransferOutStatus,
 } from '../types';
-import { REST_SAFE_METHODS } from '../http';
+import { HttpClient, REST_SAFE_METHODS } from '../http';
 import { createDomain, filterDomains, requireConsent, settableForwards } from '../utils';
-import { NotFoundError, NotImplementedError, toRegistrarError } from '../errors';
+import {
+  NotFoundError,
+  NotImplementedError,
+  type RegistrarError,
+  toRegistrarError,
+} from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
@@ -77,6 +84,19 @@ interface V2DnssecInfo {
   algorithm?: string | number;
   digest_type?: string | number;
   digest?: string;
+}
+
+// one order from GET .../transfer_status. `transfer_status` is a display label
+// ("None", "Pre Sale Domain", …), and unset dates read back as -1. A
+// transfer-away order waiting on the owner reads "None", with no
+// expiration_date (production, 2026-10-31).
+interface V2TransferStatus {
+  order_id?: string | number;
+  transfer_status?: string;
+  failed_reason?: string;
+  expiration_date?: number;
+  order_created_date?: number;
+  order_completed_date?: number;
 }
 
 // Dynadot's default nameservers, used to switch a domain off URL forwarding
@@ -141,6 +161,30 @@ const SEARCH_BATCH_SIZE = 100;
 // features, not generic DNS, so they're excluded here.)
 const SUPPORTED_DNS_TYPES = new Set(['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SRV', 'CAA']);
 
+// A real HTTP error (auth, or the transfer endpoints' 400/404/409) still carries
+// the envelope; surface its `error.description`, as the HTTP 200 errors do,
+// instead of the shared client's URL-and-raw-body message. Status and error
+// class are unchanged, so callers can still branch on 404 or 409.
+class DynadotHttpClient extends HttpClient {
+  protected override async toStatusError(response: Response, url: string): Promise<RegistrarError> {
+    const description = await errorDescription(response.clone());
+    const error = await super.toStatusError(response, url);
+    if (description) error.message = description;
+    return error;
+  }
+}
+
+// the envelope's `error.description` from an error response, if it has one
+async function errorDescription(response: Response): Promise<string | undefined> {
+  try {
+    const env = (await response.json()) as V2Envelope<unknown> | null;
+    const description = env?.error?.description;
+    return typeof description === 'string' && description ? description : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Dynadot Registrar
  * API docs: https://www.dynadot.com/domain/api-document
@@ -165,8 +209,10 @@ const SUPPORTED_DNS_TYPES = new Set(['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'S
  * ## Envelope
  * Responses are `{ code, message, data }`, with `code: 200` on success and an
  * `error.description` otherwise. Note Dynadot returns HTTP 200 even for logical
- * errors (a bad command, a missing domain) — only auth/signature failures are
- * real HTTP 4xx — so success is read from the envelope `code`, not the status.
+ * errors (a bad command, a missing domain) — only auth/signature failures and
+ * the transfer endpoints' 400/404/409 are real HTTP 4xx — so success is read
+ * from the envelope `code`, not the status. Those real 4xx carry the same
+ * envelope, and their error message is its `error.description` too.
  *
  * ## Verification
  * Every method's path and payload is verified against a live account. Reads
@@ -193,11 +239,16 @@ export class DynadotRegistrar extends BaseRegistrar {
     { name: 'apiSecret', label: 'API Secret', type: 'password', required: true },
   ];
   static readonly supportsSandbox = true; // api-sandbox.dynadot.com mirrors the API
-  // On top of core: transfer-out auth code, DNSSEC read/disable, and email +
-  // domain (URL) forwarding. All implemented on the v2 transport and verified in
-  // the Dynadot sandbox.
+  // On top of core: transfer-out auth code and approval, DNSSEC read/disable,
+  // and email + domain (URL) forwarding. All implemented on the v2 transport and
+  // verified in the Dynadot sandbox (transfer-out approval only up to "no such
+  // order": the sandbox can't create an outbound transfer; a real pending
+  // one's read was checked in production).
   static readonly extendedFeatures: readonly RegistrarFeature[] = [
     Feature.GetAuthCode,
+    Feature.GetTransferOut,
+    Feature.ApproveTransferOut,
+    Feature.RejectTransferOut,
     Feature.GetDnssec,
     Feature.DisableDnssec,
     Feature.GetEmailForwarding,
@@ -207,21 +258,23 @@ export class DynadotRegistrar extends BaseRegistrar {
   ];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
-    super(
-      credentials,
-      {
-        // baseUrl is the host; each request builds the full /restful/v2/… path
-        baseUrl: selectBaseUrl('Dynadot', options?.environment, {
-          production: 'https://api.dynadot.com',
-          sandbox: 'https://api-sandbox.dynadot.com',
-        }),
-        headers: { Authorization: `Bearer ${credentials.apiKey}` },
-        // HTTP 429 can omit Retry-After. Avoid exhausting all attempts inside
-        // Dynadot's regular-tier minute window in that case.
-        rateLimitFallbackSeconds: 60,
-      },
-      options
-    );
+    const config = {
+      // baseUrl is the host; each request builds the full /restful/v2/… path
+      baseUrl: selectBaseUrl('Dynadot', options?.environment, {
+        production: 'https://api.dynadot.com',
+        sandbox: 'https://api-sandbox.dynadot.com',
+      }),
+      headers: { Authorization: `Bearer ${credentials.apiKey}` },
+      // HTTP 429 can omit Retry-After. Avoid exhausting all attempts inside
+      // Dynadot's regular-tier minute window in that case.
+      rateLimitFallbackSeconds: 60,
+    };
+    super(credentials, config, options);
+    this.http = new DynadotHttpClient({
+      safeMethods: REST_SAFE_METHODS,
+      ...config,
+      options: this.options,
+    });
   }
 
   // sign and issue a request. `pathAndQuery` is the exact request target
@@ -782,6 +835,85 @@ export class DynadotRegistrar extends BaseRegistrar {
   }
 
   /**
+   * The domain's latest outbound transfer via GET .../transfer_status with
+   * `transfer_type=transfer_away`, which lists its transfer-away orders. Dynadot
+   * answers 404 when there are none (and for a domain not in the account), read
+   * here as null. An open order wins over a newer finished one, so approve and
+   * reject act on the order that can still be answered.
+   */
+  override async getTransferOut(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<TransferOut | null> {
+    let env: V2Envelope<{ domain_transfer_status_list?: V2TransferStatus[] }>;
+    try {
+      env = await this.signedRequest(
+        'GET',
+        `/restful/v2/domains/${encodeURIComponent(domainName)}/transfer_status?transfer_type=transfer_away`,
+        undefined,
+        opts
+      );
+    } catch (error) {
+      if (error instanceof NotFoundError) return null;
+      throw error;
+    }
+    if (env.code === 404) return null;
+    if (!isOk(env.code)) {
+      throw new Error(env.error?.description ?? env.message ?? 'Dynadot request failed');
+    }
+    const transfers = (env.data?.domain_transfer_status_list ?? [])
+      .map(toTransferOut)
+      .sort((a, b) => (b.requestedDate?.getTime() ?? 0) - (a.requestedDate?.getTime() ?? 0));
+    return transfers.find(t => OPEN_TRANSFER_OUT.has(t.status)) ?? transfers[0] ?? null;
+  }
+
+  /**
+   * Approves the pending outbound transfer, releasing the domain now instead of
+   * after Dynadot's 5-day wait. Answers the order `getTransferOut` reports.
+   */
+  override async approveTransferOut(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    return this.authorizeTransferAway(domainName, true, opts);
+  }
+
+  // Denies the pending outbound transfer; the domain stays in the account.
+  override async rejectTransferOut(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    return this.authorizeTransferAway(domainName, false, opts);
+  }
+
+  // POST /orders/{order_id}/authorize_transfer_away with `approve` true or
+  // false. Only an open order is sent; a finished one fails here without a POST
+  // (Dynadot would answer 409, as it does for any order no longer waiting on the
+  // owner). `unknown` counts as open, since most labels are still unseen.
+  private async authorizeTransferAway(
+    domainName: string,
+    approve: boolean,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    let transfer: TransferOut | null;
+    try {
+      transfer = await this.getTransferOut(domainName, opts);
+    } catch (error) {
+      return { success: false, message: toRegistrarError(error).message };
+    }
+    if (!transfer?.id || !OPEN_TRANSFER_OUT.has(transfer.status)) {
+      return { success: false, message: `No transfer-out of ${domainName} to answer` };
+    }
+    return this.mutate(
+      'POST',
+      `/restful/v2/orders/${encodeURIComponent(transfer.id)}/authorize_transfer_away`,
+      { domain_name: domainName, approve },
+      `Transfer of ${domainName} ${approve ? 'approved' : 'rejected'}`,
+      opts
+    );
+  }
+
+  /**
    * DNSSEC status via GET .../dnssec, which returns a list of DS records
    * (`dnssec_info_list`); a non-empty list means DNSSEC is enabled. `algorithm`
    * and `digest_type` come back as labels with the numeric code in parentheses
@@ -961,6 +1093,43 @@ async function hmacSha256Base64(secret: string, message: string): Promise<string
 }
 
 // --- mapping helpers ---
+
+// transfer-out states that can still be approved or rejected
+const OPEN_TRANSFER_OUT: ReadonlySet<TransferOutStatus> = new Set(['pending', 'unknown']);
+
+// map a transfer-away order to the normalized TransferOut shape
+function toTransferOut(t: V2TransferStatus): TransferOut {
+  const rawStatus = t.transfer_status ?? '';
+  let status = transferOutStatus(rawStatus);
+  if (status === 'unknown' && msDate(t.order_completed_date)) status = 'completed';
+  return {
+    status,
+    rawStatus,
+    id: str(t.order_id) || undefined,
+    requestedDate: msDate(t.order_created_date),
+    expirationDate: msDate(t.expiration_date),
+    completedDate: msDate(t.order_completed_date),
+  };
+}
+
+// Dynadot documents its transfer statuses only as display labels, and none for
+// transfer-away; a waiting one reads "None", the rest are unseen. So match on
+// words. Negatives first: "Not Approved" is a rejection, and pending before
+// approved: "Waiting For Approval" still waits.
+function transferOutStatus(label: string): TransferOutStatus {
+  const s = label.toLowerCase();
+  if (/den(y|ied)|reject|refus|not approved|nack/.test(s)) return 'rejected';
+  if (/cancel|fail|expire|time ?out|abort/.test(s)) return 'cancelled';
+  if (/complete|transferr?ed|success/.test(s)) return 'completed';
+  if (/pend|wait|await|need|request|none|new|process|hold|review/.test(s)) return 'pending';
+  if (/approv|authori[sz]|accept/.test(s)) return 'approved';
+  return 'unknown';
+}
+
+// a Unix-millisecond date, or null for Dynadot's unset (-1 / 0 / missing)
+function msDate(ms: number | undefined): Date | null {
+  return typeof ms === 'number' && ms > 0 ? new Date(ms) : null;
+}
 
 // whether a v2 envelope `code` (which mirrors the HTTP status) is a success —
 // 2xx, so it covers 200 and transfer_in's 202 Accepted

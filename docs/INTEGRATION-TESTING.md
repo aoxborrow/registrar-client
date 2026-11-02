@@ -111,8 +111,10 @@ auth/EPP code exercises the registrar's transfer API **without moving the domain
 or waiting out the 60-day lock** — a low-risk way to confirm the transfer-out
 path works. **This is not implemented yet:**
 
-- There is **no `transferOut` capability** at all (only `transferIn`, which is
-  core).
+- There is no transfer-out _initiation_ (the gaining registrar starts a
+  transfer). Answering one is the extended `getTransferOut` /
+  `approveTransferOut` / `rejectTransferOut`, on Dynadot only (2026-10-31),
+  which a transfer-out test would exercise from the losing side.
 - `getAuthCode` exists only as a **declared extended feature** on **Dynadot,
   Gandi, Spaceship, NameSilo** — but there is **no `getAuthCode` method** on the
   interface or any provider, so it can't actually be called. The flags are

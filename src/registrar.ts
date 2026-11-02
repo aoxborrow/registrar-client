@@ -23,6 +23,7 @@ import type {
   RequestOptions,
   TldPricing,
   TransferDomainInput,
+  TransferOut,
 } from './types';
 
 // pick the base URL for the requested environment. Throws if `sandbox` is
@@ -274,6 +275,18 @@ export abstract class BaseRegistrar implements Registrar {
 
   getAuthCode(_domainName: string, _opts?: RequestOptions): Promise<string> {
     return this.notImplemented('getAuthCode');
+  }
+
+  getTransferOut(_domainName: string, _opts?: RequestOptions): Promise<TransferOut | null> {
+    return this.notImplemented('getTransferOut');
+  }
+
+  approveTransferOut(_domainName: string, _opts?: RequestOptions): Promise<OperationResult> {
+    return this.notImplemented('approveTransferOut');
+  }
+
+  rejectTransferOut(_domainName: string, _opts?: RequestOptions): Promise<OperationResult> {
+    return this.notImplemented('rejectTransferOut');
   }
 
   getDnssec(_domainName: string, _opts?: RequestOptions): Promise<DnssecStatus> {

@@ -115,6 +115,28 @@ There is no separate "IP allowlisting" documented for the v5 API. Requests are o
 | Domain forwarding / URL redirect            | ✓       | Dedicated web-forwarding endpoint `GET/POST/DELETE /v5/domain/domains/{fqdn}/webredirs[/{fqdn}]`; per host (apex = bare domain), `type` = `http301`/`http302`/`cloak`, `protocol` = `http`/`https`/`httpsonly`; PATCH updates in place. Subdomain create/delete verified live in the sandbox. |
 | Webhooks / event notifications              | ✗       | No webhook/event-notification system found in current v5 REST docs; legacy XML-RPC "Notification API" (v3.3.38) exists but is not part of v5                                                                                                                                                  |
 
+## Transfer-out approval (implemented 2026-10-31)
+
+`getTransferOut` reads the domain detail and reports `pending` (no dates) while
+its `status` includes `pendingTransfer`, null otherwise. `approveTransferOut` /
+`rejectTransferOut` read the domain again for that status and the current
+`authinfo`, then POST `transferout` with `accept` true or false; with no pending
+transfer they answer nothing. Verified live (2026-10-31, read-only): `status` is
+an array of EPP statuses (`["clientTransferProhibited"]`) and the detail
+carries `authinfo`. A real transfer-out hasn't been seen, so after approval
+the domain may still read `pendingTransfer` until the registry finishes.
+
+- **Approve / reject:** `POST /v5/domain/domains/{domain}/transferout` ("Accept or
+  decline a transfer to another registrar") with `{ "accept": boolean,
+"authinfo": string }`, both required → 202. `accept: false` declines; there is
+  no reason field. Note it needs the current auth code back.
+- **Read:** no transfer-out resource. The domain's `status[]` can include
+  `pendingTransfer`, which on a domain you hold should mean outbound (inbound
+  transfers live under `/v5/domain/transferin/{domain}`) — inferred, not
+  documented. No reported dates or gaining registrar.
+- **Left alone:** completes automatically after five days; the owner can skip
+  the wait from Gandi's email, or ask support to cancel.
+
 ## Notable / Unique Features
 
 - **LiveDNS** — Gandi's own low-latency anycast DNS hosting product with full zone/record REST management, DNSSEC key management, AXFR/TSIG secondary-DNS support, and automatic zone snapshots. Generic method: `manageDnsZone(domain, records)` / `setDnssec(domain, keys)`.
@@ -144,3 +166,4 @@ There is no separate "IP allowlisting" documented for the v5 API. Requests are o
 - https://api.gandi.net/docs/email/
 - https://docs.gandi.net/en/managing_an_organization/organizations/personal_access_token.html
 - https://api.gandi.net/docs/reference/
+- https://docs.gandi.net/en/domain_names/transfer_out/index.html
