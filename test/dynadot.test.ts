@@ -4,8 +4,11 @@ import {
   createRegistrar,
   ConsentRequiredError,
   Feature,
+  InvalidResponseError,
   NotFoundError,
   NotImplementedError,
+  RateLimitError,
+  RegistrarError,
 } from '../src/index';
 import type { RequestConfig } from '../src/http';
 
@@ -900,5 +903,222 @@ describe('Dynadot provider (RESTful v2)', () => {
     });
 
     await expect(dy.updateContacts('example.com', {})).rejects.toThrow(/at least one/i);
+  });
+});
+
+describe('Dynadot price-only renewal terms and retryable errors', () => {
+  const make = (fetcher: typeof fetch) =>
+    createRegistrar(
+      'dynadot',
+      { apiKey: 'fixture-key', apiSecret: 'fixture-secret' },
+      { fetch: fetcher, retries: 0 }
+    );
+  const urlOf = (input: string | URL | Request) =>
+    new URL(input instanceof Request ? input.url : input);
+  const quote = (fee: string) =>
+    Response.json({
+      RenewResponse: {
+        Status: 'price_check_success',
+        PriceInfo: `Renew Fee: ${fee} in USD, Total: ${fee} in USD`,
+      },
+    });
+  const available = () =>
+    Response.json({
+      code: 200,
+      message: 'Success',
+      data: {
+        domain_name: 'fixture.com',
+        available: 'Yes',
+        price_list: [{ unit: '(price/1 year)', currency: 'USD', renewal_price: '14.25' }],
+      },
+    });
+
+  it.each([
+    ['fixture.ai', '2', '160.00', 80],
+    ['fixture.AI', '2', '160.00', 80],
+    ['fixture.com', '1', '10.50', 10.5],
+    ['fixture.ai', '2', '0.00', 0],
+  ] as const)(
+    'quotes %s for its supported term and reports an annual fee',
+    async (name, years, fee, annual) => {
+      const fetcher = vi.fn<typeof fetch>((input, init) => {
+        const url = urlOf(input);
+        expect(init?.method ?? 'GET').toBe('GET');
+        expect(url.pathname).toBe('/api3.json');
+        expect(url.searchParams.get('command')).toBe('renew');
+        expect(url.searchParams.get('price_check')).toBe('1');
+        expect(url.searchParams.get('duration')).toBe(years);
+        return Promise.resolve(quote(fee));
+      });
+      expect(await make(fetcher).getPricing(name)).toMatchObject({
+        currency: 'USD',
+        renewal: annual,
+      });
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it.each([429, 503])('does not issue a fallback search after retryable HTTP %s', async status => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        Response.json(
+          { message: 'Temporary provider response' },
+          { status, headers: { 'Retry-After': '61' } }
+        )
+      );
+    const result = make(fetcher).getPricing('fixture.com');
+    if (status === 429)
+      await expect(result).rejects.toMatchObject({ name: RateLimitError.name, retryAfter: 61 });
+    else await expect(result).rejects.toBeInstanceOf(RegistrarError);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses an overflowing fee and retains the optional available-name fallback', async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(quote('9'.repeat(400)))
+      .mockResolvedValueOnce(available());
+    expect((await make(fetcher).getPricing('fixture.com')).renewal).toBe(14.25);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(urlOf(fetcher.mock.calls[1][0]).pathname).toBe('/restful/v2/domains/fixture.com/search');
+  });
+
+  it('still falls back for a non-owned name when the optional price check returns 404', async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ message: 'Not found' }, { status: 404 }))
+      .mockResolvedValueOnce(available());
+    expect((await make(fetcher).getPricing('fixture.com')).renewal).toBe(14.25);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('Dynadot exact REST renewal fallback', () => {
+  const make = (fetch: typeof globalThis.fetch) =>
+    createRegistrar(
+      'dynadot',
+      { apiKey: 'fixture-key', apiSecret: 'fixture-secret' },
+      { fetch, retries: 0 }
+    );
+  const urlOf = (u: string | URL | Request) => new URL(u instanceof Request ? u.url : u);
+  const search = (domain: string, prices: unknown[]) =>
+    Response.json({
+      code: 200,
+      message: 'Success',
+      data: {
+        domain_name: domain,
+        available: 'No',
+        premium: 'yes',
+        price_list: prices,
+      },
+    });
+  const entry = (renewal: unknown = '90', unit = '(price/1 year)') => ({
+    currency: 'USD',
+    unit,
+    renewal_price: renewal,
+  });
+  const unsupported = () =>
+    Response.json(
+      {
+        code: 400,
+        error: { description: "This TLD isn't supported via the API." },
+      },
+      { status: 400 }
+    );
+  const rejected = () => Response.json({ Response: { ResponseCode: '-1', Error: 'invalid key' } });
+  const classic = () =>
+    Response.json({
+      RenewResponse: {
+        Status: 'price_check_success',
+        PriceInfo: 'Renew Fee: 180 in USD, Total: 180 in USD',
+      },
+    });
+  const restOnly = (handler: (url: URL) => Response) =>
+    vi.fn<typeof globalThis.fetch>((u, init) => {
+      expect(init?.method).toBe('GET');
+      const url = urlOf(u);
+      if (url.pathname === '/api3.json') {
+        expect(url.searchParams.get('price_check')).toBe('1');
+        return Promise.resolve(rejected());
+      }
+      expect(url.pathname.endsWith('/search')).toBe(true);
+      return Promise.resolve(handler(url));
+    });
+  afterEach(() => vi.useRealTimers());
+
+  it('prices taken names through single search and remembers the incompatible classic key', async () => {
+    const fetch = restOnly(url => {
+      expect(url.searchParams.get('show_price')).toBe('true');
+      return search(decodeURIComponent(url.pathname.split('/')[4]), [
+        entry('180', '(price/2 year)'),
+        entry('90'),
+      ]);
+    });
+    const provider = make(fetch);
+    expect(await provider.getPricing('owned.io')).toMatchObject({
+      renewal: 90,
+      currency: 'USD',
+    });
+    expect(await provider.getPricing('next.io')).toMatchObject({
+      renewal: 90,
+      currency: 'USD',
+    });
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch.mock.calls.filter(([u]) => urlOf(u).pathname === '/api3.json')).toHaveLength(1);
+  });
+  it('annualizes the supported two-year ai term without inventing one-year registration pricing', async () => {
+    const fetch = restOnly(() => search('owned.ai', [entry('140', '(price/2 year)')]));
+    const result = await make(fetch).getPricing('OWNED.AI');
+    expect(result).toMatchObject({ renewal: 70, currency: 'USD' });
+    expect(result.registration).toBeUndefined();
+    expect(urlOf(fetch.mock.calls[1][0]).pathname).toBe('/restful/v2/domains/owned.ai/search');
+  });
+  it('rejects a response for another domain', async () => {
+    const fetch = restOnly(() => search('other.io', [entry()]));
+    await expect(make(fetch).getPricing('owned.io')).rejects.toBeInstanceOf(InvalidResponseError);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+  it('propagates a REST cooldown without sending another request', async () => {
+    const fetch = restOnly(
+      () => new Response(null, { status: 429, headers: { 'Retry-After': '61' } })
+    );
+    await expect(make(fetch).getPricing('owned.io')).rejects.toMatchObject({
+      name: RateLimitError.name,
+      retryAfter: 61,
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+  it('preserves already-working exact legacy quotes without changing their source path', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(u => {
+      expect(urlOf(u).pathname).toBe('/api3.json');
+      return Promise.resolve(classic());
+    });
+    const provider = make(fetch);
+    expect((await provider.getPricing('one.app')).renewal).toBe(180);
+    expect((await provider.getPricing('two.app')).renewal).toBe(180);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+  it('bounds incompatible-key and unsupported-TLD retries, and expires that capability cache', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const fetch = restOnly(() => unsupported());
+    const provider = make(fetch);
+    await expect(provider.getPricing('one.app')).rejects.toThrow(/unavailable/);
+    await expect(provider.getPricing('two.app')).rejects.toThrow(/unavailable/);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    vi.setSystemTime(Date.now() + 60 * 60_000 + 1);
+    await expect(provider.getPricing('three.app')).rejects.toThrow(/unavailable/);
+    expect(fetch).toHaveBeenCalledTimes(4);
+  });
+  it.each([-1, '', ' ', 'not-price', '9'.repeat(400)])(
+    'rejects malformed renewal value %s',
+    async value => {
+      const fetch = restOnly(() => search('owned.io', [entry(value)]));
+      expect((await make(fetch).getPricing('owned.io')).renewal).toBeUndefined();
+    }
+  );
+  it('does not treat an unknown multi-year term as annual', async () => {
+    const fetch = restOnly(() => search('owned.io', [entry('270', '(price/3 year)')]));
+    expect((await make(fetch).getPricing('owned.io')).renewal).toBeUndefined();
   });
 });

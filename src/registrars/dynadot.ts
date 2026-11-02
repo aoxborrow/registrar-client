@@ -157,6 +157,10 @@ interface V2SearchResult {
 // bulk_search is capped conservatively; the endpoint takes a comma-joined list
 const SEARCH_BATCH_SIZE = 100;
 
+// how long getPricing skips a path Dynadot refused: a rejected classic key, or
+// a TLD the REST search won't price
+const PRICING_COOLDOWN_MS = 60 * 60_000;
+
 // Dynadot DNS record types that map cleanly to our generic DnsRecord types.
 // (Dynadot also has forward/stealth/email pseudo-records — those are forwarding
 // features, not generic DNS, so they're excluded here.)
@@ -225,6 +229,8 @@ async function errorDescription(response: Response): Promise<string | undefined>
  * Dynadot sandbox (`api-sandbox.dynadot.com`), which mirrors the API.
  */
 export class DynadotRegistrar extends BaseRegistrar {
+  // getPricing's memory, per client: until when the classic key stays rejected,
+  // and until when each TLD the REST search won't price stays skipped
   private classicPricingRejectedUntil = 0;
   private readonly restPricingUnsupported = new Map<string, number>();
   readonly name = 'dynadot';
@@ -487,10 +493,9 @@ export class DynadotRegistrar extends BaseRegistrar {
    *
    * For a domain **already in the account**, the classic `renew` command with
    * `price_check=1` returns the exact renewal fee — premium names included —
-   * without renewing. `bulk_search` (the v2 pricing path) only quotes names
-   * *available to register*, so it can't price an owned domain's renewal. We try
-   * compatible classic price-only quotes first. When unavailable, single-domain
-   * REST search retains owned-name prices that bulk_search omits.
+   * without renewing (.ai quotes its two-year minimum, halved to a yearly fee).
+   * Otherwise the v2 single-domain `search` prices the name; unlike
+   * `bulk_search`, it keeps the prices of a name that's already taken.
    */
   override async getPricing(tldOrDomain: string, opts?: RequestOptions): Promise<TldPricing> {
     if (!tldOrDomain.includes('.')) {
@@ -499,7 +504,8 @@ export class DynadotRegistrar extends BaseRegistrar {
           'Dynadot v2 has no standalone per-TLD price endpoint'
       );
     }
-    const tld = tldOrDomain.slice(tldOrDomain.indexOf('.') + 1).toLowerCase();
+    const name = tldOrDomain.toLowerCase();
+    const tld = name.slice(name.indexOf('.') + 1);
 
     // Preserve working exact legacy quotes. Remember a rejected classic key
     // so REST-only credentials do not keep producing failed API3 requests.
@@ -508,44 +514,37 @@ export class DynadotRegistrar extends BaseRegistrar {
       if (checked) return { tld, currency: checked.currency, renewal: checked.renewal };
     }
 
-    // Single search returns per-name renewal prices even for taken names.
-    // bulk_search omits those prices; repeatedly trying an incompatible
-    // classic key also contributes to Dynadot's failed-request IP limit.
-    let restPrice: TldPricing | undefined;
-    let restError: unknown;
-    if ((this.restPricingUnsupported.get(tld) ?? 0) > Date.now()) {
-      restError = new NotImplementedError(`Dynadot: REST pricing is unavailable for .${tld}`);
-    } else {
-      try {
-        const data = await this.read<V2SearchResult>(
-          'GET',
-          `/restful/v2/domains/${encodeURIComponent(tldOrDomain.toLowerCase())}/search?show_price=true&currency=usd`,
-          undefined,
-          opts
-        );
-        if (data.domain_name?.toLowerCase() !== tldOrDomain.toLowerCase()) {
-          throw new InvalidResponseError('Dynadot pricing returned a different domain');
-        }
-        const price = annualSearchPrice(data.price_list, tld.toLowerCase());
-        restPrice = {
-          tld,
-          currency: price?.currency ?? 'USD',
-          registration: price?.registration,
-          renewal: price?.renewal,
-          transfer: price?.transfer,
-        };
-        if (restPrice.renewal !== undefined) return restPrice;
-      } catch (error) {
-        if (error instanceof RegistrarError && error.shouldRetry()) throw error;
-        restError = error;
-        if (error instanceof Error && /This TLD isn't supported via the API/i.test(error.message)) {
-          this.restPricingUnsupported.set(tld, Date.now() + 60 * 60_000);
-          restError = new NotImplementedError(`Dynadot: REST pricing is unavailable for .${tld}`);
-        }
+    // Single search keeps a taken name's prices, which bulk_search omits
+    // (sandbox, 2026-11-02). A TLD Dynadot won't price over the API is
+    // remembered too, as a repeated failure counts toward its IP limit.
+    const unsupported = new NotImplementedError(`Dynadot: REST pricing is unavailable for .${tld}`);
+    if ((this.restPricingUnsupported.get(tld) ?? 0) > Date.now()) throw unsupported;
+    let data: V2SearchResult;
+    try {
+      data = await this.read<V2SearchResult>(
+        'GET',
+        `/restful/v2/domains/${encodeURIComponent(name)}/search?show_price=true&currency=usd`,
+        undefined,
+        opts
+      );
+    } catch (error) {
+      if (error instanceof Error && /This TLD isn't supported via the API/i.test(error.message)) {
+        this.restPricingUnsupported.set(tld, Date.now() + PRICING_COOLDOWN_MS);
+        throw unsupported;
       }
+      throw toRegistrarError(error);
     }
-    if (restError) throw toRegistrarError(restError);
-    return restPrice ?? { tld, currency: 'USD' };
+    if (data.domain_name?.toLowerCase() !== name) {
+      throw new InvalidResponseError('Dynadot pricing returned a different domain');
+    }
+    const price = annualSearchPrice(data.price_list, tld);
+    return {
+      tld,
+      currency: price?.currency ?? 'USD',
+      registration: price?.registration,
+      renewal: price?.renewal,
+      transfer: price?.transfer,
+    };
   }
 
   /**
@@ -577,7 +576,7 @@ export class DynadotRegistrar extends BaseRegistrar {
       }>({ method: 'GET', path: `/api3.json?${params.toString()}`, ...opts });
       const info = res.RenewResponse;
       if ((res.Response?.Error ?? info?.Error)?.trim().toLowerCase() === 'invalid key') {
-        this.classicPricingRejectedUntil = Date.now() + 60 * 60_000;
+        this.classicPricingRejectedUntil = Date.now() + PRICING_COOLDOWN_MS;
         return null;
       }
       if (info?.Status !== 'price_check_success' || !info.PriceInfo) return null;
@@ -592,7 +591,7 @@ export class DynadotRegistrar extends BaseRegistrar {
       // hide rate limits and immediately issue a second API request.
       if (error instanceof RegistrarError && error.shouldRetry()) throw error;
       if (error instanceof RegistrarError && error.status === 401)
-        this.classicPricingRejectedUntil = Date.now() + 60 * 60_000;
+        this.classicPricingRejectedUntil = Date.now() + PRICING_COOLDOWN_MS;
       return null;
     }
   }
