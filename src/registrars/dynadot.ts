@@ -19,9 +19,14 @@ import type {
   TransferOut,
   TransferOutStatus,
 } from '../types';
-import { REST_SAFE_METHODS } from '../http';
+import { HttpClient, REST_SAFE_METHODS } from '../http';
 import { createDomain, filterDomains, requireConsent, settableForwards } from '../utils';
-import { NotFoundError, NotImplementedError, toRegistrarError } from '../errors';
+import {
+  NotFoundError,
+  NotImplementedError,
+  type RegistrarError,
+  toRegistrarError,
+} from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
@@ -156,6 +161,30 @@ const SEARCH_BATCH_SIZE = 100;
 // features, not generic DNS, so they're excluded here.)
 const SUPPORTED_DNS_TYPES = new Set(['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SRV', 'CAA']);
 
+// A real HTTP error (auth, or the transfer endpoints' 400/404/409) still carries
+// the envelope; surface its `error.description`, as the HTTP 200 errors do,
+// instead of the shared client's URL-and-raw-body message. Status and error
+// class are unchanged, so callers can still branch on 404 or 409.
+class DynadotHttpClient extends HttpClient {
+  protected override async toStatusError(response: Response, url: string): Promise<RegistrarError> {
+    const description = await errorDescription(response.clone());
+    const error = await super.toStatusError(response, url);
+    if (description) error.message = description;
+    return error;
+  }
+}
+
+// the envelope's `error.description` from an error response, if it has one
+async function errorDescription(response: Response): Promise<string | undefined> {
+  try {
+    const env = (await response.json()) as V2Envelope<unknown> | null;
+    const description = env?.error?.description;
+    return typeof description === 'string' && description ? description : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Dynadot Registrar
  * API docs: https://www.dynadot.com/domain/api-document
@@ -180,8 +209,10 @@ const SUPPORTED_DNS_TYPES = new Set(['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'S
  * ## Envelope
  * Responses are `{ code, message, data }`, with `code: 200` on success and an
  * `error.description` otherwise. Note Dynadot returns HTTP 200 even for logical
- * errors (a bad command, a missing domain) — only auth/signature failures are
- * real HTTP 4xx — so success is read from the envelope `code`, not the status.
+ * errors (a bad command, a missing domain) — only auth/signature failures and
+ * the transfer endpoints' 400/404/409 are real HTTP 4xx — so success is read
+ * from the envelope `code`, not the status. Those real 4xx carry the same
+ * envelope, and their error message is its `error.description` too.
  *
  * ## Verification
  * Every method's path and payload is verified against a live account. Reads
@@ -227,21 +258,23 @@ export class DynadotRegistrar extends BaseRegistrar {
   ];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
-    super(
-      credentials,
-      {
-        // baseUrl is the host; each request builds the full /restful/v2/… path
-        baseUrl: selectBaseUrl('Dynadot', options?.environment, {
-          production: 'https://api.dynadot.com',
-          sandbox: 'https://api-sandbox.dynadot.com',
-        }),
-        headers: { Authorization: `Bearer ${credentials.apiKey}` },
-        // HTTP 429 can omit Retry-After. Avoid exhausting all attempts inside
-        // Dynadot's regular-tier minute window in that case.
-        rateLimitFallbackSeconds: 60,
-      },
-      options
-    );
+    const config = {
+      // baseUrl is the host; each request builds the full /restful/v2/… path
+      baseUrl: selectBaseUrl('Dynadot', options?.environment, {
+        production: 'https://api.dynadot.com',
+        sandbox: 'https://api-sandbox.dynadot.com',
+      }),
+      headers: { Authorization: `Bearer ${credentials.apiKey}` },
+      // HTTP 429 can omit Retry-After. Avoid exhausting all attempts inside
+      // Dynadot's regular-tier minute window in that case.
+      rateLimitFallbackSeconds: 60,
+    };
+    super(credentials, config, options);
+    this.http = new DynadotHttpClient({
+      safeMethods: REST_SAFE_METHODS,
+      ...config,
+      options: this.options,
+    });
   }
 
   // sign and issue a request. `pathAndQuery` is the exact request target
@@ -854,7 +887,9 @@ export class DynadotRegistrar extends BaseRegistrar {
   }
 
   // POST /orders/{order_id}/authorize_transfer_away with `approve` true or
-  // false. Dynadot answers 409 when the order is no longer waiting on the owner.
+  // false. Only an open order is sent; a finished one fails here without a POST
+  // (Dynadot would answer 409, as it does for any order no longer waiting on the
+  // owner). `unknown` counts as open, since most labels are still unseen.
   private async authorizeTransferAway(
     domainName: string,
     approve: boolean,
@@ -866,7 +901,7 @@ export class DynadotRegistrar extends BaseRegistrar {
     } catch (error) {
       return { success: false, message: toRegistrarError(error).message };
     }
-    if (!transfer?.id) {
+    if (!transfer?.id || !OPEN_TRANSFER_OUT.has(transfer.status)) {
       return { success: false, message: `No transfer-out of ${domainName} to answer` };
     }
     return this.mutate(
