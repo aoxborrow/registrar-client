@@ -14,7 +14,12 @@ import type {
   TldPricing,
 } from '../types';
 import { asRead, createDomain, filterDomains } from '../utils';
-import { AuthenticationError, NotImplementedError, toRegistrarError } from '../errors';
+import {
+  AuthenticationError,
+  InvalidResponseError,
+  NotImplementedError,
+  toRegistrarError,
+} from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
@@ -325,23 +330,42 @@ export class NameBrightRegistrar extends BaseRegistrar {
     // Nameservers are not returned here (see NbDomain).
     const { search, ...reqOpts } = opts ?? {};
     const domains: Domain[] = [];
-    const perPage = 100; // domainsPerPage maximum
-    let page = 1;
-    let hasMore = true;
+    const seen = new Set<string>();
+    // domainsPerPage is a request, not a promise: NameBright has been seen serving
+    // 10 rows per page regardless of it. So the end of the list is never inferred
+    // from a short page. It's taken from ResultsTotal when present, otherwise from
+    // an empty page or a page that adds nothing new (a server repeating its last
+    // page past the end).
+    const perPage = 100;
+    const maxPages = 1000;
 
-    while (hasMore) {
+    for (let page = 1; ; page++) {
+      if (page > maxPages) {
+        throw new InvalidResponseError(
+          `NameBright: listDomains was still paging after ${maxPages} pages; refusing to return a partial list`
+        );
+      }
       const data = await this.authed<NbDomainsPage | NbDomain[]>(
         { path: 'account/domains', query: { page, domainsPerPage: perPage } },
         reqOpts
       );
       // the response may be a bare array or a paged object; be lenient
       const list = Array.isArray(data) ? data : (data?.Domains ?? []);
+      const total = Array.isArray(data) ? undefined : data?.ResultsTotal;
 
-      // skip any row without a name rather than emit a blank domain
-      for (const d of list) if (d.DomainName) domains.push(this.toDomain(d));
+      let added = 0;
+      for (const d of list) {
+        // skip any row without a name rather than emit a blank domain
+        if (!d.DomainName) continue;
+        const key = d.DomainName.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        domains.push(this.toDomain(d));
+        added++;
+      }
 
-      hasMore = list.length === perPage;
-      page++;
+      if (list.length === 0 || added === 0) break;
+      if (typeof total === 'number' && seen.size >= total) break;
     }
     return filterDomains(domains, search);
   }
