@@ -158,7 +158,7 @@ export class Domain101Registrar extends BaseRegistrar {
   static readonly website = '101domain.com';
   static readonly supportsSandbox = false;
   static readonly configFields: ConfigField[] = [
-    { name: 'apiKey', label: 'API key', type: 'password', required: true },
+    { name: 'apiKey', label: 'API Key', type: 'password', required: true },
   ];
   static readonly helpText =
     'Create a Bearer API key under My Account > Developer Tools - API & MCP. ' +

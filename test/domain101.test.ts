@@ -78,7 +78,7 @@ describe('101domain authentication and metadata', () => {
     expect(mock.mock.calls[0][1]?.headers).toMatchObject({ Authorization: 'Bearer secret-token' });
     expect(url(mock).href).not.toContain('secret-token');
     expect(Domain101Registrar.configFields).toEqual([
-      { name: 'apiKey', label: 'API key', type: 'password', required: true },
+      { name: 'apiKey', label: 'API Key', type: 'password', required: true },
     ]);
     expect(Domain101Registrar.supportsSandbox).toBe(false);
     expect(Domain101Registrar.extendedFeatures).toEqual([
