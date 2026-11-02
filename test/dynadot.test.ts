@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
 import {
   createRegistrar,
@@ -36,6 +36,22 @@ function expectedSignature(pathAndQuery: string, body = ''): string {
 
 // wrap a data payload in a success envelope
 const ok = (data: unknown) => ({ code: 200, message: 'Success', data });
+
+// Stub fetch instead, so responses go through the real HttpClient: needed where
+// Dynadot answers with a real HTTP error (the transfer endpoints' 400/404/409).
+function respond(...responses: Response[]) {
+  const mock = vi.fn<typeof fetch>();
+  for (const response of responses) mock.mockResolvedValueOnce(response);
+  vi.stubGlobal('fetch', mock);
+  return mock;
+}
+// a real HTTP error carrying the envelope, as Dynadot sends one
+const httpError = (status: number, description: string) =>
+  Response.json({ code: status, message: 'Error', error: { description } }, { status });
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe('Dynadot provider (RESTful v2)', () => {
   it('signs each request: Bearer key + X-Signature over key\\npath\\n\\nbody', async () => {
@@ -621,15 +637,42 @@ describe('Dynadot provider (RESTful v2)', () => {
     expect(calls).toHaveLength(1);
   });
 
-  it('approveTransferOut surfaces Dynadot refusing the order', async () => {
+  it('approveTransferOut fails without a POST when the latest order is finished', async () => {
     const dy = dynadot();
-    stubHttp(dy, req =>
-      req.method === 'GET'
-        ? ok({ domain_transfer_status_list: [{ order_id: '423', transfer_status: 'Pending' }] })
-        : { code: 409, error: { description: 'Domain can not approve transfer out.' } }
+    const calls = stubHttp(dy, () =>
+      ok({
+        domain_transfer_status_list: [{ order_id: '423', transfer_status: 'Transferred Away' }],
+      })
     );
     const res = await dy.approveTransferOut('example.com');
+    expect(res).toEqual({ success: false, message: 'No transfer-out of example.com to answer' });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('approveTransferOut surfaces Dynadot refusing the order with a real HTTP 409', async () => {
+    const mock = respond(
+      Response.json(
+        ok({ domain_transfer_status_list: [{ order_id: '423', transfer_status: 'None' }] })
+      ),
+      httpError(409, 'Domain can not approve transfer out.')
+    );
+    const res = await dynadot().approveTransferOut('example.com');
     expect(res).toEqual({ success: false, message: 'Domain can not approve transfer out.' });
+    expect(mock).toHaveBeenCalledTimes(2);
+  });
+
+  it('a real HTTP error reads its envelope description, keeping class and status', async () => {
+    // a 404 is still a NotFoundError, which getTransferOut reads as null
+    respond(httpError(404, 'Can not find the transferring order in the domain.'));
+    expect(await dynadot().getTransferOut('example.com')).toBeNull();
+    respond(httpError(400, 'The {parameter} must be fully qualified'));
+    await expect(dynadot().getTransferOut('example')).rejects.toMatchObject({
+      status: 400,
+      message: 'The {parameter} must be fully qualified',
+    });
+    // without an envelope, the shared client's message stands
+    respond(new Response('Bad Request', { status: 400 }));
+    await expect(dynadot().getTransferOut('example')).rejects.toThrow(/failed with 400/);
   });
 
   it('getDnssec maps dnssec_info_list and parses "(code)" labels', async () => {
