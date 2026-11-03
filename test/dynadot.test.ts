@@ -348,6 +348,25 @@ describe('Dynadot provider (RESTful v2)', () => {
     await expect(dy.updateNameservers('example.com', ['only1.x.com'])).rejects.toThrow(/2-13/);
   });
 
+  it('updateNameservers sends lowercase hostnames (Dynadot rejects capitals)', async () => {
+    // Called on the provider itself, not through RegistrarClient: the base
+    // feature wrapper normalizes the list before Dynadot's code sees it.
+    const dy = dynadot();
+    const calls = stubHttp(dy, () => ok({}));
+    await dy.updateNameservers('example.com', [
+      'NS1.Afternic.com',
+      ' ns2.afternic.com ',
+      'Verification-AbC123.ns101.verify.test.',
+    ]);
+    expect(calls[0].body).toEqual({
+      nameserver_list: [
+        'ns1.afternic.com',
+        'ns2.afternic.com',
+        'verification-abc123.ns101.verify.test',
+      ],
+    });
+  });
+
   it('lock/unlock PUT a boolean lock; setPrivacy PUTs a privacy_level', async () => {
     const dy = dynadot();
     const calls = stubHttp(dy, () => ok({}));

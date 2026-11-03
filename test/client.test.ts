@@ -69,6 +69,12 @@ describe('normalizeNameservers', () => {
       'ns2.example.com',
     ]);
   });
+  it('strips a trailing dot', () => {
+    expect(normalizeNameservers(['NS1.Example.com.', 'ns2.example.com'])).toEqual([
+      'ns1.example.com',
+      'ns2.example.com',
+    ]);
+  });
 });
 
 describe('createDomain', () => {
@@ -275,6 +281,61 @@ describe('RegistrarClient forwarding passthrough', () => {
     expect(seen).toEqual([
       { method: 'setEmailForwarding', domain: 'example.com', forwards: emails },
       { method: 'setDomainForwarding', domain: 'example.com', forwards: urls },
+    ]);
+  });
+});
+
+describe('RegistrarClient nameserver normalization', () => {
+  // Records what each nameserver method receives, and returns mixed case.
+  function nameserverProvider() {
+    const seen: { method: string; domain: string; payload?: unknown }[] = [];
+    const provider = {
+      name: 'fake',
+      getNameservers: (domain: string) => {
+        seen.push({ method: 'getNameservers', domain });
+        return Promise.resolve(['NS1.Example.NET', 'ns2.example.net.']);
+      },
+      updateNameservers: (domain: string, nameservers: unknown) => {
+        seen.push({ method: 'updateNameservers', domain, payload: nameservers });
+        return Promise.resolve({ success: true });
+      },
+      registerDomain: (domain: string, input: unknown) => {
+        seen.push({ method: 'registerDomain', domain, payload: input });
+        return Promise.resolve({ success: true });
+      },
+    } as unknown as Registrar;
+    return { client: new RegistrarClient(provider), seen };
+  }
+
+  it('lowercases the nameservers it sends', async () => {
+    const { client, seen } = nameserverProvider();
+    await client.updateNameservers('example.com', [
+      ' NS1.Afternic.com',
+      'Verification-AbC1.ns.test.',
+    ]);
+    await client.registerDomain('example.com', {
+      contacts: {},
+      nameservers: ['NS1.Example.net'],
+    });
+    expect(seen).toEqual([
+      {
+        method: 'updateNameservers',
+        domain: 'example.com',
+        payload: ['ns1.afternic.com', 'verification-abc1.ns.test'],
+      },
+      {
+        method: 'registerDomain',
+        domain: 'example.com',
+        payload: { contacts: {}, nameservers: ['ns1.example.net'] },
+      },
+    ]);
+  });
+
+  it('lowercases the nameservers it reads', async () => {
+    const { client } = nameserverProvider();
+    expect(await client.getNameservers('example.com')).toEqual([
+      'ns1.example.net',
+      'ns2.example.net',
     ]);
   });
 });

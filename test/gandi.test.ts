@@ -97,6 +97,12 @@ describe('Gandi provider', () => {
     expect(ns).toEqual(['ns1.gandi.net', 'ns2.gandi.net']);
   });
 
+  it('getNameservers lowercases what the endpoint returns', async () => {
+    const g = gandi();
+    stubHttp(g, () => ['NS1.Gandi.net', 'ns2.GANDI.net.']);
+    expect(await g.getNameservers('example.com')).toEqual(['ns1.gandi.net', 'ns2.gandi.net']);
+  });
+
   it('getContacts maps owner->registrant and bill->billing with Gandi field names', async () => {
     const g = gandi();
     const calls = stubHttp(g, () => ({
@@ -764,7 +770,7 @@ describe('Gandi provider', () => {
     expect((calls[1].body as { owner: { state: string } }).owner.state).toBe('US-CA');
   });
 
-  it('registerDomain POSTs fqdn/duration/owner and carries privacy on the owner', async () => {
+  it('registerDomain POSTs fqdn/duration/owner, privacy on the owner, lowercase nameservers', async () => {
     const g = gandi();
     const calls = stubHttp(g, () => ({}));
     await g.registerDomain('example.com', {
@@ -782,7 +788,7 @@ describe('Gandi provider', () => {
       },
       years: 2,
       privacy: true,
-      nameservers: ['ns1.x.net', 'ns2.x.net'],
+      nameservers: ['NS1.X.net', 'ns2.x.net'],
     });
     expect(calls[0]).toMatchObject({ method: 'POST', path: '/domain/domains' });
     const body = calls[0].body as {

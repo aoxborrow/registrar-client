@@ -2,6 +2,7 @@ import { DEFAULT_OPTIONS } from './constants';
 import { ConfigurationError, NotImplementedError } from './errors';
 import { HttpClient, type HttpClientConfig } from './http';
 import { CORE_FEATURES, FEATURE_CALLS, type RegistrarFeature } from './features';
+import { normalizeNameservers } from './utils';
 import type {
   ConnectionResult,
   ContactSet,
@@ -41,6 +42,25 @@ export function selectBaseUrl(
     return urls.sandbox;
   }
   return urls.production;
+}
+
+// Nameserver lists cross the provider boundary normalized (see
+// `normalizeNameservers`), whatever each provider's own code does: the ones a
+// write sends (`updateNameservers`, and a registration's initial set) and the
+// ones `getNameservers` returns. Domain reads already go through `createDomain`.
+function normalizeNameserverArgs(feature: string, args: unknown[]): void {
+  if (feature === 'updateNameservers' && Array.isArray(args[1])) {
+    args[1] = normalizeNameservers(args[1]);
+  } else if (feature === 'registerDomain') {
+    const input = args[1] as RegisterDomainInput | undefined;
+    if (input?.nameservers) {
+      args[1] = { ...input, nameservers: normalizeNameservers(input.nameservers) };
+    }
+  }
+}
+
+function normalizeNameserverResult(feature: string, value: unknown): unknown {
+  return feature === 'getNameservers' && Array.isArray(value) ? normalizeNameservers(value) : value;
 }
 
 // Abstract base for registrar providers. Owns the shared HTTP/auth/retry
@@ -113,6 +133,8 @@ export abstract class BaseRegistrar implements Registrar {
   // goes through that feature's own wrapper, so the inner read is still a read.
   // Providers fold most failures into an `OperationResult`; the unknown outcome
   // is copied onto that result so it is not lost along with the error.
+  //
+  // The wrapper also normalizes the nameservers a feature sends or returns.
   private threadFeatureCalls(): void {
     const self = this as unknown as Record<string, unknown>;
     for (const [feature, { intent, optsIndex }] of Object.entries(FEATURE_CALLS)) {
@@ -123,18 +145,20 @@ export abstract class BaseRegistrar implements Registrar {
       self[feature] = (...args: unknown[]): unknown => {
         const call: FeatureCall = { intent, feature };
         const next = [...args];
+        normalizeNameserverArgs(feature, next);
         while (next.length <= optsIndex) next.push(undefined);
         next[optsIndex] = { ...(next[optsIndex] as RequestOptions | undefined), call };
         const result: unknown = (original as (...a: unknown[]) => unknown).apply(this, next);
         if (!(result instanceof Promise)) return result;
-        return result.then((value: unknown) =>
-          call.outcomeUnknown &&
-          value !== null &&
-          typeof value === 'object' &&
-          (value as OperationResult).success === false
+        return result.then((resolved: unknown) => {
+          const value = normalizeNameserverResult(feature, resolved);
+          return call.outcomeUnknown &&
+            value !== null &&
+            typeof value === 'object' &&
+            (value as OperationResult).success === false
             ? { ...value, outcome: 'unknown' }
-            : value
-        );
+            : value;
+        });
       };
     }
   }
