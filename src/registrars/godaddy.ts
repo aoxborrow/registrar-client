@@ -130,6 +130,7 @@ interface GoDaddyAction {
   status?: string;
   createdAt?: string;
   completedAt?: string;
+  reason?: { code?: string; message?: string };
 }
 
 // normalized DomainForwardType → the token the v2 write endpoint expects
@@ -324,8 +325,9 @@ export class GoDaddyRegistrar extends BaseRegistrar {
   // Forwarding uses the v2 customer-scoped route
   // /v2/customers/{customerId}/domains/forwards/{fqdn} (the old v1
   // /v1/domains/forwards routes now 404); it requires `customerId` to be
-  // configured — verified live 2026-08-29. Transfer-out approval is v2
-  // customer-scoped too, so it needs `customerId` as well. DNSSEC has no dedicated
+  // configured — verified live 2026-08-29. Approving or rejecting a transfer
+  // out is v2 customer-scoped too, so it needs `customerId` as well; reading
+  // one takes only the v1 domain status. DNSSEC has no dedicated
   // endpoint (DS records go through the generic DNS API), and there's no
   // glue-record, email, or push-webhook API.
   static readonly extendedFeatures: readonly RegistrarFeature[] = [
@@ -1214,23 +1216,32 @@ export class GoDaddyRegistrar extends BaseRegistrar {
   }
 
   /**
-   * The domain's latest outbound transfer, read from its recent actions
-   * (GET /v2/customers/{customerId}/domains/{domain}/actions): the TRANSFER_OUT
-   * action, and an accept or reject logged after it. Null when there is no
-   * TRANSFER_OUT on record. GoDaddy reports no expiry; left alone, it releases
-   * the domain within seven days. Shapes from the published v2 spec; a real
-   * transfer-out is not yet seen live.
+   * The domain's outbound transfer, from its v1 status: GoDaddy moves a domain
+   * to PENDING_TRANSFER_OUT as soon as another registrar asks for it, to
+   * PENDING_TRANSFER_OUT_ACK or _NACK once it's answered, and to
+   * TRANSFERRED_OUT when it leaves (seen live 2026-11-03, the move taking a
+   * minute after the accept). The v2 action list is no source for this: it
+   * logs requests made through the v2 API, and had no TRANSFER_OUT while one
+   * was pending. Null when no transfer out is under way, or the domain is no
+   * longer in the account. GoDaddy reports no date for the request it can be
+   * trusted with (`transferAwayEligibleAt` came back in Arizona time marked as
+   * UTC); left alone, it releases the domain within seven days.
    */
   override async getTransferOut(
     domainName: string,
     opts?: RequestOptions
   ): Promise<TransferOut | null> {
-    const customerId = await this.resolveCustomerId(opts);
-    const actions = await this.http.request<GoDaddyAction[]>({
-      path: `${this.domainPathV2(customerId, domainName)}/actions`,
-      ...opts,
-    });
-    return toTransferOut(Array.isArray(actions) ? actions : []);
+    let d: GoDaddyDomain;
+    try {
+      d = await this.getDomainV1(domainName, opts);
+    } catch (error) {
+      if (error instanceof NotFoundError) return null;
+      throw error;
+    }
+    const rawStatus = d.status ?? '';
+    const status = transferOutStatus(rawStatus);
+    if (!status) return null;
+    return { status, rawStatus, requestedDate: null, expirationDate: null, completedDate: null };
   }
 
   /**
@@ -1266,11 +1277,62 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     } catch (error) {
       return failedResult(error);
     }
-    return this.mutate(
-      { method: 'POST', path: `${this.domainPathV2(customerId, domainName)}/${action}` },
+    const path = this.domainPathV2(customerId, domainName);
+    const sentAt = Date.now();
+    const sent = await this.mutate(
+      { method: 'POST', path: `${path}/${action}` },
       `Transfer of ${domainName} ${answer}`,
       opts
     );
+    if (!sent.success) return sent;
+    // A 202: GoDaddy runs the answer as an action, so wait for it to finish.
+    const type = action === 'transferOutAccept' ? 'TRANSFER_OUT_ACCEPT' : 'TRANSFER_OUT_REJECT';
+    const done = await this.pollAction(path, type, sentAt, opts);
+    const status = (done?.status ?? '').toUpperCase();
+    if (status === 'SUCCESS') return sent;
+    if (status === 'FAILED' || status === 'CANCELLED') {
+      const why = done?.reason?.message ?? done?.reason?.code;
+      return {
+        success: false,
+        message: `GoDaddy didn't complete the transfer of ${domainName}: its ${type} action ${status.toLowerCase()}${why ? ` (${why})` : ''}`,
+      };
+    }
+    return {
+      success: true,
+      pending: true,
+      message: `Transfer of ${domainName} ${answer}; GoDaddy is still processing it`,
+    };
+  }
+
+  /**
+   * Poll the v2 action this client just started, via GET .../actions/{type}
+   * (which answers with the latest of that type, or `{}` when there is none),
+   * until it reaches a terminal status. An action created before `since` is an
+   * earlier one, so it's waited past. Undefined when it hasn't finished within
+   * the budget, or polling fails: the request itself was accepted.
+   */
+  private async pollAction(
+    path: string,
+    type: string,
+    since: number,
+    opts?: RequestOptions,
+    attempts = 10,
+    delayMs = 1500
+  ): Promise<GoDaddyAction | undefined> {
+    // allow for the two clocks disagreeing
+    const earliest = since - 60_000;
+    for (let i = 0; i < attempts; i++) {
+      if (i > 0) await new Promise(resolve => setTimeout(resolve, delayMs));
+      let a: GoDaddyAction;
+      try {
+        a = await this.http.request<GoDaddyAction>({ path: `${path}/actions/${type}`, ...opts });
+      } catch {
+        return undefined;
+      }
+      if ((parseDate(a?.createdAt)?.getTime() ?? 0) < earliest) continue;
+      if (/^(SUCCESS|FAILED|CANCELLED)$/i.test(a.status ?? '')) return a;
+    }
+    return undefined;
   }
 
   /**
@@ -1356,44 +1418,16 @@ function asciiName(name: string): string {
 
 // --- transfer-out mapping ---
 
-// GoDaddy's recent actions → the domain's latest transfer-out. The TRANSFER_OUT
-// action carries the transfer; while it's open, the latest accept or reject
-// logged after it (unless that failed) says how it was answered.
-function toTransferOut(actions: GoDaddyAction[]): TransferOut | null {
-  const time = (a: GoDaddyAction) => parseDate(a.createdAt)?.getTime() ?? 0;
-  const byLatest = (types: string[]) =>
-    actions.filter(a => types.includes(a.type ?? '')).sort((a, b) => time(b) - time(a));
-  const transfer = byLatest(['TRANSFER_OUT'])[0];
-  if (!transfer) return null;
-  const answer = byLatest(['TRANSFER_OUT_ACCEPT', 'TRANSFER_OUT_REJECT']).find(
-    a => time(a) >= time(transfer) && !/^(FAILED|CANCELLED)$/i.test(a.status ?? '')
-  );
-  const rejected = answer?.type === 'TRANSFER_OUT_REJECT';
-  const rawStatus = transfer.status ?? '';
-  let status: TransferOutStatus;
-  switch (rawStatus.toUpperCase()) {
-    case 'ACCEPTED':
-    case 'AWAITING':
-    case 'PENDING':
-      status = !answer ? 'pending' : rejected ? 'rejected' : 'approved';
-      break;
-    case 'SUCCESS':
-      status = 'completed';
-      break;
-    case 'FAILED':
-    case 'CANCELLED':
-      status = rejected ? 'rejected' : 'cancelled';
-      break;
-    default:
-      status = 'unknown';
-  }
-  return {
-    status,
-    rawStatus,
-    requestedDate: parseDate(transfer.createdAt),
-    expirationDate: null,
-    completedDate: status === 'completed' ? parseDate(transfer.completedAt) : null,
-  };
+// GoDaddy's v1 domain status → where its outbound transfer stands, or null
+// when none is under way. The other PENDING_TRANSFER_OUT statuses GoDaddy
+// lists (_PREMIUM, _UNDERAGE, _VALIDATION) are still waiting on an answer.
+function transferOutStatus(status: string): TransferOutStatus | null {
+  const s = status.toUpperCase();
+  if (s === 'TRANSFERRED_OUT') return 'completed';
+  if (s === 'PENDING_TRANSFER_OUT_ACK') return 'approved';
+  if (s === 'PENDING_TRANSFER_OUT_NACK') return 'rejected';
+  if (s.startsWith('PENDING_TRANSFER_OUT')) return 'pending';
+  return null;
 }
 
 // --- contact mapping between GoDaddy's shape and the normalized Contact ---

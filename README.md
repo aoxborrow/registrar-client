@@ -245,11 +245,13 @@ not a claim of available API endpoints. See [101domain](docs/registrars/101domai
 - **ⁿ** Transfer-out approval answers a transfer another registrar requested with
   the auth code. Dynadot's is sandbox-verified only up to "no such order" (its
   sandbox can't start an outbound transfer); a real pending one's read was
-  checked in production. GoDaddy's uses the v2 customer-scoped API, so it needs a
-  `customerId` as forwarding does (ˡ); it reads the domain's recent actions, with
-  no expiry date. Gandi has no transfer-out to read: a `pendingTransfer` status
-  reads as pending, with no dates, and approving sends the current auth code
-  back. Neither has been tried on a real transfer yet. Name.com can only reject
+  checked in production. GoDaddy's reads the domain's v1 status, with no dates;
+  approving or rejecting uses the v2 customer-scoped API, so it needs a
+  `customerId` as forwarding does (ˡ), and waits for GoDaddy's action to finish.
+  A real GoDaddy transfer was read and approved (2026-11-03). Gandi has no
+  transfer-out to read: a `pendingTransfer` status reads as pending, with no
+  dates, and approving sends the current auth code back; it hasn't been tried on
+  a real transfer yet. Name.com can only reject
   (not wired up); the rest leave it to the dashboard or the transfer email, and
   release the domain after about 5 days. See each registrar's doc.
 - **ˡ** GoDaddy domain forwarding uses the v2 customer-scoped API, so it requires

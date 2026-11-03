@@ -125,21 +125,31 @@ Two auth schemes coexist: the legacy `sso-key {API_KEY}:{API_SECRET}` header (us
 
 ## Transfer-out approval (implemented 2026-10-31)
 
-GoDaddy's **v2** customer-scoped API can read, approve and reject a pending
-outbound transfer, and all three need the `customerId`, as domain forwarding
-does. `getTransferOut` reads the domain's recent actions
-(`GET .../domains/{domain}/actions`): the latest `TRANSFER_OUT` gives the status
-(AWAITING / PENDING / ACCEPTED → pending, SUCCESS → completed, FAILED /
-CANCELLED → cancelled), and a `TRANSFER_OUT_ACCEPT` or `_REJECT` logged after
-it that didn't fail turns an open one approved or rejected. `approveTransferOut`
-and `rejectTransferOut` POST `transferOutAccept` / `transferOutReject` (no reason)
-and don't poll the 202's action.
+`getTransferOut` reads the domain's **v1** status (`GET /v1/domains/{domain}`):
+`PENDING_TRANSFER_OUT` and its `_PREMIUM` / `_UNDERAGE` / `_VALIDATION` variants
+→ pending, `PENDING_TRANSFER_OUT_ACK` → approved, `_NACK` → rejected,
+`TRANSFERRED_OUT` → completed, anything else (or a 404) → null. It needs no
+`customerId`. `approveTransferOut` and `rejectTransferOut` use the **v2**
+customer-scoped API, so they need the `customerId`, as domain forwarding does:
+they POST `transferOutAccept` / `transferOutReject` (no reason), then poll
+`.../actions/TRANSFER_OUT_ACCEPT` (or `_REJECT`) until it ends. SUCCESS is
+success, FAILED or CANCELLED a failure with GoDaddy's reason, and still running
+after ~15s a success with `pending: true`.
 
-**Verified live (2026-10-31, read-only):** a PAT with the customer UUID reads
+**Verified live (2026-11-03, a real transfer to Dynadot):** when the request
+arrived, v1 turned `PENDING_TRANSFER_OUT` while v2 and v3 already said
+`TRANSFERRED`; the v2 action list stayed empty and `actions/TRANSFER_OUT`
+answered `200 {}`, so the action list, which the first version read, logs v2
+requests made through the API rather than transfers another registrar starts.
+`transferOutAccept` answered 202 and its `TRANSFER_OUT_ACCEPT` action reached
+SUCCESS within 3s; v1 went `PENDING_TRANSFER_OUT_ACK`, then `TRANSFERRED_OUT` a
+minute later, and the domain left both the v1 and v3 lists.
+`transferAwayEligibleAt` held the request time in Arizona time marked as UTC.
+
+**Earlier (2026-10-31, read-only):** a PAT with the customer UUID reads
 v2 (`200`); the actions list, and `actions/TRANSFER_OUT`, come back `[]` on
 domains with nothing in progress (not 404); `?includes=actions` leaves the key
-out when empty. A real transfer-out, and the accept and reject calls, are from
-the spec only.
+out when empty. Reject is still from the spec only.
 
 **A PAT can't find the customer UUID on its own.** v2 refuses the numeric
 shopper ID (`403 ACCESS_DENIED`), the shopper lookup that turns it into the
