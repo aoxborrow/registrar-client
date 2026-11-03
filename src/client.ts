@@ -17,7 +17,7 @@ import type {
 } from './types';
 
 // A thin, provider-agnostic facade over a single `Registrar`. Normalizes
-// domain names and delegates to the underlying provider.
+// domain names and nameservers and delegates to the underlying provider.
 //
 //   const client = new RegistrarClient(createRegistrar('cloudflare', creds));
 //   await client.listDomains();
@@ -91,7 +91,12 @@ export class RegistrarClient {
     input: RegisterDomainInput,
     opts?: RequestOptions
   ): Promise<OperationResult> {
-    return this.provider.registerDomain(normalizeDomain(domainName), input, opts);
+    const nameservers = input.nameservers && normalizeNameservers(input.nameservers);
+    return this.provider.registerDomain(
+      normalizeDomain(domainName),
+      nameservers ? { ...input, nameservers } : input,
+      opts
+    );
   }
 
   renewDomain(domainName: string, years?: number, opts?: RequestOptions): Promise<OperationResult> {
@@ -119,7 +124,11 @@ export class RegistrarClient {
     nameservers: string[],
     opts?: RequestOptions
   ): Promise<OperationResult> {
-    return this.provider.updateNameservers(normalizeDomain(domainName), nameservers, opts);
+    return this.provider.updateNameservers(
+      normalizeDomain(domainName),
+      normalizeNameservers(nameservers),
+      opts
+    );
   }
 
   async getNameservers(domainName: string, opts?: RequestOptions): Promise<string[]> {

@@ -106,6 +106,12 @@ have no pricing endpoint. **Namecheap** and **Gandi** are the only providers wit
 a real per-TLD `getPricing` table; **GoDaddy** and **Dynadot** price per-domain
 via their availability endpoint.
 
+Nameservers are normalized like domain names (trimmed, lowercased, one trailing
+dot removed, blanks dropped) on every provider, both ways: the ones a write sends
+(`updateNameservers`, `RegisterDomainInput.nameservers`) and the ones a read
+returns (`getNameservers`, `Domain.nameservers`). Some registries refuse capitals
+outright (Dynadot: "Name server must be all lowercase").
+
 ## Listing domains & portfolios
 
 `listDomains` returns the **full account**, paginating internally at each

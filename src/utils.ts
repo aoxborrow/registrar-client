@@ -109,8 +109,10 @@ export function parseDate(value: Date | string | number | null | undefined): Dat
 // normalize nameservers into a flat array of hostname strings.
 // accepts: string[], { hosts: string[] } (Spaceship), or objects with a
 // ServerName property (Dynadot), falling back to String() for anything else.
-// Hostnames are trimmed and lowercased (they're case-insensitive, but providers
-// return mixed case), and blanks are dropped.
+// Hostnames are normalized like domain names (trimmed, lowercased, a trailing
+// dot stripped) and blanks are dropped. They're case-insensitive, but providers
+// return mixed case and some registries refuse capitals on write (Dynadot:
+// "Name server must be all lowercase").
 export function normalizeNameservers(nameservers: unknown): string[] {
   if (!nameservers) return [];
 
@@ -137,7 +139,7 @@ export function normalizeNameservers(nameservers: unknown): string[] {
       }
       return String(ns);
     })
-    .map(host => host.trim().toLowerCase())
+    .map(host => normalizeDomain(host))
     .filter(Boolean);
 }
 
