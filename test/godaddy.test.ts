@@ -88,6 +88,21 @@ describe('GoDaddy provider', () => {
     expect(matched.map(d => d.domainName)).toEqual(['foo.com', 'foobar.com']);
   });
 
+  it('reads privacy as on only while Domain Privacy is attached and the WHOIS is hidden', async () => {
+    const gd = godaddy();
+    stubHttp(gd, () => [
+      { domain: 'hidden.com', privacy: true, exposeWhois: false },
+      { domain: 'exposed.com', privacy: true, exposeWhois: true },
+      { domain: 'none.us', privacy: false },
+    ]);
+    const domains = await gd.listDomains();
+    expect(domains.map(d => [d.domainName, d.privacy])).toEqual([
+      ['hidden.com', true],
+      ['exposed.com', false],
+      ['none.us', false],
+    ]);
+  });
+
   it('getContacts maps GoDaddy contact shape to the normalized Contact', async () => {
     const gd = godaddy();
     stubHttp(gd, () => ({
@@ -269,13 +284,50 @@ describe('GoDaddy provider', () => {
     );
   });
 
-  it('setPrivacy disables via DELETE but refuses to enable', async () => {
+  it('setPrivacy(true) hides the WHOIS again through the v1 PATCH, with no consent', async () => {
     const gd = godaddy();
     const calls = stubHttp(gd, () => '');
-    const off = await gd.setPrivacy('example.com', false);
+    const on = await gd.setPrivacy('example.com', true);
+    expect(on.success).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      method: 'PATCH',
+      path: '/v1/domains/example.com',
+      body: { exposeWhois: false, exposeRegistrantOrganization: false },
+    });
+  });
+
+  it('setPrivacy(false) exposes the WHOIS with the EXPOSE_WHOIS consent', async () => {
+    const gd = godaddy();
+    const calls = stubHttp(gd, () => '');
+    const off = await gd.setPrivacy('example.com', false, {
+      consent: { agreedBy: '203.0.113.7', agreedAt: '2026-11-03T00:00:00.000Z' },
+    });
     expect(off.success).toBe(true);
-    expect(calls[0]).toMatchObject({ method: 'DELETE' });
-    await expect(gd.setPrivacy('example.com', true)).rejects.toBeInstanceOf(NotImplementedError);
+    expect(calls[0]).toMatchObject({
+      method: 'PATCH',
+      path: '/v1/domains/example.com',
+      body: {
+        exposeWhois: true,
+        consent: {
+          agreementKeys: ['EXPOSE_WHOIS'],
+          agreedBy: '203.0.113.7',
+          agreedAt: '2026-11-03T00:00:00.000Z',
+        },
+      },
+    });
+    // the consent goes in the body, not on as a request option
+    expect(calls[0]).not.toHaveProperty('consent');
+  });
+
+  it('setPrivacy(false) needs consent.agreedBy before any request', async () => {
+    const gd = godaddy();
+    const calls = stubHttp(gd, () => '');
+    await expect(gd.setPrivacy('example.com', false)).rejects.toBeInstanceOf(ConsentRequiredError);
+    await expect(
+      gd.setPrivacy('example.com', false, { consent: { agreedBy: '' } })
+    ).rejects.toBeInstanceOf(ConsentRequiredError);
+    expect(calls).toHaveLength(0);
   });
 
   it('getAuthCode reads authCode from the v1 domain-detail endpoint', async () => {
@@ -283,26 +335,6 @@ describe('GoDaddy provider', () => {
     const calls = stubHttp(gd, () => ({ domain: 'example.com', authCode: 'EPP-abc123' }));
     expect(await gd.getAuthCode('example.com')).toBe('EPP-abc123');
     expect(calls[0].path).toBe('/v1/domains/example.com');
-  });
-
-  it('setPrivacy(false) returns a clear error on a 409 (free DBP needs consent)', async () => {
-    const gd = godaddy();
-    // GoDaddy's free privacy can't be canceled via DELETE (409); disabling it
-    // needs a WHOIS-exposure consent block setPrivacy can't supply, so the client
-    // surfaces a clear, actionable failure rather than silently erroring.
-    const calls = stubHttp(gd, req => {
-      if (req.method === 'DELETE') {
-        const err = new RegistrarError('Free DBP cannot be canceled');
-        err.status = 409;
-        throw err;
-      }
-      return '';
-    });
-    const off = await gd.setPrivacy('example.com', false);
-    expect(off.success).toBe(false);
-    expect(off.message).toMatch(/free WHOIS privacy|Free DBP/i);
-    // it does not attempt a PATCH it can't satisfy
-    expect(calls.some(c => c.method === 'PATCH')).toBe(false);
   });
 
   it('declares domain forwarding (v2 customer-scoped API)', () => {
@@ -697,6 +729,55 @@ describe('GoDaddy v3 provider (production + PAT)', () => {
     const d = await gd.getDomain('example.com');
     expect(calls[0].path).toBe('/v3/domains/domain-names/example.com');
     expect(d).toMatchObject({ domainName: 'example.com', locked: false, privacy: true });
+  });
+
+  it('getDomain reads privacy as off when v1 says the WHOIS is exposed', async () => {
+    const gd = godaddyV3();
+    const calls = stubHttp(gd, req =>
+      req.path.startsWith('/v3/')
+        ? { domain: 'example.com', privacy: true }
+        : { domain: 'example.com', privacy: true, exposeWhois: true }
+    );
+    expect((await gd.getDomain('example.com')).privacy).toBe(false);
+    expect(calls.map(c => c.path)).toEqual([
+      '/v3/domains/domain-names/example.com',
+      '/v1/domains/example.com',
+    ]);
+  });
+
+  it('getDomain skips the v1 read when v3 reports no privacy', async () => {
+    const gd = godaddyV3();
+    const calls = stubHttp(gd, () => ({ domain: 'example.us', privacy: false }));
+    expect((await gd.getDomain('example.us')).privacy).toBe(false);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('listDomains takes exposeWhois from one v1 list, matching IDNs by punycode', async () => {
+    const gd = godaddyV3();
+    const calls = stubHttp(gd, req =>
+      req.path.startsWith('/v3/')
+        ? {
+            items: [
+              { domain: 'hidden.com', privacy: true },
+              { domain: 'exposed.com', privacy: true },
+              { domain: 'xn--6lj.com', privacy: true },
+            ],
+            links: [],
+          }
+        : [
+            { domain: 'hidden.com', privacy: true, exposeWhois: false },
+            { domain: 'exposed.com', privacy: true, exposeWhois: true },
+            { domain: 'ⴲ.com', privacy: true, exposeWhois: true },
+          ]
+    );
+    const domains = await gd.listDomains();
+    expect(domains.map(d => [d.domainName, d.privacy])).toEqual([
+      ['hidden.com', true],
+      ['exposed.com', false],
+      ['xn--6lj.com', false],
+    ]);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].path).toMatch(/^\/v1\/domains\?/);
   });
 
   it('updateNameservers PUTs a bare array to the v3 nameservers subresource', async () => {

@@ -12,6 +12,7 @@ import type {
   Registrar,
   RegisterDomainInput,
   RequestOptions,
+  SetPrivacyOptions,
   TldPricing,
   TransferDomainInput,
 } from './types';
@@ -139,7 +140,7 @@ export class RegistrarClient {
   setPrivacy(
     domainName: string,
     enabled: boolean,
-    opts?: RequestOptions
+    opts?: SetPrivacyOptions
   ): Promise<OperationResult> {
     return this.provider.setPrivacy(normalizeDomain(domainName), enabled, opts);
   }

@@ -75,11 +75,16 @@ poll rather than read back immediately. OTE v1 (testConnection, listDomains,
 checkAvailability) also verified. Also verified live (2026-08-29):
 `updateContacts` (v1 PATCH, reversible non-identity round-trip — a registrant
 name/org/email change would trip the ICANN 60-day lock, so only an address change
-was exercised); and `setPrivacy(false)`, which surfaced a real limitation —
-GoDaddy's **free privacy ("Free DBP")** can't be disabled via the API: `DELETE
-/privacy` returns 409, and the `PATCH {exposeWhois:true}` alternative demands a
-full WHOIS-exposure consent block the method can't carry, so the client returns a
-clear error. **Domain forwarding** works on the **v2 customer-scoped** route
+was exercised). **WHOIS privacy** (verified live 2026-11-03, PAT only):
+GoDaddy's Domain Privacy has been free on eligible TLDs since 2020 and has three
+levels (On, Limited, Off). The domain's `privacy` flag only says the feature is
+attached and stays true at every level; the level is `exposeWhois` /
+`exposeRegistrantOrganization` on `PATCH /v1/domains/{domain}`. Hiding
+(`exposeWhois:false`) needs no consent; exposing needs `consent.agreementKeys:
+["EXPOSE_WHOIS"]` with `agreedBy` = the user's IP. Both apply in about 15 seconds.
+v3 doesn't return `exposeWhois`, so v3 reads take it from v1. The old `DELETE
+/v1/domains/{domain}/privacy` (409 on free privacy) and `privacy/purchase` routes
+aren't in GoDaddy's current specs. **Domain forwarding** works on the **v2 customer-scoped** route
 `/v2/customers/{customerId}/domains/forwards/{fqdn}` (the old v1
 `/v1/domains/forwards` routes 404); it needs a `customerId` (the customer UUID, or
 a numeric shopper ID the client resolves to the UUID) — verified live with a full
@@ -109,7 +114,7 @@ Two auth schemes coexist: the legacy `sso-key {API_KEY}:{API_SECRET}` header (us
 | Update nameservers                          | ✓       | `PATCH /v1/domains/{domain}` (nameservers field) and v3 nameserver management endpoints.                                                                                                                                                                                                                                                                                                                                                                                      |
 | Get nameservers                             | ✓       | Included in `GET /v1/domains/{domain}` / v3 domain read.                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | Lock / unlock domain (transfer lock)        | ✓       | Registry lock flag on domain settings (`PATCH /v1/domains/{domain}`), read/toggle per domain-management-concepts doc.                                                                                                                                                                                                                                                                                                                                                         |
-| Get/set WHOIS privacy                       | ~       | `DELETE /v1/domains/{domain}/privacy` cancels **paid** privacy; **free privacy ("Free DBP") can't be disabled via API** (DELETE → 409; `PATCH exposeWhois:true` needs a consent block) — verified live 2026-08-29.                                                                                                                                                                                                                                                            |
+| Get/set WHOIS privacy                       | ✓       | Level via `exposeWhois` on `PATCH /v1/domains/{domain}` (`privacy` only says free Domain Privacy is attached); exposing needs the `EXPOSE_WHOIS` consent with the user's IP — verified live 2026-11-03.                                                                                                                                                                                                                                                                       |
 | Update contact info (registrant/admin/tech) | ✓       | `PATCH /v1/domains/{domain}/contacts` (v1); registrant changes trigger ICANN approval workflow.                                                                                                                                                                                                                                                                                                                                                                               |
 | DNS record management                       | ✓       | `GET/PUT/PATCH/DELETE /v1/domains/{domain}/records[/{type}/{name}]` — full CRUD, but only for domains on GoDaddy's authoritative nameservers.                                                                                                                                                                                                                                                                                                                                 |
 | DNSSEC management                           | ~       | No dedicated DNSSEC endpoint documented; DS records manageable via the generic DNS records endpoint (`/v1/domains/{domain}/records/DS`).                                                                                                                                                                                                                                                                                                                                      |
