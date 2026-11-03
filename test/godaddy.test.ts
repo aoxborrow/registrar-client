@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   createRegistrar,
   ConfigurationError,
@@ -455,111 +455,129 @@ describe('GoDaddy provider', () => {
     expect(gd.supports(Feature.RejectTransferOut)).toBe(true);
   });
 
-  it('transfer-out needs customerId, as forwarding does', async () => {
+  it('reading a transfer out needs no customerId; answering one does', async () => {
     const gd = godaddy(); // no customerId
-    const calls = stubHttp(gd, () => []);
-    await expect(gd.getTransferOut('example.com')).rejects.toBeInstanceOf(ConfigurationError);
+    const calls = stubHttp(gd, () => ({ domain: 'example.com', status: 'ACTIVE' }));
+    expect(await gd.getTransferOut('example.com')).toBeNull();
+    expect(calls.map(c => c.path)).toEqual(['/v1/domains/example.com']);
     const res = await gd.approveTransferOut('example.com');
     expect(res.success).toBe(false);
     expect(res.message).toMatch(/customer ID/i);
-    expect(calls).toHaveLength(0);
+    expect(calls).toHaveLength(1);
   });
 
-  it('getTransferOut reads the recent actions; none on record is null', async () => {
-    const gd = withCustomer();
-    const calls = stubHttp(gd, () => []);
-    expect(await gd.getTransferOut('example.com')).toBeNull();
-    expect(calls[0].path).toBe(`${DOMAIN_V2}/actions`);
-  });
-
-  it('getTransferOut maps an open TRANSFER_OUT action as pending', async () => {
-    const gd = withCustomer();
-    stubHttp(gd, () => [
-      { type: 'DOMAIN_UPDATE', status: 'SUCCESS', createdAt: '2026-10-30T10:00:00Z' },
-      { type: 'TRANSFER_OUT', status: 'AWAITING', createdAt: '2026-10-31T12:00:00Z' },
-    ]);
+  it('getTransferOut reads the v1 domain status', async () => {
+    const gd = godaddy();
+    const cases: [string, string | null][] = [
+      ['ACTIVE', null],
+      ['PENDING_TRANSFER_OUT', 'pending'],
+      ['PENDING_TRANSFER_OUT_UNDERAGE', 'pending'],
+      ['PENDING_TRANSFER_OUT_ACK', 'approved'],
+      ['PENDING_TRANSFER_OUT_NACK', 'rejected'],
+      ['TRANSFERRED_OUT', 'completed'],
+    ];
+    for (const [rawStatus, status] of cases) {
+      stubHttp(gd, () => ({ domain: 'example.com', status: rawStatus }));
+      const t = await gd.getTransferOut('example.com');
+      expect(t?.status ?? null).toBe(status);
+    }
+    stubHttp(gd, () => ({ domain: 'example.com', status: 'PENDING_TRANSFER_OUT' }));
     expect(await gd.getTransferOut('example.com')).toEqual({
       status: 'pending',
-      rawStatus: 'AWAITING',
-      requestedDate: new Date('2026-10-31T12:00:00Z'),
+      rawStatus: 'PENDING_TRANSFER_OUT',
+      requestedDate: null,
       expirationDate: null,
       completedDate: null,
     });
   });
 
-  it('getTransferOut reads an accept or reject logged after it as the answer', async () => {
-    const gd = withCustomer();
-    const transfer = { type: 'TRANSFER_OUT', status: 'PENDING', createdAt: '2026-10-31T12:00:00Z' };
-    const cases: [unknown[], string][] = [
-      [
-        [
-          transfer,
-          { type: 'TRANSFER_OUT_ACCEPT', status: 'PENDING', createdAt: '2026-10-31T13:00:00Z' },
-        ],
-        'approved',
-      ],
-      [
-        [
-          transfer,
-          { type: 'TRANSFER_OUT_REJECT', status: 'SUCCESS', createdAt: '2026-10-31T13:00:00Z' },
-        ],
-        'rejected',
-      ],
-      // a failed accept, or one from an earlier transfer, isn't an answer
-      [
-        [
-          transfer,
-          { type: 'TRANSFER_OUT_ACCEPT', status: 'FAILED', createdAt: '2026-10-31T13:00:00Z' },
-        ],
-        'pending',
-      ],
-      [
-        [
-          transfer,
-          { type: 'TRANSFER_OUT_ACCEPT', status: 'SUCCESS', createdAt: '2026-09-01T00:00:00Z' },
-        ],
-        'pending',
-      ],
-    ];
-    for (const [actions, status] of cases) {
-      stubHttp(gd, () => actions);
-      expect((await gd.getTransferOut('example.com'))?.status).toBe(status);
-    }
-  });
-
-  it('getTransferOut maps finished transfers', async () => {
-    const gd = withCustomer();
-    stubHttp(gd, () => [
-      {
-        type: 'TRANSFER_OUT',
-        status: 'SUCCESS',
-        createdAt: '2026-10-31T12:00:00Z',
-        completedAt: '2026-11-01T09:00:00Z',
-      },
-    ]);
-    expect(await gd.getTransferOut('example.com')).toMatchObject({
-      status: 'completed',
-      completedDate: new Date('2026-11-01T09:00:00Z'),
+  it('getTransferOut is null once the domain has left the account', async () => {
+    const gd = godaddy();
+    stubHttp(gd, () => {
+      throw new NotFoundError('Domain not found');
     });
-    stubHttp(gd, () => [
-      { type: 'TRANSFER_OUT', status: 'CANCELLED', createdAt: '2026-10-31T12:00:00Z' },
-    ]);
-    expect((await gd.getTransferOut('example.com'))?.status).toBe('cancelled');
+    expect(await gd.getTransferOut('example.com')).toBeNull();
   });
 
-  it('approveTransferOut and rejectTransferOut POST to transferOutAccept / transferOutReject', async () => {
+  // GoDaddy's answer to a transferOutAccept / transferOutReject POST, then to
+  // the polls of its action.
+  const answering = (action: (req: RequestConfig) => unknown) => (req: RequestConfig) =>
+    req.method === 'POST' ? undefined : action(req);
+  const now = () => new Date().toISOString();
+
+  it('approveTransferOut and rejectTransferOut POST, then wait for the action to succeed', async () => {
     const gd = withCustomer();
-    const calls = stubHttp(gd, () => undefined);
+    const calls = stubHttp(
+      gd,
+      answering(req => ({
+        type: req.path.endsWith('ACCEPT') ? 'TRANSFER_OUT_ACCEPT' : 'TRANSFER_OUT_REJECT',
+        status: 'SUCCESS',
+        createdAt: now(),
+      }))
+    );
     expect(await gd.approveTransferOut('example.com')).toEqual({
       success: true,
       message: 'Transfer of example.com approved',
     });
     expect(calls[0]).toMatchObject({ method: 'POST', path: `${DOMAIN_V2}/transferOutAccept` });
+    expect(calls[1].path).toBe(`${DOMAIN_V2}/actions/TRANSFER_OUT_ACCEPT`);
     expect(await gd.rejectTransferOut('example.com')).toEqual({
       success: true,
       message: 'Transfer of example.com rejected',
     });
-    expect(calls[1]).toMatchObject({ method: 'POST', path: `${DOMAIN_V2}/transferOutReject` });
+    expect(calls[2]).toMatchObject({ method: 'POST', path: `${DOMAIN_V2}/transferOutReject` });
+    expect(calls[3].path).toBe(`${DOMAIN_V2}/actions/TRANSFER_OUT_REJECT`);
+  });
+
+  it('approveTransferOut reports an action that failed, with GoDaddy’s reason', async () => {
+    const gd = withCustomer();
+    stubHttp(
+      gd,
+      answering(() => ({
+        type: 'TRANSFER_OUT_ACCEPT',
+        status: 'FAILED',
+        createdAt: now(),
+        reason: { code: 'CONFLICT', message: 'Domain is not pending transfer out' },
+      }))
+    );
+    const res = await gd.approveTransferOut('example.com');
+    expect(res.success).toBe(false);
+    expect(res.message).toMatch(/failed \(Domain is not pending transfer out\)/);
+  });
+
+  it('approveTransferOut waits past an earlier accept, and says pending if it runs long', async () => {
+    vi.useFakeTimers({ now: new Date('2026-11-03T06:14:00Z') });
+    try {
+      const gd = withCustomer();
+      // an accept from an earlier transfer, then this one
+      let polls = 0;
+      stubHttp(
+        gd,
+        answering(() =>
+          ++polls === 1
+            ? { type: 'TRANSFER_OUT_ACCEPT', status: 'SUCCESS', createdAt: '2026-09-01T00:00:00Z' }
+            : { type: 'TRANSFER_OUT_ACCEPT', status: 'SUCCESS', createdAt: now() }
+        )
+      );
+      const approved = gd.approveTransferOut('example.com');
+      await vi.runAllTimersAsync();
+      expect(await approved).toEqual({
+        success: true,
+        message: 'Transfer of example.com approved',
+      });
+      expect(polls).toBe(2);
+
+      const calls = stubHttp(
+        gd,
+        answering(() => ({ type: 'TRANSFER_OUT_ACCEPT', status: 'PENDING', createdAt: now() }))
+      );
+      const running = gd.approveTransferOut('example.com');
+      await vi.runAllTimersAsync();
+      expect(await running).toMatchObject({ success: true, pending: true });
+      expect(calls.filter(c => c.method !== 'POST')).toHaveLength(10);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('approveTransferOut reports GoDaddy refusing it', async () => {
