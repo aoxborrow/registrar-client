@@ -14,6 +14,7 @@ import type {
   RegistrationConsent,
   RegistrarOptions,
   RequestOptions,
+  SetPrivacyOptions,
   TldPricing,
   TransferDomainInput,
   TransferOut,
@@ -62,7 +63,10 @@ interface GoDaddyDomain {
   renewDeadline?: string;
   renewAuto?: boolean;
   locked?: boolean;
+  // Domain Privacy is attached (free on eligible TLDs); see `isPrivate`
   privacy?: boolean;
+  // the contact details are shown in WHOIS (privacy level Off)
+  exposeWhois?: boolean;
   nameServers?: string[];
   contactRegistrant?: GoDaddyContact;
   contactAdmin?: GoDaddyContact;
@@ -396,7 +400,9 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     return filterDomains(domains, search);
   }
 
-  // v3: cursor-paginated collection; follow the rel="next" HATEOAS link.
+  // v3: cursor-paginated collection; follow the rel="next" HATEOAS link. v3
+  // omits `exposeWhois`, so when any domain has privacy attached, one v1 list
+  // says which of them show their contact details anyway.
   private async listDomainsV3(reqOpts: RequestOptions): Promise<Domain[]> {
     const domains: Domain[] = [];
     let path = '/v3/domains/domain-names';
@@ -409,11 +415,21 @@ export class GoDaddyRegistrar extends BaseRegistrar {
       path = next; // absolute URL; HttpClient passes it through as-is
       query = undefined; // the next link already carries its cursor
     }
+    if (domains.some(d => d.privacy)) {
+      const exposed = new Set(
+        (await this.listV1(reqOpts)).filter(d => d.exposeWhois).map(d => asciiName(d.domain))
+      );
+      for (const d of domains) if (exposed.has(asciiName(d.domainName))) d.privacy = false;
+    }
     return domains;
   }
 
-  // v1: `marker`-paginated array (marker = last domain name seen).
   private async listDomainsV1(reqOpts: RequestOptions): Promise<Domain[]> {
+    return (await this.listV1(reqOpts)).map(d => this.toDomain(d));
+  }
+
+  // v1: `marker`-paginated array (marker = last domain name seen).
+  private async listV1(reqOpts: RequestOptions): Promise<GoDaddyDomain[]> {
     // status filters exclude expired domains: visible (active), renewable
     // (expiring soon), redemption (grace period). statusGroups repeats in the
     // query string, so it is embedded in the path directly. `includes=nameServers`
@@ -421,7 +437,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     // page-size param is literally named `limit`, whose max is 1000.
     const statusGroups = 'statusGroups=VISIBLE&statusGroups=RENEWABLE&statusGroups=REDEMPTION';
     const perPage = 1000; // GoDaddy's maximum page size
-    const domains: Domain[] = [];
+    const domains: GoDaddyDomain[] = [];
     let marker: string | undefined;
     for (;;) {
       const markerParam = marker ? `&marker=${encodeURIComponent(marker)}` : '';
@@ -430,7 +446,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
         ...reqOpts,
       });
       const list = res ?? [];
-      for (const d of list) domains.push(this.toDomain(d));
+      domains.push(...list);
       if (list.length < perPage) break;
       marker = list[list.length - 1]?.domain;
       if (!marker) break;
@@ -440,17 +456,24 @@ export class GoDaddyRegistrar extends BaseRegistrar {
 
   override async getDomain(domainName: string, opts?: RequestOptions): Promise<Domain> {
     if (this.useV3) {
-      const d = await this.http.request<GdV3Domain>({
-        path: `/v3/domains/domain-names/${encodeURIComponent(domainName)}`,
-        ...opts,
-      });
-      return this.toDomainV3(d);
+      const d = this.toDomainV3(
+        await this.http.request<GdV3Domain>({
+          path: `/v3/domains/domain-names/${encodeURIComponent(domainName)}`,
+          ...opts,
+        })
+      );
+      // v3 omits `exposeWhois`; v1 says whether privacy is actually on
+      if (d.privacy) d.privacy = isPrivate(await this.getDomainV1(domainName, opts));
+      return d;
     }
-    const d = await this.http.request<GoDaddyDomain>({
+    return this.toDomain(await this.getDomainV1(domainName, opts));
+  }
+
+  private async getDomainV1(domainName: string, opts?: RequestOptions): Promise<GoDaddyDomain> {
+    return this.http.request<GoDaddyDomain>({
       path: `/v1/domains/${encodeURIComponent(domainName)}`,
       ...opts,
     });
-    return this.toDomain(d);
   }
 
   // getNameservers re-reads getDomain (GoDaddy has no dedicated NS endpoint), so
@@ -851,49 +874,46 @@ export class GoDaddyRegistrar extends BaseRegistrar {
   }
 
   /**
-   * Disabling privacy is a simple DELETE. Enabling it is a paid purchase
-   * (`POST /v1/domains/{domain}/privacy/purchase`) requiring a consent block and
-   * payment, so it's left unimplemented rather than silently spending money.
+   * GoDaddy's WHOIS privacy (Domain Privacy, free on eligible TLDs since 2020)
+   * has three levels: On, Limited (organization, state and country shown) and
+   * Off. The API sets the level with `exposeWhois` / `exposeRegistrantOrganization`
+   * on the v1 domain PATCH; the domain's `privacy` flag only says the feature is
+   * attached and stays true at every level. Enabling hides the contact details
+   * again and needs no consent. Disabling publishes them, which GoDaddy accepts
+   * only with the EXPOSE_WHOIS agreement, so it needs `consent.agreedBy` (the
+   * consenting party's IP address). Both apply asynchronously: reads catch up
+   * within about a minute.
    */
   override async setPrivacy(
     domainName: string,
     enabled: boolean,
-    opts?: RequestOptions
+    opts?: SetPrivacyOptions
   ): Promise<OperationResult> {
+    const { consent, ...reqOpts } = opts ?? {};
+    let body: Record<string, unknown>;
     if (enabled) {
-      throw new NotImplementedError(
-        `${this.name}: enabling privacy is a paid purchase and is not implemented; ` +
-          'only disabling privacy is supported via the API'
-      );
-    }
-    const encoded = encodeURIComponent(domainName);
-    try {
-      await this.http.request({
-        method: 'DELETE',
-        path: `/v1/domains/${encoded}/privacy`,
-        ...opts,
-      });
-      return { success: true, message: 'Privacy disabled successfully' };
-    } catch (error) {
-      const err = toRegistrarError(error);
-      // GoDaddy's free privacy ("Free DBP") can't be canceled via DELETE — it
-      // returns 409 CONFLICTING_STATUS. The only way to turn it off is to expose
-      // the WHOIS via a domain PATCH (`exposeWhois: true`), but GoDaddy requires a
-      // full legal consent block on that PATCH (`agreedAt` + `agreedBy` = the
-      // consenting party's IP + `agreementKeys`) — the same consent as a
-      // registration. setPrivacy can't carry that (and this client is edge-safe
-      // with no reliable IP source), so surface a clear, actionable error instead
-      // of silently failing. Paid DBP still cancels through the DELETE above.
-      if (err.status === 409) {
-        return failedResult(
-          err,
-          `${this.name}: this domain uses free WHOIS privacy (Free DBP), which the API ` +
-            'only disables by exposing the WHOIS via a consent block (agreedAt + agreedBy IP ' +
-            '+ agreementKeys) that setPrivacy cannot supply; disable it in the GoDaddy dashboard.'
+      body = { exposeWhois: false, exposeRegistrantOrganization: false };
+    } else {
+      if (!consent?.agreedBy) {
+        throw new ConsentRequiredError(
+          `${this.name}: turning privacy off publishes the contact details in WHOIS, which ` +
+            "needs consent — supply `consent.agreedBy` (the consenting party's IP address)"
         );
       }
-      return failedResult(err);
+      body = {
+        exposeWhois: true,
+        consent: {
+          agreementKeys: ['EXPOSE_WHOIS'],
+          agreedAt: consent.agreedAt ?? new Date().toISOString(),
+          agreedBy: consent.agreedBy,
+        },
+      };
     }
+    return this.mutate(
+      { method: 'PATCH', path: `/v1/domains/${encodeURIComponent(domainName)}`, body },
+      `Privacy ${enabled ? 'enabled' : 'disabled'} successfully`,
+      reqOpts
+    );
   }
 
   override async getContacts(domainName: string, opts?: RequestOptions): Promise<ContactSet> {
@@ -1280,7 +1300,7 @@ export class GoDaddyRegistrar extends BaseRegistrar {
       renewalDate: d.renewDeadline,
       autoRenew: d.renewAuto ?? false,
       locked: d.locked ?? false,
-      privacy: d.privacy ?? false,
+      privacy: isPrivate(d),
       nameservers: d.nameServers ?? [],
     });
   }
@@ -1314,6 +1334,23 @@ export class GoDaddyRegistrar extends BaseRegistrar {
     } catch (error) {
       return failedResult(error);
     }
+  }
+}
+
+// Whether a v1 domain's contact details are hidden in WHOIS: Domain Privacy is
+// attached and its level isn't Off. (Limited, which shows only the
+// organization, state and country, still counts as private.)
+function isPrivate(d: GoDaddyDomain): boolean {
+  return (d.privacy ?? false) && !d.exposeWhois;
+}
+
+// A domain name as a lowercase ASCII hostname, to match v1 names (which come
+// back in Unicode for IDNs) against v3's punycode ones.
+function asciiName(name: string): string {
+  try {
+    return new URL(`http://${name}`).hostname;
+  } catch {
+    return name.toLowerCase();
   }
 }
 

@@ -41,6 +41,14 @@ export interface RequestOptions extends Partial<RegistrarClientOptions> {
   call?: FeatureCall;
 }
 
+// options for `setPrivacy`. Extends `RequestOptions` like `ListDomainsOptions`.
+export interface SetPrivacyOptions extends RequestOptions {
+  // acknowledgement for registrars that treat publishing contact details in
+  // WHOIS as a consented action (GoDaddy, when turning privacy off). `agreedBy`
+  // is the consenting user's IP address.
+  consent?: RegistrationConsent;
+}
+
 // options for `listDomains`. Extends `RequestOptions` so timeout/retries/signal
 // still flow through a single argument. `listDomains` always returns the full
 // account, paginating internally at each provider's maximum page size.
@@ -458,7 +466,11 @@ export interface Registrar {
   unlockDomain(domainName: string, opts?: RequestOptions): Promise<OperationResult>;
 
   // toggle WHOIS privacy for a domain
-  setPrivacy(domainName: string, enabled: boolean, opts?: RequestOptions): Promise<OperationResult>;
+  setPrivacy(
+    domainName: string,
+    enabled: boolean,
+    opts?: SetPrivacyOptions
+  ): Promise<OperationResult>;
 
   // read the registrant/admin/tech/billing contacts for a domain
   getContacts(domainName: string, opts?: RequestOptions): Promise<ContactSet>;

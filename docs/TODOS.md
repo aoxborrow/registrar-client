@@ -77,12 +77,10 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
   - **`updateContacts`** (v1 PATCH `/contacts`) verified with a reversible
     non-identity round-trip (address change; a registrant name/org/email change
     would trip the ICANN 60-day lock, so it wasn't exercised).
-  - **`setPrivacy(false)`** can't disable GoDaddy's **free privacy ("Free DBP")**:
-    `DELETE /privacy` returns 409 CONFLICTING_STATUS, and the only alternative —
-    `PATCH {exposeWhois:true}` — requires a full WHOIS-exposure **consent block**
-    (`agreedAt` + `agreedBy` IP + `agreementKeys`) that `setPrivacy` can't carry.
-    The client now returns a clear error pointing to the dashboard. Paid DBP still
-    cancels via the DELETE. See `docs/registrars/godaddy.md`.
+  - **`setPrivacy`** sets the free Domain Privacy level through `exposeWhois` on
+    the v1 PATCH (verified live 2026-11-03 both ways); turning it off takes
+    `consent.agreedBy` for the `EXPOSE_WHOIS` agreement. Reads treat `privacy`
+    as on only while `exposeWhois` is false. See `docs/registrars/godaddy.md`.
   - **Domain forwarding** lives on the **v2 customer-scoped** route
     `/v2/customers/{customerId}/domains/forwards/{fqdn}` (the old v1
     `/v1/domains/forwards` routes now 404). It works on a standard account with

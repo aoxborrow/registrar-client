@@ -22,6 +22,7 @@ import type {
   FeatureCall,
   RegistrarOptions,
   RequestOptions,
+  SetPrivacyOptions,
   TldPricing,
   TransferDomainInput,
   TransferOut,
@@ -242,7 +243,7 @@ export abstract class BaseRegistrar implements Registrar {
   setPrivacy(
     _domainName: string,
     _enabled: boolean,
-    _opts?: RequestOptions
+    _opts?: SetPrivacyOptions
   ): Promise<OperationResult> {
     return this.notImplemented('setPrivacy');
   }

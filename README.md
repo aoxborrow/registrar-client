@@ -231,9 +231,10 @@ not a claim of available API endpoints. See [101domain](docs/registrars/101domai
   only at registration) and has no WHOIS/contact-read endpoint.
 - **ᶠ** Gandi `setPrivacy(false)` is a no-op for individual registrants — WHOIS
   stays obfuscated for GDPR.
-- **ᵍ** GoDaddy `setPrivacy`: enabling is a paid add-on (not implemented);
-  disabling works for paid privacy, but GoDaddy's free privacy ("Free DBP")
-  cannot be disabled via the API (returns a clear error pointing to the dashboard).
+- **ᵍ** GoDaddy `setPrivacy` sets the WHOIS privacy level (free Domain Privacy):
+  enabling needs nothing extra, but disabling publishes the contact details, so it
+  needs `consent: { agreedBy }` (the consenting user's IP) and throws
+  `ConsentRequiredError` without it.
 - **ʰ** `setDnsRecords` writes cover the common record types; SRV/CAA and other
   sub-field-bearing types throw on write (reads handle every type).
 - **ⁱ** Namecheap and NameSilo only email the EPP/auth code to the registrant;
