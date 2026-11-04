@@ -40,6 +40,7 @@ export { NamecomRegistrar } from './registrars/namecom';
 export { NameSiloRegistrar } from './registrars/namesilo';
 export { PorkbunRegistrar } from './registrars/porkbun';
 export { SpaceshipRegistrar } from './registrars/spaceship';
+export { UnstoppableRegistrar } from './registrars/unstoppable';
 
 // XML parsing helpers for XML-based registrar APIs
 export { parseXml, ensureArray } from './xml';
