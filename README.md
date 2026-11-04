@@ -588,9 +588,10 @@ A failure the registrar reports inside a successful reply has no `status`.
 
 ## Retries
 
-Requests retry with exponential backoff (`retries`, default 2). What may be
-re-sent depends on where the failure happened and on whether the call reads or
-writes, and is the same for every provider:
+Each attempt waits up to `timeout` (default 60 seconds), and requests retry with
+exponential backoff (`retries`, default 2). What may be re-sent depends on where
+the failure happened and on whether the call reads or writes, and is the same
+for every provider:
 
 HTTP 429 honors valid `Retry-After` delay-seconds and HTTP dates. Missing or
 invalid headers use the provider's fallback or the configured backoff: Dynadot
