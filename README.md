@@ -198,7 +198,7 @@ are the guaranteed contract; **extended** methods are opt-in per provider.
 | `getTransferOut`      | ✗   | ✓ⁿ  | ✓ⁿ  | ✓ⁿ  | ✗   | ✗   | ✗   | ✗   | ✗   | ✗   | ✗   | ✗   |
 | `approveTransferOut`  | ✗   | ✓ⁿ  | ✓ⁿ  | ✓ⁿ  | ✗   | ✗   | ✗   | ✗   | ✗   | ✗   | ✗   | ✗   |
 | `rejectTransferOut`   | ✗   | ✓ⁿ  | ✓ⁿ  | ✓ⁿ  | ✗   | ✗   | ✗   | ✗   | ✗   | ✗ⁿ  | ✗   | ✗   |
-| `getDnssec`           | ✗   | ✓   | ✓   | ✗   | ✗   | ✗   | ✓   | ✓   | ✗   | ✗ᵐ  | ✗   | ✗   |
+| `getDnssec`           | ✗   | ✓   | ✓   | ✗   | ✗   | ✗   | ✓   | ✓   | ✗   | ✗ᵐ  | ✗   | ✓   |
 | `disableDnssec`       | ✗   | ✓   | ✓   | ✗   | ✗   | ✗   | ✓   | ✓   | ✗   | ✗ᵐ  | ✗   | ✗   |
 | `getEmailForwarding`  | ✓   | ✓   | ✓   | ✗   | ✗   | ✓   | ✓   | ✗   | ✗   | ✗ᵐ  | ✗   | ✗   |
 | `setEmailForwarding`  | ✓   | ✓   | ✓   | ✗   | ✗   | ✓   | ✓   | ✗   | ✗   | ✗ᵐ  | ✗   | ✗   |

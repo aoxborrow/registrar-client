@@ -9,15 +9,21 @@ import {
 import type { RequestConfig } from '../src/http';
 
 // Unstoppable speaks JSON over HttpClient.request. Stub it; the handler is keyed
-// off the action (the last path segment) for multi-call flows.
+// off the action (the last path segment) for multi-call flows. Writes check the
+// domain's background queue (ud_domain_pending_operations) before and after;
+// unless `queue` is set, those checks answer "idle" and aren't recorded.
 function stubHttp(
   provider: unknown,
-  handler: (action: string, req: RequestConfig) => unknown
+  handler: (action: string, req: RequestConfig) => unknown,
+  { queue = false } = {}
 ): RequestConfig[] {
   const calls: RequestConfig[] = [];
   (provider as { http: { request: (req: RequestConfig) => Promise<unknown> } }).http.request = (
     req: RequestConfig
   ) => {
+    if (!queue && actionOf(req) === 'ud_domain_pending_operations') {
+      return Promise.resolve({ results: [{ hasPendingOperations: false, operations: [] }] });
+    }
     calls.push(req);
     try {
       return Promise.resolve(handler(actionOf(req), req));
@@ -45,6 +51,8 @@ describe('Unstoppable Domains provider', () => {
     expect(U.supportsSandbox).toBe(false);
     expect(U.configFields.map(f => f.name)).toEqual(['apiKey']);
     expect(U.features).toContain('setDomainForwarding');
+    expect(U.features).toContain('getDnssec');
+    expect(U.features).not.toContain('disableDnssec');
     expect(U.features).not.toContain('getAuthCode');
   });
 
@@ -77,7 +85,10 @@ describe('Unstoppable Domains provider', () => {
         transferStatus: 'none',
         autoRenewal: { status: 'active' },
       },
-      dns: { nameservers: { status: 'custom', nameservers: ['ns1.ud.com', 'ns2.ud.com'] } },
+      dns: {
+        nameservers: { status: 'custom', nameservers: ['ns1.ud.com', 'ns2.ud.com'] },
+        dnssec: { enabled: true, valid: true },
+      },
     },
     // transfer lock off (e.g. unlocked for a sale) — still held, still listed
     'unlocked.com': {
@@ -193,6 +204,14 @@ describe('Unstoppable Domains provider', () => {
     await expect(u.getNameservers('missing.com')).rejects.toBeInstanceOf(NotFoundError);
   });
 
+  it('getDnssec reads the enabled flag from ud_domain_get', async () => {
+    const u = ud();
+    stubHttp(u, (_a, req) => domainGet(req));
+    expect(await u.getDnssec('example.com')).toEqual({ enabled: true, dsRecords: [] });
+    expect(await u.getDnssec('unlocked.com')).toEqual({ enabled: false, dsRecords: [] });
+    await expect(u.getDnssec('missing.com')).rejects.toBeInstanceOf(NotFoundError);
+  });
+
   it('updateNameservers posts the custom-nameservers payload', async () => {
     const u = ud();
     const calls = stubHttp(u, () => OK_WRITE);
@@ -202,6 +221,14 @@ describe('Unstoppable Domains provider', () => {
       domains: [{ name: 'example.com', nameservers: ['a.ns.net', 'b.ns.net'] }],
     });
     expect(res.success).toBe(true);
+
+    // Unstoppable's own pair switches back to its defaults
+    await u.updateNameservers('example.com', [
+      'NS2.unstoppabledomains.com.',
+      'ns1.unstoppabledomains.com',
+    ]);
+    expect(calls[1].path).toBe('/mcp/v1/actions/ud_dns_nameservers_set_default');
+    expect(calls[1].body).toEqual({ domains: [{ name: 'example.com' }] });
   });
 
   it('writes report a per-domain failure, and keep the status of an HTTP error', async () => {
@@ -242,12 +269,20 @@ describe('Unstoppable Domains provider', () => {
                 }
               : n === 'taken.com'
                 ? { name: n, available: false, marketplace: { status: 'registered-not-for-sale' } }
-                : {
-                    name: n,
-                    available: true,
-                    marketplace: { status: 'available' },
-                    pricing: { amount: 999, currency: 'USD' },
-                  }
+                : n === 'offers.com'
+                  ? // seen live for a name in the account, listed for offers on Sedo
+                    {
+                      name: n,
+                      available: true,
+                      status: 'available',
+                      marketplace: { status: 'registered-listed-for-offers', source: 'sedo' },
+                    }
+                  : {
+                      name: n,
+                      available: true,
+                      marketplace: { status: 'available' },
+                      pricing: { amount: 999, currency: 'USD' },
+                    }
           ),
       };
     });
@@ -256,11 +291,13 @@ describe('Unstoppable Domains provider', () => {
       'Free.com',
       'listed.com',
       'taken.com',
+      'offers.com',
       'unsupported.zz',
       ...extra,
     ]);
-    expect(calls.map(c => (c.body as { query: string[] }).query.length)).toEqual([10, 3]);
-    expect(res).toHaveLength(12); // unsupported.zz isn't returned
+    expect(calls.map(c => (c.body as { query: string[] }).query.length)).toEqual([10, 4]);
+    expect(res).toHaveLength(13); // unsupported.zz isn't returned
+    expect(res[3]).toEqual({ domainName: 'offers.com', available: false });
     expect(res[0]).toEqual({
       domainName: 'free.com',
       available: true,
@@ -357,16 +394,36 @@ describe('Unstoppable Domains provider', () => {
                 id: '3',
                 type: 'SRV',
                 subName: '_sip._tcp',
-                values: ['10 5 5060 sip.example.com'],
+                values: ['10 5 5060 sip.example.com.'],
                 ttl: 300,
               },
             ],
             pagination: { hasMore: false },
           }
         : {
+            // as stored live: hostnames end in a dot, TXT is quoted, and
+            // Unstoppable's own records are read-only
             records: [
               { id: '1', type: 'A', subName: 'www', values: ['1.1.1.1', '2.2.2.2'], ttl: 3600 },
-              { id: '2', type: 'MX', subName: '', values: ['10 mail.example.com'], ttl: 3600 },
+              { id: '2', type: 'MX', subName: '', values: ['10 mail.example.com.'], ttl: 3600 },
+              { id: '4', type: 'TXT', subName: '@', values: ['"v=spf1 -all"'], ttl: 3600 },
+              { id: '5', type: 'CNAME', subName: 'blog', values: ['host.example.net.'], ttl: 3600 },
+              {
+                id: 'rr-soa',
+                type: 'SOA',
+                subName: '@',
+                values: ['ns1.ud.com. ns.ud.com. 1 900 300 604800 600'],
+                ttl: 600,
+                readonly: true,
+              },
+              {
+                id: 'rr-host',
+                type: 'A',
+                subName: '@',
+                values: ['34.68.218.70'],
+                ttl: 300,
+                readonly: true,
+              },
             ],
             pagination: { hasMore: true, nextCursor: 'c2' },
           }
@@ -377,6 +434,8 @@ describe('Unstoppable Domains provider', () => {
       { type: 'A', name: 'www', value: '1.1.1.1', ttl: 3600 },
       { type: 'A', name: 'www', value: '2.2.2.2', ttl: 3600 },
       { type: 'MX', name: '@', value: 'mail.example.com', ttl: 3600, priority: 10 },
+      { type: 'TXT', name: '@', value: 'v=spf1 -all', ttl: 3600 },
+      { type: 'CNAME', name: 'blog', value: 'host.example.net', ttl: 3600 },
       {
         type: 'SRV',
         name: '_sip._tcp',
@@ -452,6 +511,34 @@ describe('Unstoppable Domains provider', () => {
       ]);
       expect(actions(calls)).toEqual(['ud_dns_records_list']);
       expect(res).toEqual({ success: true, message: 'DNS records already up to date' });
+    });
+
+    it('compares values bare, the way it reads them back', async () => {
+      const u = ud();
+      const calls = stubHttp(u, action =>
+        action === 'ud_dns_records_list'
+          ? {
+              records: [
+                { id: 't', type: 'TXT', subName: '@', values: ['"v=spf1 -all"'], ttl: 3600 },
+                {
+                  id: 'c',
+                  type: 'CNAME',
+                  subName: 'blog',
+                  values: ['host.example.net.'],
+                  ttl: 3600,
+                },
+                { id: 'm', type: 'MX', subName: '@', values: ['10 mx.example.net.'], ttl: 3600 },
+              ],
+            }
+          : OK_WRITE
+      );
+      const res = await u.setDnsRecords('example.com', [
+        { type: 'TXT', name: '@', value: 'v=spf1 -all', ttl: 3600 },
+        { type: 'CNAME', name: 'blog', value: 'host.example.net', ttl: 3600 },
+        { type: 'MX', name: '@', value: 'mx.example.net.', priority: 10, ttl: 3600 },
+      ]);
+      expect(res).toEqual({ success: true, message: 'DNS records already up to date' });
+      expect(actions(calls)).toEqual(['ud_dns_records_list']);
     });
 
     it('stops at the first failed write', async () => {
@@ -550,11 +637,165 @@ describe('Unstoppable Domains provider', () => {
     });
     expect(res.success).toBe(true);
 
+    // clearing two redirects takes two calls (one host per call)
+    const u3 = ud();
+    const calls3 = stubHttp(u3, action =>
+      action === 'ud_dns_hosting_list'
+        ? {
+            configs: [
+              { type: 'REDIRECT_301', subName: 'go', targetUrl: 'https://a.com' },
+              { type: 'REDIRECT_302', subName: null, targetUrl: 'https://b.com' },
+            ],
+          }
+        : OK_WRITE
+    );
+    expect(await u3.setDomainForwarding('example.com', [])).toMatchObject({ success: true });
+    expect(calls3.slice(1).map(c => c.body)).toEqual([
+      { domains: [{ name: 'example.com', subName: 'go' }] },
+      { domains: [{ name: 'example.com' }] },
+    ]);
+
     const u2 = ud();
     stubHttp(u2, () => OK_WRITE);
     await expect(
       u2.setDomainForwarding('example.com', [{ host: '@', url: 'https://x.com', type: 'masked' }])
     ).rejects.toThrow(/masked/i);
+  });
+
+  describe('background changes', () => {
+    // poll without waiting
+    const quick = (u: unknown, extra: Record<string, unknown> = {}) =>
+      Object.assign(u as object, { settleDelaysMs: [0], ...extra });
+    const accepted = {
+      results: [{ domain: 'example.com', success: true, operationId: 'op-1' }],
+      successCount: 1,
+      failureCount: 0,
+    };
+
+    it('waits for the domain to be idle, writes, then waits for its own operation', async () => {
+      const u = ud();
+      quick(u);
+      let polls = 0;
+      const calls = stubHttp(
+        u,
+        action => {
+          if (action !== 'ud_domain_pending_operations') return accepted;
+          polls++;
+          // busy on the first check before the write and the first one after it
+          return {
+            results: [{ domain: 'example.com', hasPendingOperations: polls === 1 || polls === 3 }],
+          };
+        },
+        { queue: true }
+      );
+      expect(await u.lockDomain('example.com')).toEqual({
+        success: true,
+        message: 'Domain locked',
+      });
+      expect(actions(calls)).toEqual([
+        'ud_domain_pending_operations',
+        'ud_domain_pending_operations',
+        'ud_domain_flags_update',
+        'ud_domain_pending_operations',
+        'ud_domain_pending_operations',
+      ]);
+      expect(calls[0].body).toEqual({ domains: [{ name: 'example.com' }] });
+      expect(calls[0].call?.intent).toBe('read');
+      expect(calls[3].body).toEqual({ domains: [{ name: 'example.com' }], includeCompleted: true });
+    });
+
+    it('reports a change that fails in the background', async () => {
+      const u = ud();
+      quick(u);
+      stubHttp(
+        u,
+        action =>
+          action === 'ud_domain_pending_operations'
+            ? {
+                results: [
+                  {
+                    domain: 'example.com',
+                    hasPendingOperations: false,
+                    operations: [
+                      {
+                        id: '9',
+                        originOperationId: 'op-1',
+                        status: 'FAILED',
+                        errorCode: 'BAD_FLAG',
+                      },
+                    ],
+                  },
+                ],
+              }
+            : accepted,
+        { queue: true }
+      );
+      expect(await u.setPrivacy('example.com', false)).toEqual({
+        success: false,
+        message: "Unstoppable couldn't apply the change (BAD_FLAG)",
+      });
+    });
+
+    it('reports a change still running when the wait runs out as accepted', async () => {
+      const u = ud();
+      quick(u, { settleTimeoutMs: 0 });
+      stubHttp(
+        u,
+        action =>
+          action === 'ud_domain_pending_operations'
+            ? { results: [{ domain: 'example.com', hasPendingOperations: true }] }
+            : accepted,
+        { queue: true }
+      );
+      expect(await u.unlockDomain('example.com')).toEqual({
+        success: true,
+        message: 'Domain unlocked; Unstoppable is still applying it',
+      });
+    });
+
+    it('still writes when the queue check fails', async () => {
+      const u = ud();
+      quick(u);
+      const calls = stubHttp(
+        u,
+        action => {
+          if (action === 'ud_domain_pending_operations') throw new Error('queue check failed');
+          return accepted;
+        },
+        { queue: true }
+      );
+      expect(await u.lockDomain('example.com')).toMatchObject({ success: true });
+      expect(actions(calls)).toContain('ud_domain_flags_update');
+    });
+
+    it('explains a change refused because another is still being applied', async () => {
+      const u = ud();
+      stubHttp(u, () => ({
+        results: [
+          {
+            success: false,
+            error: JSON.stringify({
+              message: 'Domain already has operation in progress.',
+              code: 'CONCURRENT_OPERATION',
+            }),
+          },
+        ],
+        failureCount: 1,
+      }));
+      const res = await u.updateNameservers('example.com', ['a.ns.net', 'b.ns.net']);
+      expect(res.success).toBe(false);
+      expect(res.message).toMatch(/still applying an earlier change/);
+
+      const u2 = ud();
+      stubHttp(u2, () => ({
+        results: [{ success: false, error: JSON.stringify({ message: 'TTL out of range' }) }],
+        failureCount: 1,
+      }));
+      expect(await u2.lockDomain('example.com')).toEqual({
+        success: false,
+        message: 'TTL out of range',
+      });
+    });
   });
 
   it('out-of-scope / unsupported methods throw NotImplementedError with a reason', async () => {
