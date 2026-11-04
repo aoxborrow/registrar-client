@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createRegistrar, ConsentRequiredError } from '../src/index';
+import { createRegistrar, ConsentRequiredError, RateLimitError } from '../src/index';
 import type { RequestConfig } from '../src/http';
 
 // Namecheap speaks XML, so its HttpClient uses requestText (not request). Stub
@@ -97,6 +97,94 @@ describe('Namecheap provider', () => {
     // it consulted the dedicated lock command for this domain
     const lockCall = calls.find(c => c.query?.Command === 'namecheap.domains.getRegistrarLock');
     expect(lockCall?.query).toMatchObject({ DomainName: 'example.com' });
+  });
+
+  it('getDomain reads nameservers from getInfo DnsDetails in two calls', async () => {
+    const nc = namecheap();
+    // A full getInfo reply, shaped like the fixture in Namecheap's own Go SDK
+    // (namecheaptest/fixtures/domains_getInfo.xml), recorded from the live API.
+    // PremiumDnsSubscription/UseAutoRenew is the PremiumDNS add-on's flag, not
+    // the domain's, so it must not leak into `autoRenew`.
+    const getInfo = `<?xml version="1.0" encoding="utf-8"?>
+      <ApiResponse Status="OK" xmlns="http://api.namecheap.com/xml.response">
+        <Errors />
+        <Warnings />
+        <RequestedCommand>namecheap.domains.getinfo</RequestedCommand>
+        <CommandResponse Type="namecheap.domains.getInfo">
+          <DomainGetInfoResult Status="Ok" ID="1706717" DomainName="example.com" OwnerName="u" IsOwner="true" IsPremium="false">
+            <DomainDetails>
+              <CreatedDate>11/26/2021</CreatedDate>
+              <ExpiredDate>11/26/2027</ExpiredDate>
+              <NumYears>0</NumYears>
+            </DomainDetails>
+            <LockDetails />
+            <Whoisguard Enabled="NotAlloted">
+              <ID>0</ID>
+            </Whoisguard>
+            <PremiumDnsSubscription>
+              <UseAutoRenew>true</UseAutoRenew>
+              <SubscriptionId>-1</SubscriptionId>
+              <CreatedDate>0001-01-01T00:00:00</CreatedDate>
+              <ExpirationDate>0001-01-01T00:00:00</ExpirationDate>
+              <IsActive>false</IsActive>
+            </PremiumDnsSubscription>
+            <DnsDetails ProviderType="FreeDNS" IsUsingOurDNS="true" HostCount="0" EmailType="No Email Service" DynamicDNSStatus="false" IsFailover="false">
+              <Nameserver>freedns1.registrar-servers.com</Nameserver>
+              <Nameserver>FreeDNS2.Registrar-Servers.com.</Nameserver>
+            </DnsDetails>
+            <Modificationrights />
+          </DomainGetInfoResult>
+        </CommandResponse>
+        <Server>PHX01APIEXT12</Server>
+        <GMTTimeDifference>--5:00</GMTTimeDifference>
+        <ExecutionTime>0.013</ExecutionTime>
+      </ApiResponse>`;
+    const calls = stubXml(nc, req =>
+      req.query?.Command === 'namecheap.domains.getRegistrarLock'
+        ? ok(`<DomainGetRegistrarLockResult Domain="example.com" RegistrarLockStatus="false"/>`)
+        : getInfo
+    );
+    const domain = await nc.getDomain('example.com');
+    expect(domain).toMatchObject({
+      domainName: 'example.com',
+      status: 'ok',
+      locked: false,
+      privacy: false,
+      autoRenew: false,
+      // normalized like every Domain.nameservers
+      nameservers: ['freedns1.registrar-servers.com', 'freedns2.registrar-servers.com'],
+    });
+    expect(calls.map(c => c.query?.Command)).toEqual([
+      'namecheap.domains.getInfo',
+      'namecheap.domains.getRegistrarLock',
+    ]);
+  });
+
+  it('getDomain reads custom nameservers, and none from a bare DnsDetails', async () => {
+    const nc = namecheap();
+    let dns = `<DnsDetails ProviderType="CUSTOM" IsUsingOurDNS="false">
+                 <Nameserver>ns1.example.net</Nameserver><Nameserver>ns2.example.net</Nameserver>
+               </DnsDetails>`;
+    stubXml(nc, req =>
+      req.query?.Command === 'namecheap.domains.getRegistrarLock'
+        ? ok(`<DomainGetRegistrarLockResult RegistrarLockStatus="true"/>`)
+        : ok(
+            `<DomainGetInfoResult Status="Ok" DomainName="example.com">${dns}</DomainGetInfoResult>`
+          )
+    );
+    expect((await nc.getDomain('example.com')).nameservers).toEqual([
+      'ns1.example.net',
+      'ns2.example.net',
+    ]);
+    // the docs' sample reply: attributes only, no Nameserver children
+    dns = `<DnsDetails ProviderType="ENOM" />`;
+    expect((await nc.getDomain('example.com')).nameservers).toEqual([]);
+    dns = `<DnsDetails />`;
+    expect((await nc.getDomain('example.com')).nameservers).toEqual([]);
+  });
+
+  it('declares auto-renew list-only', () => {
+    expect(namecheap().listOnlyFields).toEqual(['autoRenew']);
   });
 
   it('getPricing reads 1-year register/renew/transfer from users.getPricing', async () => {
@@ -270,6 +358,122 @@ describe('Namecheap provider', () => {
     stubXml(nc, () => errXml);
     const res = await nc.lockDomain('example.com');
     expect(res).toEqual({ success: false, message: 'Parameter missing' });
+  });
+
+  describe('rate limit (error 500000)', () => {
+    // What Namecheap sends once a key is over 50/min, 700/hour or 8,000/day:
+    // a 200 reply with Status="ERROR" and error 500000.
+    const limitedXml = `<?xml version="1.0" encoding="utf-8"?>
+      <ApiResponse Status="ERROR" xmlns="http://api.namecheap.com/xml.response">
+        <Errors><Error Number="500000">Too many requests</Error></Errors>
+        <Warnings /><RequestedCommand>namecheap.domains.getinfo</RequestedCommand>
+      </ApiResponse>`;
+
+    it('a read throws RateLimitError once, without re-sending', async () => {
+      const nc = namecheap();
+      const calls = stubXml(nc, () => limitedXml);
+      const error = await nc.getDomain('example.com').catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(RateLimitError);
+      expect(error).toMatchObject({
+        message: 'Too many requests',
+        status: 429,
+        providerCode: '500000',
+        retryAfter: undefined,
+      });
+      // getInfo failed, so getRegistrarLock was never spent
+      expect(calls).toHaveLength(1);
+    });
+
+    it('finds 500000 among several errors', async () => {
+      const nc = namecheap();
+      stubXml(
+        nc,
+        () =>
+          `<ApiResponse Status="ERROR"><Errors>
+             <Error Number="2019166">Domain not found</Error>
+             <Error Number="500000">Too many requests</Error>
+           </Errors></ApiResponse>`
+      );
+      await expect(nc.getDnsRecords('example.com')).rejects.toBeInstanceOf(RateLimitError);
+    });
+
+    it('other errors stay plain errors', async () => {
+      const nc = namecheap();
+      stubXml(
+        nc,
+        () =>
+          `<ApiResponse Status="ERROR"><Errors><Error Number="2019166">Domain not found</Error></Errors></ApiResponse>`
+      );
+      const error = await nc.getDomain('example.com').catch((e: unknown) => e);
+      expect(error).not.toBeInstanceOf(RateLimitError);
+      expect(error).toMatchObject({ message: 'Domain not found' });
+    });
+
+    it('a write returns a failed result with status 429', async () => {
+      const nc = namecheap();
+      stubXml(nc, () => limitedXml);
+      expect(await nc.lockDomain('example.com')).toEqual({
+        success: false,
+        message: 'Too many requests',
+        status: 429,
+      });
+      // a command-based write (setAutoRenew reads the reply's IsSuccess) throws
+      await expect(nc.setAutoRenew('example.com', true)).rejects.toBeInstanceOf(RateLimitError);
+    });
+
+    it('testConnection reports status 429', async () => {
+      const nc = namecheap();
+      stubXml(nc, () => limitedXml);
+      expect(await nc.testConnection()).toEqual({
+        success: false,
+        message: 'Too many requests',
+        status: 429,
+      });
+    });
+  });
+
+  describe('rate limit (HTTP 405)', () => {
+    // Namecheap's own SDK retries HTTP 405 as the API's pre-execution rate-limit
+    // signal. Exercise the real HttpClient through a stubbed fetch.
+    function withFetch(statuses: number[], options: { retries: number }) {
+      const urls: string[] = [];
+      const fetch: typeof globalThis.fetch = url => {
+        urls.push(url instanceof Request ? url.url : url.toString());
+        const status = statuses[urls.length - 1] ?? 200;
+        return Promise.resolve(
+          status === 200
+            ? new Response(ok(`<DomainGetRegistrarLockResult RegistrarLockStatus="true"/>`))
+            : new Response('<html>Method Not Allowed</html>', { status })
+        );
+      };
+      const nc = createRegistrar(
+        'namecheap',
+        { username: 'u', apiKey: 'secret-api-key', clientIp: '1.2.3.4' },
+        { fetch, backoff: 0, ...options }
+      );
+      return { nc, urls };
+    }
+
+    it('is retried like a 429, writes included', async () => {
+      const { nc, urls } = withFetch([405], { retries: 1 });
+      expect(await nc.lockDomain('example.com')).toEqual({ success: true, message: 'OK' });
+      expect(urls).toHaveLength(2);
+    });
+
+    it('raises RateLimitError without the URL (it carries the key)', async () => {
+      const { nc } = withFetch([405], { retries: 0 });
+      const error = await nc.getDnsRecords('example.com').catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(RateLimitError);
+      expect(error).toMatchObject({ status: 429 });
+      expect(String((error as Error).message)).not.toContain('secret-api-key');
+    });
+
+    it('leaves other HTTP errors alone', async () => {
+      const { nc } = withFetch([403], { retries: 0 });
+      const error = await nc.getDnsRecords('example.com').catch((e: unknown) => e);
+      expect(error).not.toBeInstanceOf(RateLimitError);
+      expect(error).toMatchObject({ status: 403 });
+    });
   });
 
   it('registerDomain sends create with all four contacts + WhoisGuard, requires consent', async () => {

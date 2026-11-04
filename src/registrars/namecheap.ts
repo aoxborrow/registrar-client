@@ -25,7 +25,8 @@ import {
   requireConsent,
   settableForwards,
 } from '../utils';
-import { failedResult } from '../errors';
+import { failedResult, RateLimitError, type RegistrarError } from '../errors';
+import { HttpClient } from '../http';
 import { ensureArray, parseXml } from '../xml';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
@@ -52,6 +53,13 @@ interface NcGetInfoResult {
   '@_DomainName'?: string;
   'DomainDetails'?: { CreatedDate?: string; ExpiredDate?: string };
   'Whoisguard'?: { '@_Enabled'?: string; 'ID'?: string | number };
+  // the nameservers in use, whether Namecheap's own (IsUsingOurDNS="true",
+  // ProviderType "FreeDNS"/"BasicDNS"/…) or custom ones. Same list as dns.getList.
+  'DnsDetails'?: {
+    '@_ProviderType'?: string;
+    '@_IsUsingOurDNS'?: string;
+    'Nameserver'?: string | string[];
+  };
 }
 
 // namecheap.domains.check result element (attributes only)
@@ -153,6 +161,10 @@ interface NcResponse {
 
 // Namecheap caps domains.check at 50 domains per request
 const CHECK_BATCH_SIZE = 50;
+// The error number Namecheap sends, inside a 200 reply with Status="ERROR",
+// once a key is over its quota (50/min, 700/hour, 8,000/day across the key):
+// <Error Number="500000">Too many requests</Error>
+const NC_RATE_LIMITED = '500000';
 // the four contact roles Namecheap requires on every setContacts call, mapped
 // to our ContactSet keys (Namecheap calls the billing role "AuxBilling")
 const NC_CONTACT_ROLES = [
@@ -161,6 +173,18 @@ const NC_CONTACT_ROLES = [
   { prefix: 'Tech', key: 'tech' },
   { prefix: 'AuxBilling', key: 'billing' },
 ] as const;
+
+// Namecheap's own Go SDK treats HTTP 405 as the API's rate-limit signal, sent
+// before the command runs, and re-sends it. Raise it as a RateLimitError so the
+// shared retry policy handles it like a 429. The message leaves out the URL,
+// which carries the API key.
+class NamecheapHttpClient extends HttpClient {
+  protected override async toStatusError(response: Response, url: string): Promise<RegistrarError> {
+    if (response.status !== 405) return super.toStatusError(response, url);
+    await response.body?.cancel().catch(() => undefined);
+    return new RateLimitError('Too many requests (HTTP 405)');
+  }
+}
 
 /**
  * Namecheap Registrar
@@ -185,9 +209,24 @@ const NC_CONTACT_ROLES = [
  * they spend real money and are documented-but-unverified. Registration sends the
  * full four-role contact set but not yet per-TLD extended attributes (.us, .eu,
  * …), so those TLDs aren't supported for registration.
+ *
+ * Auto-renew is list-only. getInfo has no domain auto-renew flag (its
+ * `PremiumDnsSubscription/UseAutoRenew` belongs to the PremiumDNS add-on), so
+ * `getDomain` always reports `autoRenew: false`; `listDomains` reads the real
+ * value from getList's `AutoRenew`. `listOnlyFields` declares this, and
+ * `listDomains({ detailed: true })` keeps the list's value.
+ *
+ * Rate limits: 50 requests a minute, 700 an hour and 8,000 a day per API key.
+ * Over quota, Namecheap answers error 500000 "Too many requests" in a 200
+ * reply. Reads raise it as a `RateLimitError` without re-sending (a retry
+ * moments later can't clear a minute or hour quota; pacing is the caller's
+ * job); writes return `{ success: false, status: 429 }`, except `setAutoRenew`,
+ * which throws it like a read. HTTP 405, the other rate-limit signal, is a
+ * `RateLimitError` retried like any 429.
  */
 export class NamecheapRegistrar extends BaseRegistrar {
   readonly name = 'namecheap';
+  override readonly listOnlyFields: readonly (keyof Domain)[] = ['autoRenew'];
 
   static readonly displayName = 'Namecheap';
   static readonly website = 'namecheap.com';
@@ -219,16 +258,14 @@ export class NamecheapRegistrar extends BaseRegistrar {
   ];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
-    super(
-      credentials,
-      {
-        baseUrl: selectBaseUrl('Namecheap', options?.environment, {
-          production: 'https://api.namecheap.com/xml.response',
-          sandbox: 'https://api.sandbox.namecheap.com/xml.response',
-        }),
-      },
-      options
-    );
+    const config = {
+      baseUrl: selectBaseUrl('Namecheap', options?.environment, {
+        production: 'https://api.namecheap.com/xml.response',
+        sandbox: 'https://api.sandbox.namecheap.com/xml.response',
+      }),
+    };
+    super(credentials, config, options);
+    this.http = new NamecheapHttpClient({ ...config, options: this.options });
   }
 
   // common query parameters (credentials + command) for every Namecheap call
@@ -259,13 +296,16 @@ export class NamecheapRegistrar extends BaseRegistrar {
   }
 
   // issue a command and return its CommandResponse, throwing on an error status
+  // (a RateLimitError for error 500000)
   private async command(
     command: string,
     extra: Record<string, string>,
     opts?: RequestOptions
   ): Promise<NcCommandResponse> {
     const res = await this.call(command, extra, opts);
-    if (!isOk(res)) throw new Error(errorText(res) ?? 'Namecheap API request failed');
+    if (!isOk(res)) {
+      throw rateLimitError(res) ?? new Error(errorText(res) ?? 'Namecheap API request failed');
+    }
     return res.ApiResponse?.CommandResponse ?? {};
   }
 
@@ -274,7 +314,7 @@ export class NamecheapRegistrar extends BaseRegistrar {
       const res = await this.call('namecheap.domains.getList', {}, opts);
       return isOk(res)
         ? { success: true, message: 'Connection successful' }
-        : { success: false, message: errorText(res) ?? 'Unknown error' };
+        : failureResult(res, 'Unknown error');
     } catch (error) {
       return failedResult(error);
     }
@@ -325,13 +365,16 @@ export class NamecheapRegistrar extends BaseRegistrar {
   }
 
   /**
-   * getInfo carries status, dates, and WhoisGuard state but not nameservers, so
-   * `nameservers` comes back empty here — use `getNameservers` (dns.getList) for
-   * those. The registrar transfer-lock flag isn't in getInfo either (its `Status`
+   * Two calls. getInfo carries status, dates, WhoisGuard state, and the
+   * nameservers in use (`DnsDetails/Nameserver`, the same list dns.getList
+   * returns). The registrar transfer-lock flag isn't in getInfo (its `Status`
    * reflects the domain lifecycle, e.g. "Ok"/"Expired", not the transfer lock),
    * so `locked` is read from the dedicated `getRegistrarLock` command, which is
    * the authoritative real-time source (getList's per-row `IsLocked` can lag —
    * confirmed stale in the sandbox after a lock the API had already applied).
+   *
+   * getInfo has no auto-renew flag, so `autoRenew` is always false here; read
+   * it from `listDomains` (see the class doc and `listOnlyFields`).
    */
   override async getDomain(domainName: string, opts?: RequestOptions): Promise<Domain> {
     const cr = await this.command('namecheap.domains.getInfo', { DomainName: domainName }, opts);
@@ -346,7 +389,7 @@ export class NamecheapRegistrar extends BaseRegistrar {
       renewalDate: info.DomainDetails?.ExpiredDate,
       locked: await this.getRegistrarLock(domainName, opts),
       privacy: (info.Whoisguard?.['@_Enabled'] ?? '').toLowerCase() === 'true',
-      nameservers: [],
+      nameservers: ensureArray(info.DnsDetails?.Nameserver).map(String),
     });
   }
 
@@ -822,10 +865,30 @@ function errorText(res: NcResponse): string | null {
   return first?.['#text']?.trim() ?? null;
 }
 
+// a RateLimitError when the response carries error 500000, else null
+function rateLimitError(res: NcResponse): RateLimitError | null {
+  const hit = ensureArray(res.ApiResponse?.Errors?.Error).find(
+    (e): e is NcError => typeof e === 'object' && e['@_Number'] === NC_RATE_LIMITED
+  );
+  if (!hit) return null;
+  const error = new RateLimitError(hit['#text']?.trim() || 'Too many requests');
+  error.providerCode = NC_RATE_LIMITED;
+  return error;
+}
+
+// a failed result for an error response; a rate limit also carries status 429
+function failureResult(
+  res: NcResponse,
+  fallback: string
+): { success: false; message: string; status?: number } {
+  const limited = rateLimitError(res);
+  return limited ? failedResult(limited) : { success: false, message: errorText(res) ?? fallback };
+}
+
 // map a Namecheap response's root Status to an OperationResult
 function statusResult(res: NcResponse): OperationResult {
   if (isOk(res)) return { success: true, message: 'OK' };
-  return { success: false, message: errorText(res) ?? 'Unknown response' };
+  return failureResult(res, 'Unknown response');
 }
 
 // split a domain into second-level label + TLD (the TLD may contain a dot, e.g.

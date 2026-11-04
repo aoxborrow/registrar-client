@@ -55,7 +55,7 @@ Auth is via query-string parameters on every request — no bearer tokens or sig
 | ------------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Test connection / verify credentials        | ~       | No dedicated ping; convention is a cheap call like `namecheap.domains.getList` or `namecheap.users.getBalances`                                                                                                                               |
 | List domains                                | ✓       | `namecheap.domains.getList`                                                                                                                                                                                                                   |
-| Get single domain details                   | ✓       | `namecheap.domains.getInfo`                                                                                                                                                                                                                   |
+| Get single domain details                   | ✓       | `namecheap.domains.getInfo` (+ `getRegistrarLock` for the lock); nameservers from `DnsDetails`; no auto-renew flag                                                                                                                            |
 | Check domain availability                   | ✓       | `namecheap.domains.check` (supports batch, comma-separated domains)                                                                                                                                                                           |
 | Get domain/TLD pricing                      | ✓       | `namecheap.users.getPricing` (register/renew/transfer prices incl. promos), `namecheap.domains.getTldList` (TLD metadata: min/max years, API-registerable/renewable flags)                                                                    |
 | Register a new domain                       | ✓       | `namecheap.domains.create`                                                                                                                                                                                                                    |
@@ -96,8 +96,35 @@ notification email.
 - Credentials: enable "API Access" in Namecheap account profile → generates `ApiKey`; `ApiUser`/`UserName` is the account login name.
 - **Eligibility gate**: production API access requires the account meet at least one of: ≥20 domains registered, ≥$50 account balance, or ≥$50 spent within the last 2 years. Sandbox has no such requirement — build/test there first.
 - **IP allowlisting is mandatory and static IPv4-only**; must be pre-registered in account settings before any call from that IP succeeds — plan for allowlist management as an onboarding step, not just credential entry.
-- **Rate limits** (per API key, best available figures — not fully confirmed in primary docs, treat as approximate): ~50 requests/minute, 700/hour, 8000/day (older references cite 20/min instead of 50/min, suggesting this may have changed over time or vary by account).
+- **Rate limits**: 50 requests/minute, 700/hour, 8,000/day across the whole key ([API FAQ](https://www.namecheap.com/support/knowledgebase/article.aspx/9739/63/api-faq/), checked 2026-11-04; older references cite 20/min). Over quota, Namecheap answers error **500000 "Too many requests"** inside a 200 reply with `Status="ERROR"` (seen live by a DomBot user; reported on the Cloudron and WHMCS forums; not on the error-code page). Namecheap's own Go SDK also treats **HTTP 405** as the pre-execution rate-limit signal and retries it. The client raises 500000 as `RateLimitError` without re-sending (writes return `status: 429`) and retries 405 like a 429.
 - Responses are XML only; errors come back as `<Errors>` nodes with numeric codes in a 200-OK envelope (not HTTP status codes) — client must parse the XML body to detect failure, not rely on HTTP status.
+
+## getDomain (2026-11-04)
+
+Two calls: `getInfo` and `getRegistrarLock`. Nameservers come from getInfo's
+`DnsDetails`, so there's no `dns.getList` call:
+
+```xml
+<DnsDetails ProviderType="FreeDNS" IsUsingOurDNS="true" HostCount="0" EmailType="No Email Service" DynamicDNSStatus="false" IsFailover="false">
+  <Nameserver>freedns1.registrar-servers.com</Nameserver>
+  <Nameserver>freedns2.registrar-servers.com</Nameserver>
+</DnsDetails>
+```
+
+The published getInfo sample shows only `<DnsDetails ProviderType="ENOM" />`;
+the shape above is from the fixture in Namecheap's own Go SDK
+(`namecheaptest/fixtures/domains_getInfo.xml`), and `@rqt/namecheap` parses it
+the same way. Not re-checked against our sandbox (its IP allowlist didn't
+include this machine's address).
+
+**Auto-renew is list-only.** getInfo has no domain auto-renew flag; Namecheap's
+SDK says so outright, and `PremiumDnsSubscription/UseAutoRenew` is the PremiumDNS
+add-on's own flag. `getDomain` reports `autoRenew: false`, and the provider's
+`listOnlyFields: ['autoRenew']` makes `listDomains({ detailed: true })` keep
+getList's `AutoRenew`. Reading it per domain would need a getList call with
+`SearchTerm` (a substring match, so the row must be exact-matched and short
+names can page), a third call per `getDomain` under a 50/min quota.
+
 - Sandbox base URL: `https://api.sandbox.namecheap.com/xml.response`; production: `https://api.namecheap.com/xml.response`.
 
 ## Sources
