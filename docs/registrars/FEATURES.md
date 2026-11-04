@@ -11,7 +11,7 @@ detail, for the providers documented in this folder ([101domain](101domain.md) �
 usable public API (reseller/partner-gated or undocumented).
 
 > The **capability matrix** — which method each provider implements, read from the
-> code across all nine providers — lives in the project README under
+> code across every provider — lives in the project README under
 > [Supported functionality](../../README.md#supported-functionality), which is the
 > single source of truth. This document covers the model _behind_ that table: the
 > core-vs-extended contract, the discovery API, and per-provider implementation

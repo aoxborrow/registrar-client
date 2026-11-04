@@ -16,7 +16,7 @@ supported providers is [below](#providers).
 
 **PRs for additional registrars are welcome** — adding one means extending a base
 class and overriding the operations that provider's API supports (see
-[Adding a provider](#adding-a-provider)).
+[CONTRIBUTING.md](CONTRIBUTING.md#adding-a-registrar)).
 
 Powers **[DomBot](https://dombot.ai)**, a desktop app and MCP server for managing
 a domain portfolio spread across many registrars from one place.
@@ -504,9 +504,10 @@ construction, so you can exercise real API calls without touching live domains:
 const gd = createRegistrar('godaddy', oteCredentials, { environment: 'sandbox' });
 ```
 
-Requesting `sandbox` on a provider that has none (`cloudflare`, `namebright`,
-`spaceship`) throws a `ConfigurationError` — a test can never silently hit
-production. Check `SomeRegistrar.supportsSandbox` to discover which do.
+Requesting `sandbox` on a provider that has none (`101domain`, `cloudflare`,
+`namebright`, `spaceship`) throws a `ConfigurationError` — a test can never
+silently hit production. Check `SomeRegistrar.supportsSandbox` to discover
+which do.
 
 Some providers key their sandbox off the **credential**, not a separate host.
 **Porkbun**'s sandbox shares the production base URL — a sandbox key is prefixed
@@ -556,16 +557,16 @@ implementations**:
 ### Adding a provider
 
 Extend `BaseRegistrar`, pass a `baseUrl` + auth headers to `super()`, add the
-static `displayName` / `configFields` / `helpText` metadata, override the
-operations the API supports (mapping payloads to the shared types in
+static `displayName` / `website` / `configFields` / `helpText` metadata, override
+the operations the API supports (mapping payloads to the shared types in
 `src/types.ts`), and add the class to `src/registrars/index.ts`. Forward the
 `opts` you are given into every `this.http` request: they carry the timeout and
 signal, and tell the [retry rules](#retries) whether the call reads or writes.
-For a REST API set `static safeMethods = REST_SAFE_METHODS`; otherwise wrap any
-lookup a write performs first in `asRead(opts)`. The existing providers under
-`src/registrars/` are working references.
 
-**New providers are welcome** — if you've wired up a registrar, open a PR.
+**New providers are welcome.** Before opening a PR, read
+[Adding a registrar](CONTRIBUTING.md#adding-a-registrar) in CONTRIBUTING.md: the
+files to touch, the rules for errors, listings, pricing and DNS writes, the tests
+and live checks to run, and what the docs and PR description need to say.
 
 ## Errors
 
