@@ -9,16 +9,17 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
 
 - [ ] **Unstoppable Domains** — reads are **live-verified** against a real
       852-domain account (portfolio list/get, availability + pricing, nameservers,
-      DNS records read). Reads go through `ud_domain_get` (batched 50/call): it
-      carries nameservers for every domain (even externally-parked names that 400
-      on `ud_dns_nameservers_list`) and the `flags.DNS_TRANSFER_OUT: "ENABLED"`
-      that marks a name that has transferred out of the account — the portfolio
-      list still returns those with `transferStatus:"none"`, so `listDomains`
-      drops them. `ud_domain_get` is server-throttled (~8-10s/call, any batch
-      size), so a large list is slow (~70s for 852). **Still unrun:** the write
-      paths — `updateNameservers`, `setDnsRecords`, `setAutoRenew`,
-      `setDomainForwarding`. **Register/renew are intentionally not wired**
-      (cart→checkout, spends money). See `docs/registrars/unstoppable.md`.
+      DNS records read). Reads go through `ud_domain_get` (batched 50/call), which
+      carries nameservers for every domain plus the transfer-lock
+      (`DNS_TRANSFER_OUT`, `ENABLED` = unlocked) and privacy (`DNS_WHOIS_PROXY`)
+      flags. It is server-throttled (~8-10s/call, any batch size), so a large list
+      is slow (~70s for 852). **Still unrun:** the write paths —
+      `updateNameservers`, `setDnsRecords`, `setAutoRenew`, `lockDomain` /
+      `unlockDomain`, `setPrivacy`, `setDomainForwarding` — and whether a name that
+      has transferred out carries `isExternallyOwned` (the list skips those; such
+      names still come back from `ud_portfolio_list` with `transferStatus:"none"`).
+      **Register/renew are intentionally not wired** (cart→checkout, spends money).
+      See `docs/registrars/unstoppable.md`.
 
 - [ ] `renewDomain` / `transferIn` on **NameSilo**, and `registerDomain` /
       `renewDomain` on **NameBright** — paid/irreversible; built to documented

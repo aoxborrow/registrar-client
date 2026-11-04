@@ -56,7 +56,7 @@ npm install @aoxborrow/registrar-client
 | `namesilo`    | NameSilo    | API key                    | ✓       | JSON/XML API; key sent in query string            |
 | `porkbun`     | Porkbun     | key + secret               | ✓       | sandbox via `pk1_sb_` key; per-domain opt-in      |
 | `spaceship`   | Spaceship   | key + secret               | —       |                                                   |
-| `unstoppable` | Unstoppable | API key (`ud_mcp_…`)       | —       | web3 + ICANN; JSON actions API; read + manage     |
+| `unstoppable` | Unstoppable | API key (`ud_mcp_…`)       | —       | ICANN only; JSON actions API; no register/renew   |
 
 Each provider class exposes static discovery metadata — `displayName`,
 `website` (its public domain, e.g. `gandi.net`), `configFields` (the credential
@@ -120,8 +120,8 @@ provider's maximum page size (so it makes the fewest requests each API allows).
 Options:
 
 - `search` — a domain-name substring filter, applied server-side where the API
-  supports it (**Namecheap** `SearchTerm`, **Gandi** `fqdn`) and client-side
-  everywhere else.
+  supports it (**Namecheap** `SearchTerm`, **Gandi** `fqdn`, **Unstoppable**
+  `searchTerm`) and client-side everywhere else.
 - `detailed` — fetch full per-domain detail after listing (see below).
 
 The usual request options (timeout/retries/signal) still apply.
@@ -135,9 +135,10 @@ const full = await client.listDomains({ detailed: true });
 Several providers' list endpoints return only a **summary** that omits
 `nameservers`, `privacy`, and/or the transfer `locked` flag, which then read as
 their defaults (`[]` / `false`). Nameservers come back in the single list call
-only on **GoDaddy** (via `includes=nameServers`), **Spaceship**, and
-**Dynadot**; **Gandi**, **Namecheap**, **Porkbun**, **NameSilo**, and
-**NameBright** omit them (and **Gandi**/**NameSilo** also omit `privacy`).
+only on **GoDaddy** (via `includes=nameServers`), **Spaceship**, **Dynadot**,
+and **Unstoppable** (which also fills in `privacy` and `locked`, from a batched
+detail read that is slow on large accounts); **Gandi**, **Namecheap**,
+**Porkbun**, **NameSilo**, and **NameBright** omit them (and **Gandi**/**NameSilo** also omit `privacy`).
 (**Cloudflare** manages nameservers via its Zones API, not the Registrar list.)
 
 Pass `detailed: true` and the facade follows up with a `getDomain` per domain
@@ -176,16 +177,16 @@ are the guaranteed contract; **extended** methods are opt-in per provider.
 | `listDomains`       | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
 | `getDomain`         | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
 | `checkAvailability` | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
-| `getPricing`        | ✓   | ✓ᵃ  | ✓   | ✓ᵃ  | ✗ᵇ  | ✓   | ✓   | ✓   | ✗ᵇ  | ✓   | ✓   | ✓ᵃ  |
+| `getPricing`        | ✓   | ✓ᵃ  | ✓   | ✓ᵃ  | ✗ᵇ  | ✓   | ✓   | ✓   | ✗ᵇ  | ✓   | ✓   | ✓   |
 | `registerDomain`    | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✗   | ✗ᵒ  |
 | `renewDomain`       | ✗ᶜ  | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✗   | ✗ᵒ  |
 | `setAutoRenew`      | ✗ᶜ  | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✗   | ✓   |
 | `transferIn`        | ✗ᶜ  | ✓   | ✓   | ✓   | ✗ᵈ  | ✓   | ✓   | ✓   | ✓   | ✓   | ✗   | ✗ᵖ  |
 | `updateNameservers` | ✗ᶜ  | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
 | `getNameservers`    | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
-| `lockDomain`        | ✗ᶜ  | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✗ᵉ  | ✓   | ✓   | ✗   | ✗ᵖ  |
-| `unlockDomain`      | ✗ᶜ  | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✗ᵉ  | ✓   | ✓   | ✗   | ✗ᵖ  |
-| `setPrivacy`        | ✓   | ✓   | ✓ᶠ  | ✓ᵍ  | ✓   | ✓   | ✓   | ✗ᵉ  | ✓   | ✓   | ✗   | ✗ᵖ  |
+| `lockDomain`        | ✗ᶜ  | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✗ᵉ  | ✓   | ✓   | ✗   | ✓   |
+| `unlockDomain`      | ✗ᶜ  | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✗ᵉ  | ✓   | ✓   | ✗   | ✓   |
+| `setPrivacy`        | ✓   | ✓   | ✓ᶠ  | ✓ᵍ  | ✓   | ✓   | ✓   | ✗ᵉ  | ✓   | ✓   | ✗   | ✓   |
 | `getContacts`       | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✗ᵉ  | ✓   | ✓   | ✗   | ✗ᵖ  |
 | `updateContacts`    | ✗ᶜ  | ✓   | ✓   | ✓   | ✗ᵈ  | ✓   | ✓   | ✓   | ✓   | ✓   | ✗   | ✗ᵖ  |
 | `getDnsRecords`     | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   |
@@ -261,9 +262,8 @@ not a claim of available API endpoints. See [101domain](docs/registrars/101domai
 
 - **ᵒ** Unstoppable registers/renews through a multi-step cart→checkout flow
   that spends real money (`ud_cart_*`); it isn't wired into this adapter.
-- **ᵖ** Unstoppable has no transfer-in, transfer-lock, WHOIS-privacy, or
-  per-domain contact API — its portfolio includes web3 NFT domains. (Account-
-  level ICANN contacts exist via `ud_contacts_list` but aren't mapped per domain.)
+- **ᵖ** Unstoppable has no transfer-in or per-domain contact API. (Account-level
+  ICANN contacts exist via `ud_contacts_list` but aren't mapped per domain.)
 
 For the deeper cross-provider notes and per-registrar quirks, see
 [docs/registrars/FEATURES.md](docs/registrars/FEATURES.md).
