@@ -7,6 +7,15 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
 
 ## Needs live testing (built + unit-tested, not executed)
 
+- [ ] **Unstoppable Domains** — reads are **live-verified** against a real
+      852-domain account, and every read and write (nameservers, DNS records,
+      auto-renew, lock/unlock, privacy, URL forwarding, DNSSEC status) on a test
+      domain (2026-11-04). **Still open:** whether a name that has transferred out
+      carries `isExternallyOwned` (the list skips those; such names still come
+      back from `ud_portfolio_list` with `transferStatus:"none"`), to be checked
+      by transferring the test domain out. **Register/renew are intentionally not
+      wired** (cart→checkout, spends money). See `docs/registrars/unstoppable.md`.
+
 - [ ] `renewDomain` / `transferIn` on **NameSilo**, and `registerDomain` /
       `renewDomain` on **NameBright** — paid/irreversible; built to documented
       shapes. **NameSilo `registerDomain` is now sandbox-verified** on the OTE
