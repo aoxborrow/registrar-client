@@ -146,6 +146,13 @@ accurate. It costs one extra request per domain, so it's opt-in; leave it off
 for a fast summary, or call `getDomain` / `getNameservers` yourself for
 individual domains.
 
+**Namecheap** detail is two requests per domain (`getInfo` for dates, privacy and
+nameservers, `getRegistrarLock` for the lock, which its list misreports), against
+a quota of 50 requests a minute, 700 an hour and 8,000 a day per key. Its detail
+has no auto-renew flag, so `getDomain` reports `autoRenew: false`; the list's
+value is the real one. The provider declares this in `listOnlyFields`, and
+`detailed: true` keeps the list's value for those fields.
+
 To build a combined view across registrars, `listPortfolio` fans out over many
 providers concurrently with per-registrar error isolation (one provider being
 down never sinks the whole view). Every `Domain` already carries its `registrar`:
@@ -598,6 +605,13 @@ invalid headers use the provider's fallback or the configured backoff: Dynadot
 waits a conservative 60 seconds, and Name.com waits until its
 `X-RateLimit-Reset` time. An explicit zero or past date remains
 an immediate retry instruction from the server.
+
+Namecheap signals rate limits two ways. HTTP 405 counts as a 429 and is retried.
+Error 500000 ("Too many requests") arrives inside a 200 reply once the key is
+over its minute, hour or day quota; it is never re-sent, since a retry moments
+later can't clear it. Reads throw `RateLimitError` (`providerCode: '500000'`);
+writes return `{ success: false, status: 429 }`, except `setAutoRenew`, which
+throws it like a read.
 
 | Failure                                                                    | Read  | Write                                  |
 | -------------------------------------------------------------------------- | ----- | -------------------------------------- |

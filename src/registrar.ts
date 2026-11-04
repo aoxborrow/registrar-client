@@ -108,6 +108,9 @@ export abstract class BaseRegistrar implements Registrar {
   // override this to false to drop the redundant call.
   readonly requiresNameserversFetch: boolean = true;
 
+  // See Registrar.listOnlyFields. Most providers' getDomain reads every field.
+  readonly listOnlyFields: readonly (keyof Domain)[] = [];
+
   constructor(
     credentials: RegistrarCredentials,
     httpConfig: Omit<HttpClientConfig, 'options'>,

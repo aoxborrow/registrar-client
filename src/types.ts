@@ -406,6 +406,11 @@ export interface Registrar {
   // default.
   readonly requiresNameserversFetch: boolean;
 
+  // Domain fields only `listDomains` reports truthfully: `getDomain` can't read
+  // them and returns the `createDomain` default (Namecheap's auto-renew).
+  // Detailed listing keeps the list's value for these. Absent means none.
+  readonly listOnlyFields?: readonly (keyof Domain)[];
+
   // whether this provider supports a given capability
   supports(feature: RegistrarFeature): boolean;
 

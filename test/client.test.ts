@@ -28,10 +28,13 @@ function fakeProvider(config: {
   nameservers?: (name: string) => string[];
   // Mirrors BaseRegistrar's default (true); set false for delegator providers.
   requiresNameserversFetch?: boolean;
+  // Left out by default, like a Registrar written without BaseRegistrar.
+  listOnlyFields?: (keyof Domain)[];
 }): Registrar {
   return {
     name: 'fake',
     requiresNameserversFetch: config.requiresNameserversFetch ?? true,
+    listOnlyFields: config.listOnlyFields,
     listDomains: () => Promise.resolve(config.summaries),
     getDomain: (name: string) => {
       config.onGetDomain?.(name);
@@ -194,6 +197,25 @@ describe('RegistrarClient listDomains detailed enrichment', () => {
     expect(nsCalls).toEqual([]); // getNameservers never called
   });
 
+  it("keeps the list's value for list-only fields (Namecheap auto-renew)", async () => {
+    // The list reads auto-renew on; getDomain can't read it and reports the
+    // createDomain default (false). Lock and privacy still come from detail.
+    const listed = [createDomain({ domainName: 'a.com', autoRenew: true, locked: false })];
+    const detailNoAutoRenew = (name: string) =>
+      createDomain({ domainName: name, autoRenew: false, locked: true, privacy: true });
+
+    const plain = new RegistrarClient(
+      fakeProvider({ summaries: listed, detail: detailNoAutoRenew })
+    );
+    expect((await plain.listDomains({ detailed: true }))[0].autoRenew).toBe(false);
+
+    const client = new RegistrarClient(
+      fakeProvider({ summaries: listed, detail: detailNoAutoRenew, listOnlyFields: ['autoRenew'] })
+    );
+    const [a] = await client.listDomains({ detailed: true });
+    expect(a).toMatchObject({ autoRenew: true, locked: true, privacy: true });
+  });
+
   it('keeps the summary for a domain whose detail fetch fails', async () => {
     const client = new RegistrarClient(fakeProvider({ summaries, detail, failFor: 'a.com' }));
     const out = await client.listDomains({ detailed: true });
@@ -233,6 +255,19 @@ describe('requiresNameserversFetch per provider', () => {
       expect(provider.requiresNameserversFetch).toBe(want);
     });
   }
+});
+
+describe('listOnlyFields per provider', () => {
+  // Only Namecheap's getDomain can't read a field its list has (auto-renew).
+  it('is empty everywhere but Namecheap', () => {
+    for (const name of Object.keys(registrars)) {
+      const provider = createRegistrar(name as keyof typeof registrars, {});
+      expect({ name, fields: provider.listOnlyFields }).toEqual({
+        name,
+        fields: name === 'namecheap' ? ['autoRenew'] : [],
+      });
+    }
+  });
 });
 
 describe('RegistrarClient forwarding passthrough', () => {

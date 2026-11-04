@@ -49,7 +49,11 @@ export class RegistrarClient {
         const name = domains[index].domainName;
         try {
           const detail = await this.provider.getDomain(name, opts);
-          let merged = { ...domains[index], ...detail };
+          // keep the list's value for any field this provider's detail can't read
+          const listOnly = Object.fromEntries(
+            (this.provider.listOnlyFields ?? []).map(field => [field, domains[index][field]])
+          );
+          let merged: Domain = { ...domains[index], ...detail, ...listOnly };
           // Some providers expose nameservers only via a dedicated endpoint, not
           // on the domain detail — fetch them separately when still empty. Skip
           // providers whose getNameservers just re-reads getDomain: it would
