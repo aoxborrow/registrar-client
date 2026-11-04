@@ -3,6 +3,7 @@ import { ConfigurationError, NotImplementedError } from './errors';
 import { HttpClient, type HttpClientConfig } from './http';
 import { CORE_FEATURES, FEATURE_CALLS, type RegistrarFeature } from './features';
 import { normalizeNameservers } from './utils';
+import { redactResult, redactThrown } from './redact';
 import type {
   ConnectionResult,
   ContactSet,
@@ -138,7 +139,12 @@ export abstract class BaseRegistrar implements Registrar {
   // Providers fold most failures into an `OperationResult`; the unknown outcome
   // is copied onto that result so it is not lost along with the error.
   //
-  // The wrapper also normalizes the nameservers a feature sends or returns.
+  // The wrapper also normalizes the nameservers a feature sends or returns,
+  // and redacts this instance's credentials from whatever the feature throws
+  // or returns (see `redactSecrets`): an error's message, stack and cause, and
+  // a result's message. Every provider and every extended feature passes
+  // through here, so none of them can leak a key into an error, whatever the
+  // registrar echoes back.
   private threadFeatureCalls(): void {
     const self = this as unknown as Record<string, unknown>;
     for (const [feature, { intent, optsIndex }] of Object.entries(FEATURE_CALLS)) {
@@ -152,17 +158,30 @@ export abstract class BaseRegistrar implements Registrar {
         normalizeNameserverArgs(feature, next);
         while (next.length <= optsIndex) next.push(undefined);
         next[optsIndex] = { ...(next[optsIndex] as RequestOptions | undefined), call };
-        const result: unknown = (original as (...a: unknown[]) => unknown).apply(this, next);
-        if (!(result instanceof Promise)) return result;
-        return result.then((resolved: unknown) => {
-          const value = normalizeNameserverResult(feature, resolved);
-          return call.outcomeUnknown &&
-            value !== null &&
-            typeof value === 'object' &&
-            (value as OperationResult).success === false
-            ? { ...value, outcome: 'unknown' }
-            : value;
-        });
+        let result: unknown;
+        try {
+          result = (original as (...a: unknown[]) => unknown).apply(this, next);
+        } catch (error) {
+          throw redactThrown(error, this.credentials);
+        }
+        if (!(result instanceof Promise)) return redactResult(result, this.credentials);
+        return result.then(
+          (resolved: unknown) => {
+            const value = normalizeNameserverResult(feature, resolved);
+            return redactResult(
+              call.outcomeUnknown &&
+                value !== null &&
+                typeof value === 'object' &&
+                (value as OperationResult).success === false
+                ? { ...value, outcome: 'unknown' }
+                : value,
+              this.credentials
+            );
+          },
+          (error: unknown) => {
+            throw redactThrown(error, this.credentials);
+          }
+        );
       };
     }
   }

@@ -672,10 +672,27 @@ for writes.
 ## Security
 
 Credentials are sent as request **headers** wherever the registrar's API
-supports it. Two providers require query-string authentication by their own API
-design — **Dynadot** (`key`) and **Namecheap** (`ApiUser`/`ApiKey`) — so for
-those the key necessarily appears in the request URL. This is noted in each
-provider's source. Credentials are not interpolated into error messages.
+supports it. Some calls require query-string authentication by the registrar's
+own API design, so there the key necessarily appears in the request URL:
+**Namecheap** (`ApiUser`/`ApiKey`), **NameSilo** (`key`) and **Dynadot**'s
+renewal price check (`key`). This is noted in each provider's source.
+
+Credentials stay out of what the library throws and returns. Error messages show
+a request's URL without its query string, and every feature of every provider
+passes its result's `message`, and an error's `message`, `stack` and `cause`,
+through `redactSecrets` with that instance's credentials. That drops the
+userinfo, query and fragment of any URL, and replaces each credential value, raw
+or URL-encoded, with `[redacted]`, including one a registrar echoes back in an
+error body. Error classes and fields such as `status` and `retryAfter` are
+unchanged.
+
+The same function is exported for messages your app logs or stores:
+
+```ts
+import { redactSecrets } from '@aoxborrow/registrar-client';
+
+logger.warn(redactSecrets(String(error), credentials));
+```
 
 ## License
 

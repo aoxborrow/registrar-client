@@ -45,6 +45,10 @@ export { UnstoppableRegistrar } from './registrars/unstoppable';
 // XML parsing helpers for XML-based registrar APIs
 export { parseXml, ensureArray } from './xml';
 
+// credential redaction for messages, as applied to everything a provider throws or returns
+export { redactSecrets } from './redact';
+export type { SecretValues } from './redact';
+
 // shared types, constants, utils, and errors
 export * from './types';
 export * from './constants';
