@@ -98,7 +98,8 @@ none, so a test can't reach production by accident.
 
 Send credentials as headers. If the API only takes them in the query string, say
 so in a comment and in the README's Security section. Credentials never appear in
-error messages.
+error messages. `BaseRegistrar` redacts the instance's credentials from whatever
+a feature throws or returns, but don't build a message from one anyway.
 
 ### Reads, writes and retries
 

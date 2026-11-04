@@ -14,6 +14,7 @@ import {
   toRegistrarError,
   wasNotSent,
 } from './errors';
+import { stripUrl } from './redact';
 import type { FeatureCall, RegistrarClientOptions } from './types';
 import { backoffDelay, sleep } from './utils';
 
@@ -43,7 +44,9 @@ export interface RequestConfig {
   method?: string;
   // path appended to baseUrl, or an absolute URL
   path: string;
-  // query parameters (never used for secrets)
+  // query parameters. Some APIs authenticate here (Namecheap's `ApiKey`,
+  // NameSilo's and Dynadot's `key`), so error messages show the request URL
+  // without its query string.
   query?: Record<string, string | number | boolean | undefined>;
   // JSON body; serialized with JSON.stringify
   body?: unknown;
@@ -74,7 +77,7 @@ export class HttpClient {
         return JSON.parse(text) as T;
       } catch (error) {
         throw new ParsingError(
-          `Failed to parse JSON response from '${this.buildUrl(req)}': ${errorMessage(error)}`
+          `Failed to parse JSON response from '${stripUrl(this.buildUrl(req))}': ${errorMessage(error)}`
         );
       }
     });
@@ -183,6 +186,8 @@ export class HttpClient {
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
     const url = this.buildUrl(req);
+    // the URL as error messages show it: no query, userinfo or fragment
+    const shown = stripUrl(url);
     const headers: Record<string, string> = {
       'User-Agent': USER_AGENT,
       'Accept': 'application/json',
@@ -207,15 +212,15 @@ export class HttpClient {
         // distinguish abort/timeout from a genuine network failure
         if (isAbortError(error)) {
           if (externalSignal?.aborted) throw new AbortError('Request was aborted');
-          throw new TimeoutError(`Request to '${url}' timed out after ${timeout}ms`);
+          throw new TimeoutError(`Request to '${shown}' timed out after ${timeout}ms`);
         }
-        throw new ConnectionError(`Failed to reach '${url}': ${errorMessage(error)}`, {
+        throw new ConnectionError(`Failed to reach '${shown}': ${errorMessage(error)}`, {
           notSent: wasNotSent(error),
         });
       }
 
       if (!response.ok) {
-        throw await this.toStatusError(response, url);
+        throw await this.toStatusError(response, shown);
       }
 
       // 204 No Content yields an empty string
@@ -230,10 +235,10 @@ export class HttpClient {
         // simply be retried.
         if (isAbortError(error)) {
           if (externalSignal?.aborted) throw new AbortError('Request was aborted');
-          throw new TimeoutError(`Response from '${url}' timed out after ${timeout}ms`);
+          throw new TimeoutError(`Response from '${shown}' timed out after ${timeout}ms`);
         }
         throw new ConnectionError(
-          `Connection to '${url}' was lost while reading the response: ${errorMessage(error)}`
+          `Connection to '${shown}' was lost while reading the response: ${errorMessage(error)}`
         );
       }
     } finally {
@@ -242,7 +247,8 @@ export class HttpClient {
     }
   }
 
-  // map a non-2xx response to a typed RegistrarError
+  // map a non-2xx response to a typed RegistrarError. `url` is the request URL
+  // as messages show it, without its query string.
   protected async toStatusError(response: Response, url: string): Promise<RegistrarError> {
     // read the body defensively; it may aid debugging but must not be assumed JSON
     let detail = '';
