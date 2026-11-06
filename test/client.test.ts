@@ -240,6 +240,7 @@ describe('requiresNameserversFetch per provider', () => {
     'namebright': true,
     'namecheap': true,
     'namecom': false,
+    'namefi': false,
     'namesilo': false,
     'porkbun': true,
     'spaceship': false,

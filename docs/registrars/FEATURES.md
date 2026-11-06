@@ -4,7 +4,7 @@ The design record behind the capability model, plus the per-registrar engineerin
 detail, for the providers documented in this folder ([101domain](101domain.md) ·
 [cloudflare](cloudflare.md) ·
 [dynadot](dynadot.md) · [gandi](gandi.md) · [godaddy](godaddy.md) ·
-[namecheap](namecheap.md) · [namesilo](namesilo.md) · [porkbun](porkbun.md) ·
+[namefi](namefi.md) · [namecheap](namecheap.md) · [namesilo](namesilo.md) · [porkbun](porkbun.md) ·
 [namebright](namebright.md) · [spaceship](spaceship.md) · [unstoppable](unstoppable.md)). Three others —
 [squarespace](squarespace.md), [networksolutions](networksolutions.md), and
 [edomains](edomains.md) — were researched but **not implemented**: none expose a
