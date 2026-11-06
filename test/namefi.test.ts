@@ -463,4 +463,26 @@ describe('packaged Namefi adapter', () => {
     });
     expect(fetch).toHaveBeenCalledTimes(2);
   });
+  it('names the unavailable core APIs and the unwired forwarding semantics without sending requests', async () => {
+    const fetch = responses(),
+      client = provider();
+    for (const operation of [
+      () => client.renewDomain('example.com'),
+      () => client.transferIn('example.com', { authCode: 'test-code' }),
+      () => client.updateNameservers('example.com', ['ns1.example.net']),
+      () => client.lockDomain('example.com'),
+      () => client.unlockDomain('example.com'),
+      () => client.setPrivacy('example.com', true),
+      () => client.getContacts('example.com'),
+      () => client.updateContacts('example.com', {}),
+      () => client.getDomainForwarding('example.com'),
+      () => client.setDomainForwarding('example.com', []),
+    ])
+      await expect(operation()).rejects.toThrow(NotImplementedError);
+    await expect(client.getDomainForwarding('example.com')).rejects.toThrow(
+      /not wired up.*redirect mode/
+    );
+    expect(client.supports('getDomainForwarding')).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
 });

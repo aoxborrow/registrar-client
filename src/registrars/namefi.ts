@@ -15,6 +15,7 @@ import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import type {
   ConfigField,
   ContactSet,
+  DomainForward,
   RegisterDomainInput,
   TransferDomainInput,
   SetPrivacyOptions,
@@ -396,6 +397,25 @@ export class NamefiRegistrar extends BaseRegistrar {
     _opts?: RequestOptions
   ): Promise<OperationResult> {
     return Promise.reject(new NotImplementedError('namefi: no public per-domain contact endpoint'));
+  }
+
+  override getDomainForwarding(_name: string, _opts?: RequestOptions): Promise<DomainForward[]> {
+    return Promise.reject(
+      new NotImplementedError(
+        'namefi: managed forwarding is not wired up; its HTTP redirect mode is not mapped'
+      )
+    );
+  }
+  override setDomainForwarding(
+    _name: string,
+    _forwards: DomainForward[],
+    _opts?: RequestOptions
+  ): Promise<OperationResult> {
+    return Promise.reject(
+      new NotImplementedError(
+        'namefi: managed forwarding is not wired up; its HTTP redirect mode is not mapped'
+      )
+    );
   }
 
   override async getDnsRecords(name: string, opts?: RequestOptions): Promise<DnsRecord[]> {

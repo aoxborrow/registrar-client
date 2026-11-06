@@ -210,8 +210,8 @@ are the guaranteed contract; **extended** methods are opt-in per provider.
 | `disableDnssec`       | ✗   | ✓   | ✓   | ✗   | ✗   | ✗   | ✓   | ✓   | ✗   | ✗ᵐ  | ✗   | ✗   | ✗   |
 | `getEmailForwarding`  | ✓   | ✓   | ✓   | ✗   | ✗   | ✓   | ✓   | ✗   | ✗   | ✗ᵐ  | ✗   | ✗   | ✗   |
 | `setEmailForwarding`  | ✓   | ✓   | ✓   | ✗   | ✗   | ✓   | ✓   | ✗   | ✗   | ✗ᵐ  | ✗   | ✗   | ✗   |
-| `getDomainForwarding` | ✓   | ✓ʲ  | ✓ᵏ  | ✓ˡ  | ✗   | ✓   | ✓ʲ  | ✓   | ✗   | ✗ᵐ  | ✓   | ✓   | ✗   |
-| `setDomainForwarding` | ✓   | ✓ʲ  | ✓ᵏ  | ✓ˡ  | ✗   | ✓   | ✓ʲ  | ✓   | ✗   | ✗ᵐ  | ✓   | ✓   | ✗   |
+| `getDomainForwarding` | ✓   | ✓ʲ  | ✓ᵏ  | ✓ˡ  | ✗   | ✓   | ✓ʲ  | ✓   | ✗   | ✗ᵐ  | ✓   | ✓   | ✗ᑫ  |
+| `setDomainForwarding` | ✓   | ✓ʲ  | ✓ᵏ  | ✓ˡ  | ✗   | ✓   | ✓ʲ  | ✓   | ✗   | ✗ᵐ  | ✓   | ✓   | ✗ᑫ  |
 
 `CF` Cloudflare · `DY` Dynadot · `GA` Gandi · `GD` GoDaddy · `NB` NameBright ·
 `NC` Namecheap · `NS` NameSilo · `PB` Porkbun · `SP` Spaceship · `NM` Name.com · `101` 101domain · `UD` Unstoppable · `NF` Namefi.
@@ -226,7 +226,7 @@ not a claim of available API endpoints. See [101domain](docs/registrars/101domai
 - **ᑫ** Namefi prices full domains only. Registration uses saved profile contacts
   and returns an asynchronous order; an accepted order is pending, not registry
   completion. DNS replacement preserves managed/SOA/NS records and is not atomic
-  across its edit/create/delete batches. These writes are unit-tested only; see
+  across its edit/create/delete batches. Managed forwarding exists in the API but its redirect-mode mapping is not wired up. These writes are unit-tested only; see
   [Namefi](docs/registrars/namefi.md).
 
 - **ᵐ** Name.com DNSSEC and forwarding are not wired into this adapter yet;
