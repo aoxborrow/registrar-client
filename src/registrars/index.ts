@@ -12,6 +12,7 @@ import { GoDaddyRegistrar } from './godaddy';
 import { NameBrightRegistrar } from './namebright';
 import { NamecheapRegistrar } from './namecheap';
 import { NamecomRegistrar } from './namecom';
+import { NamefiRegistrar } from './namefi';
 import { NameSiloRegistrar } from './namesilo';
 import { PorkbunRegistrar } from './porkbun';
 import { SpaceshipRegistrar } from './spaceship';
@@ -27,6 +28,7 @@ export const registrars = {
   'namebright': NameBrightRegistrar,
   'namecheap': NamecheapRegistrar,
   'namecom': NamecomRegistrar,
+  'namefi': NamefiRegistrar,
   'namesilo': NameSiloRegistrar,
   'porkbun': PorkbunRegistrar,
   'spaceship': SpaceshipRegistrar,
