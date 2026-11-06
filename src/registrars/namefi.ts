@@ -82,7 +82,7 @@ class NamefiHttpClient extends HttpClient {
       const send = req.fetch ?? this.config.options.fetch ?? globalThis.fetch;
       return await super.request<T>({
         ...req,
-        fetch: (input, init) => send(input, { ...init, redirect: 'error' }),
+        fetch: (input, init) => send(input, { ...init, redirect: 'manual' }),
       });
     } catch (error) {
       if (error instanceof ParsingError) {

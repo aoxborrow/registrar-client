@@ -84,7 +84,7 @@ describe('packaged Namefi adapter', () => {
       success: true,
       message: 'Connection successful',
     });
-    expect(fetch.mock.calls[0][1]?.redirect).toBe('error');
+    expect(fetch.mock.calls[0][1]?.redirect).toBe('manual');
     expect(requestUrl(fetch)).toBe('https://api.namefi.io/v-next/user');
     expect(new Headers(fetch.mock.calls[0][1]?.headers).get('x-api-key')).toBe(
       'nfk_private-test-key'

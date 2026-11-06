@@ -98,3 +98,7 @@ DNS record, purchase or payment was changed. See `docs/TODOS.md` for the holds.
 Sources: [official OpenAPI specification](https://api.namefi.io/v-next/openapi/doc.json),
 [API reference](https://api.namefi.io/v-next/openapi/doc),
 [authentication guide](https://namefi.io/llms.txt).
+
+Requests use manual redirects and reject redirect responses, so credentials never
+follow a redirect. This also supports edge runtimes such as Cloudflare Workers,
+which reject Fetch redirect mode `error` before sending the request.
