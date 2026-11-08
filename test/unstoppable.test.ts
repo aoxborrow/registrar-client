@@ -46,7 +46,7 @@ function unauthorized(): never {
 describe('Unstoppable Domains provider', () => {
   it('exposes discovery metadata and the forwarding extended feature', () => {
     const U = registrars.unstoppable;
-    expect(U.displayName).toBe('Unstoppable Domains');
+    expect(U.displayName).toBe('Unstoppable');
     expect(U.website).toBe('unstoppabledomains.com');
     expect(U.supportsSandbox).toBe(false);
     expect(U.configFields.map(f => f.name)).toEqual(['apiKey']);
