@@ -102,9 +102,14 @@ class NamefiHttpClient extends HttpClient {
   }
   protected override async toStatusError(response: Response, url: string): Promise<RegistrarError> {
     await response.body?.cancel().catch(() => undefined);
+    // A refused redirect is a 3xx in Node and Workers, but an opaque status-0
+    // response in browsers, which `new Response` rejects with a RangeError.
+    if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400))
+      return new InvalidResponseError(`namefi: request to '${url}' was redirected; refused`);
     return super.toStatusError(
       new Response(null, {
         status: response.status,
+        statusText: response.statusText,
         headers: response.headers,
       }),
       url
@@ -579,6 +584,7 @@ function toDomain(raw: RawDomain): Domain {
 function oneYear(raw?: Price): Money | undefined {
   if (!raw) return undefined;
   if (raw.type !== 'PER_YEAR' && raw.type !== 'MULTI_YEAR') throw invalid('price type');
+  if (!raw.price || typeof raw.price !== 'object') throw invalid('price');
   const value =
     raw.type === 'PER_YEAR' ? (raw.price as Money) : (raw.price as Record<string, Money>)['1'];
   if (!value) return undefined;

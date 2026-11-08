@@ -92,6 +92,19 @@ describe('packaged Namefi adapter', () => {
       'nfk_private-test-key'
     );
   });
+  it('refuses redirects, including the opaque status-0 response browsers return', async () => {
+    const opaque = Response.error();
+    Object.defineProperty(opaque, 'type', { value: 'opaqueredirect' });
+    responses(
+      new Response(null, { status: 302, headers: { location: 'https://elsewhere.test/' } }),
+      opaque
+    );
+    for (let i = 0; i < 2; i++) {
+      const result = await provider().testConnection();
+      expect(result.success).toBe(false);
+      expect(result.message).toMatch(/redirected; refused/);
+    }
+  });
   it('maps email and NFT holdings, dates and nameservers without exposing private identifiers', async () => {
     responses([
       raw,
@@ -178,6 +191,19 @@ describe('packaged Namefi adapter', () => {
     expect((await provider().getPricing('example.com')).renewal).toBeUndefined();
     await expect(provider().getPricing('.com')).rejects.toThrow(NotImplementedError);
   });
+  it.each([null, 'free'])(
+    'rejects a price that is not an object as a malformed response: %j',
+    async price => {
+      responses({
+        ...quote,
+        pricingDetails: {
+          ...quote.pricingDetails,
+          renewalPrice: { type: 'MULTI_YEAR', price },
+        },
+      });
+      await expect(provider().getPricing('example.com')).rejects.toThrow(InvalidResponseError);
+    }
+  );
   it('rejects mismatched availability identity and unsafe domain input', async () => {
     const fetch = responses({ ...quote, domain: 'other.com' });
     await expect(provider().checkAvailability(['example.com'])).rejects.toThrow(
