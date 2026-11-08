@@ -188,7 +188,7 @@ const SETTLE_DELAYS_MS: readonly number[] = [1000, 2000, 3000, 5000];
 export class UnstoppableRegistrar extends BaseRegistrar {
   readonly name = 'unstoppable';
 
-  static readonly displayName = 'Unstoppable Domains';
+  static readonly displayName = 'Unstoppable';
   static readonly website = 'unstoppabledomains.com';
   static readonly helpText =
     'Generate an API key in your Unstoppable Domains account under Account Settings → ' +
@@ -220,7 +220,7 @@ export class UnstoppableRegistrar extends BaseRegistrar {
     super(
       credentials,
       {
-        baseUrl: selectBaseUrl('Unstoppable Domains', options?.environment, {
+        baseUrl: selectBaseUrl('Unstoppable', options?.environment, {
           production: 'https://api.unstoppabledomains.com',
         }),
         headers: { Authorization: `Bearer ${credentials.apiKey}` },
