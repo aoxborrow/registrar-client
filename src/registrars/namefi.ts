@@ -419,7 +419,10 @@ export class NamefiRegistrar extends BaseRegistrar {
   }
 
   override async getDnsRecords(name: string, opts?: RequestOptions): Promise<DnsRecord[]> {
-    return (await this.records(domain(name), opts)).map(fromRecord);
+    const zoneName = domain(name);
+    // DNS reads are public; confirm the zone belongs to this account first.
+    await this.getDomain(zoneName, opts);
+    return (await this.records(zoneName, opts)).map(fromRecord);
   }
   private async records(zoneName: string, opts?: RequestOptions): Promise<RawRecord[]> {
     const rows = await this.http.request<RawRecord[]>({

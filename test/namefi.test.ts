@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  AbortError,
   ConfigurationError,
   InvalidResponseError,
+  NotFoundError,
   NotImplementedError,
   createRegistrar,
   registrars,
@@ -228,11 +230,65 @@ describe('packaged Namefi adapter', () => {
     expect(result).toMatchObject({ success: false, status: 401 });
     expect(result.message).not.toMatch(/nfk_|private@example/);
   });
+  it.each([
+    { inventory: [], records: [] },
+    { inventory: [], records: [record()] },
+    { inventory: [{ ...raw, normalizedDomainName: 'other.com' }], records: [] },
+    { inventory: [{ ...raw, normalizedDomainName: 'other.com' }], records: [record()] },
+  ])(
+    'rejects unowned DNS reads before querying public records: %j',
+    async ({ inventory, records }) => {
+      const fetch = vi.fn<typeof globalThis.fetch>(input => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        return Promise.resolve(Response.json(url.includes('/user/domains') ? inventory : records));
+      });
+      vi.stubGlobal('fetch', fetch);
+      await expect(provider().getDnsRecords('example.com')).rejects.toThrow(NotFoundError);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(requestUrl(fetch)).toBe('https://api.namefi.io/v-next/user/domains');
+    }
+  );
+  it('returns empty owned DNS only after checking normalized ownership', async () => {
+    const fetch = responses([raw], []);
+    expect(await provider().getDnsRecords('EXAMPLE.COM.')).toEqual([]);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(requestUrl(fetch, 0)).toBe('https://api.namefi.io/v-next/user/domains');
+    expect(requestUrl(fetch, 1)).toBe(
+      'https://api.namefi.io/v-next/dns/records?zoneName=example.com'
+    );
+  });
+  it.each(['/user/domains', '/dns/records'])(
+    'honors DNS read cancellation during %s',
+    async path => {
+      const controller = new AbortController();
+      let requestSignal: AbortSignal | null | undefined;
+      const fetch = vi.fn<typeof globalThis.fetch>((input, init) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (new URL(url).pathname.endsWith(path)) {
+          requestSignal = init?.signal;
+          controller.abort();
+          return Promise.reject(new DOMException('Aborted', 'AbortError'));
+        }
+        return Promise.resolve(Response.json([raw]));
+      });
+      vi.stubGlobal('fetch', fetch);
+      await expect(
+        provider().getDnsRecords('example.com', { signal: controller.signal })
+      ).rejects.toThrow(AbortError);
+      expect(requestSignal?.aborted).toBe(true);
+      expect(fetch).toHaveBeenCalledTimes(path === '/user/domains' ? 1 : 2);
+    }
+  );
   it('round-trips MX and SRV numbers without losing their targets', async () => {
-    responses([
-      record('mx', '@', 'MX', '10 mail.example.com.'),
-      record('srv', '_sip._tcp', 'SRV', '5 10 5060 sip.example.com.'),
-    ]);
+    responses(
+      [raw],
+      [
+        record('mx', '@', 'MX', '10 mail.example.com.'),
+        record('srv', '_sip._tcp', 'SRV', '5 10 5060 sip.example.com.'),
+      ]
+    );
     expect(await provider().getDnsRecords('example.com')).toEqual([
       {
         type: 'MX',
@@ -253,7 +309,7 @@ describe('packaged Namefi adapter', () => {
     ]);
   });
   it('rejects cross-zone DNS records before accepting a read or any writes', async () => {
-    responses([{ ...record(), zoneName: 'other.com' }]);
+    responses([raw], [{ ...record(), zoneName: 'other.com' }]);
     await expect(provider().getDnsRecords('example.com')).rejects.toThrow(/identity/);
   });
   it('preserves unchanged DNS records and creates additions before deleting stale IDs', async () => {
@@ -449,11 +505,11 @@ describe('packaged Namefi adapter', () => {
       record('ns', '@', 'NS', 'ns3.namefi.io.'),
       record('soa', '@', 'SOA', 'ns3.namefi.io. hostmaster.namefi.io. 1 2 3 4 5'),
     ];
-    const fetch = responses(rows, [raw], rows);
+    const fetch = responses([raw], rows, [raw], rows);
     const client = provider(),
       records = await client.getDnsRecords('example.com');
     expect(await client.setDnsRecords('example.com', records)).toMatchObject({ success: true });
-    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch).toHaveBeenCalledTimes(4);
   });
   it('holds a malformed JSON write response as unknown without replaying the write', async () => {
     const fetch = responses([raw], new Response('not json', { status: 200 }));
