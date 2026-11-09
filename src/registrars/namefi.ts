@@ -424,10 +424,9 @@ export class NamefiRegistrar extends BaseRegistrar {
   }
 
   override async getDnsRecords(name: string, opts?: RequestOptions): Promise<DnsRecord[]> {
-    const zoneName = domain(name);
-    // DNS reads are public; confirm the zone belongs to this account first.
-    await this.getDomain(zoneName, opts);
-    return (await this.records(zoneName, opts)).map(fromRecord);
+    // Namefi serves DNS records for any zone, without a key, so this read isn't
+    // limited to names in the account.
+    return (await this.records(domain(name), opts)).map(fromRecord);
   }
   private async records(zoneName: string, opts?: RequestOptions): Promise<RawRecord[]> {
     const rows = await this.http.request<RawRecord[]>({
@@ -469,7 +468,8 @@ export class NamefiRegistrar extends BaseRegistrar {
       throw new ConfigurationError('namefi: duplicate DNS records');
     let changed = false;
     try {
-      await this.getDomain(zoneName, opts);
+      // Namefi requires ownership on every batch write, so a full inventory
+      // read here would only slow each save.
       const stale = [...(await this.records(zoneName, opts))];
       const additions: RecordSpec[] = [];
       for (const spec of desired) {

@@ -16,18 +16,18 @@ organization or accept a wallet private key.
 
 ## Supported operations
 
-| Method              | Endpoint and behavior                                                                                             | Verification                   |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------ |
-| `testConnection`    | `GET /user`; requires a nonempty account ID in the response, including for an empty account                       | Live read                      |
-| `listDomains`       | `GET /user/domains`; complete personal inventory, then local substring filtering                                  | Live read                      |
-| `getDomain`         | Finds the exact name in the owned inventory; missing ownership throws `NotFoundError`                             | Live read                      |
-| `getNameservers`    | Returns the inventory's nameservers; `requiresNameserversFetch` is false                                          | Live read                      |
-| `checkAvailability` | `GET /search/availability?domain=…`, once per distinct requested name                                             | Live read                      |
-| `getPricing`        | The same full-name endpoint; never generates a probe domain for a TLD                                             | Live read                      |
-| `registerDomain`    | `POST /orders/register-domain`; one requested domain, with an accepted asynchronous order reported as `pending`   | Unit-tested only; spends money |
-| `setAutoRenew`      | Confirms ownership, then `PUT /domain-config/auto-renew`                                                          | Live write                     |
-| `getDnsRecords`     | Confirms ownership, then `GET /dns/records?zoneName=…`; splits MX/SRV numeric fields into the shared record shape | Live read                      |
-| `setDnsRecords`     | Reconciles existing records using the batch update/create/delete endpoints                                        | Live write                     |
+| Method              | Endpoint and behavior                                                                                           | Verification                   |
+| ------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| `testConnection`    | `GET /user`; requires a nonempty account ID in the response, including for an empty account                     | Live read                      |
+| `listDomains`       | `GET /user/domains`; complete personal inventory, then local substring filtering                                | Live read                      |
+| `getDomain`         | Finds the exact name in the owned inventory; missing ownership throws `NotFoundError`                           | Live read                      |
+| `getNameservers`    | Returns the inventory's nameservers; `requiresNameserversFetch` is false                                        | Live read                      |
+| `checkAvailability` | `GET /search/availability?domain=…`, once per distinct requested name                                           | Live read                      |
+| `getPricing`        | The same full-name endpoint; never generates a probe domain for a TLD                                           | Live read                      |
+| `registerDomain`    | `POST /orders/register-domain`; one requested domain, with an accepted asynchronous order reported as `pending` | Unit-tested only; spends money |
+| `setAutoRenew`      | Confirms ownership, then `PUT /domain-config/auto-renew`                                                        | Live write                     |
+| `getDnsRecords`     | `GET /dns/records?zoneName=…`; splits MX/SRV numeric fields into the shared record shape                        | Live read                      |
+| `setDnsRecords`     | Reconciles existing records using the batch update/create/delete endpoints                                      | Live write                     |
 
 Both email-held and NFT-held registry domains are included. NFT ownership is the
 representation of a normal registry domain, not a reason to drop it. The API
@@ -37,10 +37,11 @@ One list costs one request regardless of the number of domains; each standalone
 detail or nameserver lookup costs another inventory request. No per-domain
 network fan-out happens inside `listDomains`.
 
-DNS reads also check the owned inventory first because the DNS endpoint is
-public. An unowned domain throws `NotFoundError` without querying its DNS,
-even if public records exist. An owned domain with an empty zone returns `[]`.
-Each standalone DNS read costs one inventory request and one DNS request.
+The DNS read endpoint is public, so `getDnsRecords` returns a zone's records
+whether or not the domain is in this account, and needs only one request.
+`setDnsRecords` also skips the inventory read: Namefi requires ownership on its
+batch writes. `setAutoRenew` still confirms ownership first, because the API
+reference doesn't state that requirement for that write.
 
 The API reports expiry, auto-renew and nameservers. It does **not** report
 creation date, a separate renewal deadline, EPP lifecycle, WHOIS privacy or
