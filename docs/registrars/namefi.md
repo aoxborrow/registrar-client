@@ -25,7 +25,7 @@ organization or accept a wallet private key.
 | `checkAvailability` | `GET /search/availability?domain=…`, once per distinct requested name                                           | Live read                      |
 | `getPricing`        | The same full-name endpoint; never generates a probe domain for a TLD                                           | Live read                      |
 | `registerDomain`    | `POST /orders/register-domain`; one requested domain, with an accepted asynchronous order reported as `pending` | Unit-tested only; spends money |
-| `setAutoRenew`      | Confirms ownership, then `PUT /domain-config/auto-renew`                                                        | Live write                     |
+| `setAutoRenew`      | `PUT /domain-config/auto-renew`                                                                                 | Live write                     |
 | `getDnsRecords`     | `GET /dns/records?zoneName=…`; splits MX/SRV numeric fields into the shared record shape                        | Live read                      |
 | `setDnsRecords`     | Reconciles existing records using the batch update/create/delete endpoints                                      | Live write                     |
 
@@ -38,10 +38,8 @@ detail or nameserver lookup costs another inventory request. No per-domain
 network fan-out happens inside `listDomains`.
 
 The DNS read endpoint is public, so `getDnsRecords` returns a zone's records
-whether or not the domain is in this account, and needs only one request.
-`setDnsRecords` also skips the inventory read: Namefi requires ownership on its
-batch writes. `setAutoRenew` still confirms ownership first, because the API
-reference doesn't state that requirement for that write.
+whether or not the domain is in this account. DNS and auto-renew calls don't
+re-read the inventory first: callers act on names from their own account.
 
 The API reports expiry, auto-renew and nameservers. It does **not** report
 creation date, a separate renewal deadline, EPP lifecycle, WHOIS privacy or

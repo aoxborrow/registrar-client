@@ -211,32 +211,20 @@ describe('packaged Namefi adapter', () => {
     await expect(provider().getDomain('../user')).rejects.toThrow(ConfigurationError);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
-  it('writes auto-renew only after ownership is confirmed and reads exactly the requested body', async () => {
-    const fetch = responses([raw], { success: true });
+  it('writes auto-renew with exactly the requested body', async () => {
+    const fetch = responses({ success: true });
     expect(await provider().setAutoRenew('example.com', false)).toMatchObject({
       success: true,
     });
-    expect(body(fetch, 1)).toEqual({
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(body(fetch, 0)).toEqual({
       normalizedDomainName: 'example.com',
       enableAutoRenew: false,
     });
-    expect(fetch.mock.calls[1][1]?.method).toBe('PUT');
-  });
-  it('does not mutate an unowned domain', async () => {
-    const fetch = responses([]);
-    expect(await provider().setAutoRenew('example.com', false)).toMatchObject({
-      success: false,
-      status: 404,
-    });
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0][1]?.method).toBe('PUT');
   });
   it('does not retry a write after a 5xx or claim malformed acknowledgement succeeded', async () => {
-    const fetch = responses(
-      [raw],
-      new Response('private upstream contents', { status: 500 }),
-      [raw],
-      {}
-    );
+    const fetch = responses(new Response('private upstream contents', { status: 500 }), {});
     expect(await provider({ retries: 3 }).setAutoRenew('example.com', false)).toMatchObject({
       success: false,
       outcome: 'unknown',
@@ -245,7 +233,7 @@ describe('packaged Namefi adapter', () => {
       success: false,
       outcome: 'unknown',
     });
-    expect(fetch).toHaveBeenCalledTimes(4);
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
   it('hides credentials, upstream error bodies and contact details while retaining status', async () => {
     responses(
@@ -502,12 +490,12 @@ describe('packaged Namefi adapter', () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
   it('holds a malformed JSON write response as unknown without replaying the write', async () => {
-    const fetch = responses([raw], new Response('not json', { status: 200 }));
+    const fetch = responses(new Response('not json', { status: 200 }));
     expect(await provider({ retries: 3 }).setAutoRenew('example.com', false)).toMatchObject({
       success: false,
       outcome: 'unknown',
     });
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
   it('names the unavailable core APIs and the unwired forwarding semantics without sending requests', async () => {
     const fetch = responses(),

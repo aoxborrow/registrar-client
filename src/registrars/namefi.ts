@@ -333,8 +333,6 @@ export class NamefiRegistrar extends BaseRegistrar {
   ): Promise<OperationResult> {
     try {
       const normalizedDomainName = domain(name);
-      // Confirm current ownership before changing a domain configuration.
-      await this.getDomain(normalizedDomainName, opts);
       const result = await this.http.request<{ success: boolean }>({
         ...opts,
         method: 'PUT',
