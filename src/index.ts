@@ -37,6 +37,7 @@ export { GoDaddyRegistrar } from './registrars/godaddy';
 export { NameBrightRegistrar } from './registrars/namebright';
 export { NamecheapRegistrar } from './registrars/namecheap';
 export { NamecomRegistrar } from './registrars/namecom';
+export { NamefiRegistrar } from './registrars/namefi';
 export { NameSiloRegistrar } from './registrars/namesilo';
 export { PorkbunRegistrar } from './registrars/porkbun';
 export { SpaceshipRegistrar } from './registrars/spaceship';
