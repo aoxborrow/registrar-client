@@ -25,9 +25,9 @@ organization or accept a wallet private key.
 | `checkAvailability` | `GET /search/availability?domain=…`, once per distinct requested name                                             | Live read                      |
 | `getPricing`        | The same full-name endpoint; never generates a probe domain for a TLD                                             | Live read                      |
 | `registerDomain`    | `POST /orders/register-domain`; one requested domain, with an accepted asynchronous order reported as `pending`   | Unit-tested only; spends money |
-| `setAutoRenew`      | Confirms ownership, then `PUT /domain-config/auto-renew`                                                          | Unit-tested only               |
+| `setAutoRenew`      | Confirms ownership, then `PUT /domain-config/auto-renew`                                                          | Live write                     |
 | `getDnsRecords`     | Confirms ownership, then `GET /dns/records?zoneName=…`; splits MX/SRV numeric fields into the shared record shape | Live read                      |
-| `setDnsRecords`     | Reconciles existing records using the batch update/create/delete endpoints                                        | Unit-tested only               |
+| `setDnsRecords`     | Reconciles existing records using the batch update/create/delete endpoints                                        | Live write                     |
 
 Both email-held and NFT-held registry domains are included. NFT ownership is the
 representation of a normal registry domain, not a reason to drop it. The API
@@ -76,6 +76,11 @@ batch transaction, but the complete multi-request replacement is **not atomic**.
 A later failure may leave earlier batches applied; read the zone before retrying.
 Unconfirmed writes report an unknown outcome and are not resent by the client.
 
+Namefi answers invalid input with a generic 500, which the client must treat as
+a possibly applied write, so a rejected write can also report an unknown outcome.
+An invalid API key gets the same 500 rather than a 401, so it looks like an
+outage in `testConnection`.
+
 Managed records, SOA and NS cannot be removed or changed through this generic
 editor. Requests to change them stop before the first write. Complex type
 transitions that conflict with the current zone can be refused by Namefi; they
@@ -96,12 +101,17 @@ up and remains in `docs/TODOS.md`.
 6 November 2026: live read-only account/inventory/detail/nameserver/DNS and annual
 price checks passed. Fixtures use synthetic names; no live domains, account IDs,
 wallet addresses, contact information or credentials are committed. Availability
-and all documented read paths are checked through the actual adapter. Auto-renew,
-DNS mutations and registration remain unit-tested only; no live registrar setting,
-DNS record, purchase or payment was changed. See `docs/TODOS.md` for the holds.
+and all documented read paths are checked through the actual adapter. No live
+registrar setting, DNS record, purchase or payment was changed on this date.
 
 8 November 2026: the DNS ownership guard, empty owned zones and cancellation
 during either lookup are covered by offline tests; live reads were not repeated.
+
+9 November 2026: on a throwaway domain, live DNS additions (TXT, MX, CNAME, SRV),
+an in-place edit, deletion, unchanged round trips with no writes, refusal to drop
+managed records, and auto-renew on and off all passed; the ownership guard and
+reads were repeated. Registration remains unit-tested only and no purchase was
+made through the adapter. See `docs/TODOS.md`.
 
 Sources: [official OpenAPI specification](https://api.namefi.io/v-next/openapi/doc.json),
 [API reference](https://api.namefi.io/v-next/openapi/doc),

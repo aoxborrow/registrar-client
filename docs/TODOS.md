@@ -8,8 +8,8 @@ blocked. See `docs/registrars/FEATURES.md` for the full status matrix.
 ## Needs live testing (built + unit-tested, not executed)
 
 - [ ] **Namefi** — account, inventory, domain details, nameservers, availability,
-      DNS reads and annual pricing are read-only verified on 6 November 2026.
-      `setAutoRenew`, DNS batch mutations and asynchronous `registerDomain` are
+      DNS reads, annual pricing, `setAutoRenew` and DNS batch mutations are
+      live-verified (9 November 2026). Asynchronous `registerDomain` is still
       unit-tested only. Registration spends NFSC and can charge a saved card.
       Managed forwarding exists in the API but is not wired up: map and verify
       its redirect-mode semantics before advertising the extended capability.
