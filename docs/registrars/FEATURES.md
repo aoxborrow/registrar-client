@@ -98,18 +98,19 @@ Which provider declares each extended feature is in the README's
 [Supported functionality](../../README.md#supported-functionality) table; the notes
 below capture the per-feature caveats behind those cells.
 
-| `Feature`             | Notes                                                                                                                   |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `GetAuthCode`         | transfer-out EPP code returned synchronously; NameSilo/NC only email it; Porkbun gates it behind the UI                 |
-| `GetTransferOut`      | read the latest outbound transfer (status, dates); null when none. Dynadot, GoDaddy v2, Gandi                           |
-| `ApproveTransferOut`  | release a pending outbound transfer now. Dynadot, GoDaddy v2, Gandi                                                     |
-| `RejectTransferOut`   | deny a pending outbound transfer. Dynadot, GoDaddy v2, Gandi; Name.com could                                            |
-| `GetDnssec`           | read whether DNSSEC is enabled (DS / key records)                                                                       |
-| `DisableDnssec`       | turn DNSSEC off; no enable / key management (out of scope)                                                              |
-| `GetEmailForwarding`  | read counterpart of `SetEmailForwarding`                                                                                |
-| `SetEmailForwarding`  | alias redirect only — **distinct from a mailbox**; CF uses Email Routing                                                |
-| `GetDomainForwarding` | read counterpart of `SetDomainForwarding`                                                                               |
-| `SetDomainForwarding` | `temporary`/`permanent` only (`masked` is read-only); Gandi `webredirs` (per host, apex ok, `https` mode); CF via Rules |
+| `Feature`             | Notes                                                                                                                    |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `GetAuthCode`         | transfer-out EPP code returned synchronously; NameSilo/NC only email it; Porkbun gates it behind the UI                  |
+| `GetTransferOut`      | read the latest outbound transfer (status, dates); null when none. Dynadot, GoDaddy v2, Gandi                            |
+| `ApproveTransferOut`  | release a pending outbound transfer now. Dynadot, GoDaddy v2, Gandi                                                      |
+| `RejectTransferOut`   | deny a pending outbound transfer. Dynadot, GoDaddy v2, Gandi; Name.com could                                             |
+| `GetDnssec`           | read whether DNSSEC is enabled (DS / key records)                                                                        |
+| `DisableDnssec`       | turn DNSSEC off; no enable / key management (out of scope)                                                               |
+| `GetEmailForwarding`  | read counterpart of `SetEmailForwarding`                                                                                 |
+| `SetEmailForwarding`  | alias redirect only — **distinct from a mailbox**; CF uses Email Routing                                                 |
+| `GetDomainForwarding` | read counterpart of `SetDomainForwarding`                                                                                |
+| `SetDomainForwarding` | `temporary`/`permanent` only (`masked` is read-only); Gandi `webredirs` (per host, apex ok, `https` mode); CF via Rules  |
+| `ResetNameservers`    | back to the registrar's default NS: a mode switch (Spaceship basic, NC setDefault, Gandi LiveDNS, UD) or its fixed hosts |
 
 **Implementation status:** every declared extended feature above is now
 implemented on its provider(s). **Dynadot**, **Gandi**, and **Porkbun** are

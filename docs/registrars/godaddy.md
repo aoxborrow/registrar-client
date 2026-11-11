@@ -68,7 +68,9 @@ agreementTypes, agreedAt } }`. Hard-won gotchas:
 conversion, getPricing, getDnsRecords); v3 `registerDomain` (quote→execute→poll,
 a real purchase); v3 `setDnsRecords` (reversible TXT add/remove) and
 `updateNameservers` (reversible swap — note GoDaddy **serializes** NS changes, so
-overlapping PUTs clobber each other; propagation ~8s); and v1-via-PAT
+overlapping PUTs clobber each other; propagation ~8s; there is no API to restore
+GoDaddy's default `nsNN.domaincontrol.com` pair, which varies per domain, so
+`resetNameservers` is not declared); and v1-via-PAT
 `setAutoRenew` + `lock`/`unlock` + `getContacts`. Reads are **eventually
 consistent** across the v1-write / v3-read boundary, so management assertions must
 poll rather than read back immediately. OTE v1 (testConnection, listDomains,

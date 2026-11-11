@@ -8,6 +8,7 @@ import {
   createRegistrar,
   selectBaseUrl,
   ConfigurationError,
+  NotImplementedError,
   RegistrarClient,
   Feature,
   CORE_FEATURES,
@@ -340,6 +341,10 @@ describe('RegistrarClient nameserver normalization', () => {
         seen.push({ method: 'registerDomain', domain, payload: input });
         return Promise.resolve({ success: true });
       },
+      resetNameservers: (domain: string) => {
+        seen.push({ method: 'resetNameservers', domain });
+        return Promise.resolve({ success: true });
+      },
     } as unknown as Registrar;
     return { client: new RegistrarClient(provider), seen };
   }
@@ -366,6 +371,20 @@ describe('RegistrarClient nameserver normalization', () => {
         payload: { contacts: {}, nameservers: ['ns1.example.net'] },
       },
     ]);
+  });
+
+  it('resetNameservers normalizes the domain and delegates', async () => {
+    const { client, seen } = nameserverProvider();
+    await client.resetNameservers(' Example.COM. ');
+    expect(seen).toEqual([{ method: 'resetNameservers', domain: 'example.com' }]);
+  });
+
+  it('resetNameservers rejects where the registrar has no way back to its defaults', async () => {
+    for (const id of ['godaddy', 'cloudflare', 'namefi', 'namebright', '101domain'] as const) {
+      expect(registrars[id].features.includes(Feature.ResetNameservers), id).toBe(false);
+    }
+    const gd = new RegistrarClient(createRegistrar('godaddy', {}));
+    await expect(gd.resetNameservers('example.com')).rejects.toBeInstanceOf(NotImplementedError);
   });
 
   it('lowercases the nameservers it reads', async () => {

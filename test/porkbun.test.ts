@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createRegistrar, NotImplementedError } from '../src/index';
+import { createRegistrar, Feature, NotImplementedError } from '../src/index';
 import type { RequestConfig } from '../src/http';
 import type { Contact } from '../src/types';
 
@@ -83,6 +83,22 @@ describe('Porkbun provider', () => {
     const ns = await pb.getNameservers('example.com');
     expect(ns).toEqual(['ns1.porkbun.com', 'ns2.porkbun.com']);
     expect(calls[0]).toMatchObject({ method: 'POST', path: '/domain/getNs/example.com' });
+  });
+
+  it('resetNameservers sets the four *.ns.porkbun.com hosts via updateNs', async () => {
+    const pb = porkbun();
+    const calls = stubHttp(pb, () => ({ status: SUCCESS }));
+    expect((await pb.resetNameservers('example.com')).success).toBe(true);
+    expect(calls[0].path).toBe('/domain/updateNs/example.com');
+    expect(calls[0].body).toMatchObject({
+      ns: [
+        'curitiba.ns.porkbun.com',
+        'fortaleza.ns.porkbun.com',
+        'maceio.ns.porkbun.com',
+        'salvador.ns.porkbun.com',
+      ],
+    });
+    expect(pb.supports(Feature.ResetNameservers)).toBe(true);
   });
 
   it('getNameservers throws on a non-SUCCESS status', async () => {

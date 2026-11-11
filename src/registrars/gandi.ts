@@ -211,6 +211,7 @@ export class GandiRegistrar extends BaseRegistrar {
     Feature.GetTransferOut,
     Feature.ApproveTransferOut,
     Feature.RejectTransferOut,
+    Feature.ResetNameservers,
   ];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
@@ -463,6 +464,35 @@ export class GandiRegistrar extends BaseRegistrar {
       'Nameservers updated successfully',
       opts
     );
+  }
+
+  /**
+   * Switch the domain back to Gandi LiveDNS via POST .../livedns, which applies
+   * the domain's LiveDNS nameservers itself. They are per domain
+   * (ns-NNN-{a,b,c}.gandi.net), so there is no fixed set to send, and a domain
+   * coming off classic DNS has its records copied over. Asynchronous (202).
+   * A domain already on LiveDNS answers 409 "already using livedns
+   * nameservers", which is the state asked for, so it counts as success.
+   * (Sandbox-verified 2026-11-10; a pending nameserver change also 409s.)
+   */
+  override async resetNameservers(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const message = 'Nameservers reset to Gandi LiveDNS';
+    try {
+      await this.http.request({
+        method: 'POST',
+        path: `/domain/domains/${domainName}/livedns`,
+        ...opts,
+      });
+      return { success: true, message };
+    } catch (error) {
+      if (/already using livedns/i.test(toRegistrarError(error).message)) {
+        return { success: true, message };
+      }
+      return failedResult(error);
+    }
   }
 
   // The transfer lock lives on the domain's `/status` subresource and is toggled

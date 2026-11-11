@@ -36,8 +36,8 @@ no-op), `setEmailForwarding`, `setDomainForwarding`.
 - **Restoring Namecheap DNS needs `dns.setDefault`.** Passing the BasicDNS hosts
   (`dns1.registrar-servers.com`) to `updateNameservers` (setCustom) is rejected
   ("BasicDNS can not be used as Custom DNS"); reverting to Namecheap DNS is a
-  distinct `namecheap.domains.dns.setDefault` command (out of the core contract's
-  scope — `updateNameservers` is for custom NS).
+  distinct `namecheap.domains.dns.setDefault` command. `resetNameservers` sends
+  it, and `updateNameservers` given only the BasicDNS hosts routes there too.
 - Registration requires the whitelisted `ClientIp` to also be the request's
   outbound IP; both must match.
 

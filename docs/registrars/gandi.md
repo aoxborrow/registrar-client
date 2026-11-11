@@ -19,6 +19,9 @@ domain + auth code, not reproducible in the sandbox).
 - `updateNameservers` — `PUT .../nameservers` returns **202 "allow 12-24h for
   propagation"**; request shape confirmed accepted (read-back reflects it only
   after propagation).
+- `resetNameservers` — `POST .../livedns` (no body, 202) switches the domain back
+  to LiveDNS, which applies its per-domain `ns-NNN-{a,b,c}.gandi.net` hosts and
+  copies classic-DNS records over. From the API docs; not yet run live.
 - `updateContacts` — `PATCH .../contacts`; tech-role phone changed and read back.
 - `setAutoRenew` — `PATCH .../autorenew`. **Gotcha:** disabling on a domain that
   never had an autorenew record 400s ("no autorenew record"); the client now

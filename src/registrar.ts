@@ -344,6 +344,10 @@ export abstract class BaseRegistrar implements Registrar {
     return this.notImplemented('disableDnssec');
   }
 
+  resetNameservers(_domainName: string, _opts?: RequestOptions): Promise<OperationResult> {
+    return this.notImplemented('resetNameservers');
+  }
+
   // shared rejection for a capability a provider hasn't wired up yet
   protected notImplemented(method: string): Promise<never> {
     return Promise.reject(new NotImplementedError(`${this.name}: ${method} is not implemented`));

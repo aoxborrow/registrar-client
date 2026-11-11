@@ -16,7 +16,14 @@ import type {
   TldPricing,
   TransferDomainInput,
 } from '../types';
-import { asRead, createDomain, filterDomains, normalizeDomain, settableForwards } from '../utils';
+import {
+  asRead,
+  createDomain,
+  filterDomains,
+  isDefaultNameserverSet,
+  normalizeDomain,
+  settableForwards,
+} from '../utils';
 import { NotFoundError, NotImplementedError, failedResult } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
@@ -209,6 +216,7 @@ export class UnstoppableRegistrar extends BaseRegistrar {
     Feature.GetDomainForwarding,
     Feature.SetDomainForwarding,
     Feature.GetDnssec,
+    Feature.ResetNameservers,
   ];
 
   // how long writes wait for a background change, and how often they check
@@ -422,25 +430,46 @@ export class UnstoppableRegistrar extends BaseRegistrar {
 
   /**
    * Sets custom (external) nameservers via ud_dns_nameservers_set_custom.
-   * Unstoppable's own pair switches back to its default nameservers instead
-   * (ud_dns_nameservers_set_default), which also brings back its DNS hosting.
+   * Naming Unstoppable's own nameservers switches back to its defaults instead
+   * (see resetNameservers).
    */
   override async updateNameservers(
     domainName: string,
     nameservers: string[],
     opts?: RequestOptions
   ): Promise<OperationResult> {
+    if (isDefaultNameserverSet(nameservers, DEFAULT_NAMESERVERS)) {
+      return this.resetNameservers(domainName, opts);
+    }
     const domain = normalizeDomain(domainName);
-    const wanted = nameservers.map(normalizeDomain);
-    const isDefault =
-      wanted.length === DEFAULT_NAMESERVERS.length &&
-      DEFAULT_NAMESERVERS.every(ns => wanted.includes(ns));
     try {
       return await this.submit(
         domain,
-        isDefault ? 'ud_dns_nameservers_set_default' : 'ud_dns_nameservers_set_custom',
-        { domains: [isDefault ? { name: domain } : { name: domain, nameservers }] },
+        'ud_dns_nameservers_set_custom',
+        { domains: [{ name: domain, nameservers }] },
         'Nameservers updated successfully',
+        opts
+      );
+    } catch (error) {
+      return failedResult(error);
+    }
+  }
+
+  /**
+   * Switches back to Unstoppable's default nameservers via
+   * ud_dns_nameservers_set_default, which also brings back its DNS hosting.
+   */
+  override async resetNameservers(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const domain = normalizeDomain(domainName);
+    try {
+      return await this.submit(
+        domain,
+        'ud_dns_nameservers_set_default',
+        { domains: [{ name: domain }] },
+        'Nameservers reset to Unstoppable defaults',
         opts
       );
     } catch (error) {

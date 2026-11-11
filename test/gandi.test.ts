@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createRegistrar, Feature } from '../src/index';
+import { createRegistrar, Feature, RegistrarError } from '../src/index';
 import type { RequestConfig } from '../src/http';
 
 // Stub the provider's HttpClient so no network calls happen.
@@ -38,6 +38,29 @@ describe('Gandi provider', () => {
       nameservers: ['ns1.example.net', 'ns2.example.net'],
     });
     expect(domains[0].expirationDate?.toISOString()).toBe('2027-01-01T00:00:00.000Z');
+  });
+
+  it('resetNameservers POSTs to the domain livedns endpoint with no body', async () => {
+    const g = gandi();
+    const calls = stubHttp(g, () => ({ message: 'The configuration is being applied' }));
+    const res = await g.resetNameservers('example.com');
+    expect(res.success).toBe(true);
+    expect(calls[0]).toMatchObject({ method: 'POST', path: '/domain/domains/example.com/livedns' });
+    expect(calls[0].body).toBeUndefined();
+    expect(g.supports(Feature.ResetNameservers)).toBe(true);
+  });
+
+  it('resetNameservers treats "already using livedns" as success, other conflicts as failure', async () => {
+    const conflict = (cause: string) => () => {
+      const error = new RegistrarError(`Request failed with 409 Conflict: {"cause": "${cause}"}`);
+      error.status = 409;
+      throw error;
+    };
+    const g = gandi();
+    stubHttp(g, conflict('example.com is already using livedns nameservers'));
+    expect((await g.resetNameservers('example.com')).success).toBe(true);
+    stubHttp(g, conflict('A nameserver change is already in progress'));
+    expect(await g.resetNameservers('example.com')).toMatchObject({ success: false, status: 409 });
   });
 
   it('listDomains tolerates the object autorenew shape and legacy nameservers array', async () => {

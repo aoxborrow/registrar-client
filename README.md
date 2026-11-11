@@ -114,6 +114,37 @@ dot removed, blanks dropped) on every provider, both ways: the ones a write send
 returns (`getNameservers`, `Domain.nameservers`). Some registries refuse capitals
 outright (Dynadot: "Name server must be all lowercase").
 
+## Default nameservers
+
+`resetNameservers(domain)` (extended: check `supports(Feature.ResetNameservers)`)
+puts a domain back on the registrar's own nameservers, and so its DNS hosting.
+A plain `updateNameservers` with the registrar's own hostnames isn't always
+enough: Spaceship answers `422 "Cannot set basic nameservers as custom"` and
+Namecheap "BasicDNS can not be used as Custom DNS", because both keep their
+default DNS as a separate mode.
+
+So, on those registrars, `updateNameservers` called with only the registrar's
+own hosts (any order or case) switches to the default mode itself, exactly like
+`resetNameservers`. A nameserver editor that writes back
+`launch1/launch2.spaceship.net` or `dns1/dns2.registrar-servers.com` keeps
+working. A list that mixes default and custom hosts is still sent as custom.
+
+| Registrar   | How it resets                                              | Plain set of default hosts           |
+| ----------- | ---------------------------------------------------------- | ------------------------------------ |
+| Spaceship   | `PUT .../nameservers` `{ provider: "basic" }`              | switched to basic automatically      |
+| Namecheap   | `namecheap.domains.dns.setDefault`                         | switched to setDefault automatically |
+| Unstoppable | `ud_dns_nameservers_set_default`                           | switched automatically               |
+| Gandi       | `POST /domain/domains/{domain}/livedns` (per-domain hosts) | sent as given                        |
+| Dynadot     | sets `ns1/ns2.dyna-ns.net`                                 | works                                |
+| Porkbun     | sets `{curitiba,fortaleza,maceio,salvador}.ns.porkbun.com` | works                                |
+| NameSilo    | sets `ns1/ns2/ns3.dnsowl.com` (DNS hosting, not parking)   | works                                |
+| Name.com    | sets `ns1`–`ns4.name.com`                                  | works                                |
+| GoDaddy     | unsupported: defaults are per domain, no reset endpoint    | untested                             |
+| NameBright  | unsupported: defaults undocumented                         | —                                    |
+| 101domain   | unsupported: defaults undocumented, no reset endpoint      | —                                    |
+| Cloudflare  | unsupported: always on Cloudflare nameservers              | —                                    |
+| Namefi      | unsupported: no nameserver writes after registration       | —                                    |
+
 ## Listing domains & portfolios
 
 `listDomains` returns the **full account**, paginating internally at each
@@ -212,6 +243,7 @@ are the guaranteed contract; **extended** methods are opt-in per provider.
 | `setEmailForwarding`  | ✓   | ✓   | ✓   | ✗   | ✗   | ✓   | ✓   | ✗   | ✗   | ✗ᵐ  | ✗   | ✗   | ✗   |
 | `getDomainForwarding` | ✓   | ✓ʲ  | ✓ᵏ  | ✓ˡ  | ✗   | ✓   | ✓ʲ  | ✓   | ✗   | ✗ᵐ  | ✓   | ✓   | ✗ᑫ  |
 | `setDomainForwarding` | ✓   | ✓ʲ  | ✓ᵏ  | ✓ˡ  | ✗   | ✓   | ✓ʲ  | ✓   | ✗   | ✗ᵐ  | ✓   | ✓   | ✗ᑫ  |
+| `resetNameservers`    | ✗   | ✓   | ✓ʳ  | ✗ʳ  | ✗ʳ  | ✓ʳ  | ✓   | ✓   | ✓ʳ  | ✓   | ✗ʳ  | ✓ʳ  | ✗   |
 
 `CF` Cloudflare · `DY` Dynadot · `GA` Gandi · `GD` GoDaddy · `NB` NameBright ·
 `NC` Namecheap · `NS` NameSilo · `PB` Porkbun · `SP` Spaceship · `NM` Name.com · `101` 101domain · `UD` Unstoppable · `NF` Namefi.
@@ -273,6 +305,13 @@ not a claim of available API endpoints. See [101domain](docs/registrars/101domai
 - **ˡ** GoDaddy domain forwarding uses the v2 customer-scoped API, so it requires
   a `customerId` (the customer UUID, or a numeric shopper ID the client resolves to
   the UUID via an sso-key-only lookup); the old v1 forwarding route was removed.
+
+- **ʳ** `resetNameservers` puts a domain back on the registrar's own default
+  nameservers. Spaceship (`provider: "basic"`), Namecheap (`dns.setDefault`),
+  Gandi (`POST .../livedns`) and Unstoppable (`set_default`) switch modes; the
+  rest set their fixed default hosts. GoDaddy's defaults vary per domain with no
+  API to restore them, and NameBright and 101domain don't document theirs. See
+  [Default nameservers](#default-nameservers).
 
 - **ᵒ** Unstoppable registers/renews through a multi-step cart→checkout flow
   that spends real money (`ud_cart_*`); it isn't wired into this adapter.

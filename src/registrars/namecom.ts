@@ -123,6 +123,9 @@ class NamecomHttpClient extends HttpClient {
   }
 }
 
+// Name.com's own nameservers, which serve its DNS hosting
+const NAMECOM_DEFAULT_NS = ['ns1.name.com', 'ns2.name.com', 'ns3.name.com', 'ns4.name.com'];
+
 export class NamecomRegistrar extends BaseRegistrar {
   readonly name = 'namecom';
   // a REST API: GET and HEAD never change state
@@ -138,7 +141,10 @@ export class NamecomRegistrar extends BaseRegistrar {
     'Get an API token at https://www.name.com/account/settings/api. ' +
     'Accounts with 2FA must enable API Access. Sandbox requires your -test username ' +
     'and a separate sandbox token; select the sandbox environment explicitly.';
-  static override readonly extendedFeatures: readonly RegistrarFeature[] = [Feature.GetAuthCode];
+  static override readonly extendedFeatures: readonly RegistrarFeature[] = [
+    Feature.GetAuthCode,
+    Feature.ResetNameservers,
+  ];
   override readonly requiresNameserversFetch = false;
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
@@ -397,6 +403,16 @@ export class NamecomRegistrar extends BaseRegistrar {
       opts
     );
   }
+
+  /**
+   * Put the domain back on Name.com's own nameservers (ns1-ns4.name.com) with a
+   * plain setNameservers; the API has no reset call. (An account can set other
+   * defaults for new registrations; this restores Name.com's DNS hosting.)
+   */
+  override resetNameservers(domainName: string, opts?: RequestOptions): Promise<OperationResult> {
+    return this.updateNameservers(domainName, [...NAMECOM_DEFAULT_NS], opts);
+  }
+
   override async getContacts(domainName: string, opts?: RequestOptions): Promise<ContactSet> {
     const result: ContactSet = {};
     const raw = await this.rawDomain(domainName, opts);
