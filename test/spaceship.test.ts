@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { createRegistrar, ConsentRequiredError, NotImplementedError } from '../src/index';
+import {
+  createRegistrar,
+  ConsentRequiredError,
+  Feature,
+  NotImplementedError,
+  RegistrarError,
+} from '../src/index';
 import type { RequestConfig } from '../src/http';
 
 // Stub the provider's HttpClient. `handler` receives each RequestConfig and
@@ -123,6 +129,51 @@ describe('Spaceship provider', () => {
     const calls = stubHttp(sp, () => '');
     await sp.updateNameservers('example.com', ['ns1.x.net', 'ns2.x.net']);
     expect(calls[0].body).toEqual({ provider: 'custom', hosts: ['ns1.x.net', 'ns2.x.net'] });
+  });
+
+  it('resetNameservers switches to provider=basic on the nameservers endpoint', async () => {
+    const sp = spaceship();
+    const calls = stubHttp(sp, () => '');
+    const res = await sp.resetNameservers('example.com');
+    expect(res.success).toBe(true);
+    expect(calls[0]).toMatchObject({
+      method: 'PUT',
+      path: '/v1/domains/example.com/nameservers',
+      body: { provider: 'basic' },
+    });
+    expect(sp.supports(Feature.ResetNameservers)).toBe(true);
+  });
+
+  it('resetNameservers treats "already used the same provider Basic" as success', async () => {
+    const unprocessable = (detail: string) => () => {
+      const error = new RegistrarError(`Request failed with 422: {"detail":"${detail}"}`);
+      error.status = 422;
+      throw error;
+    };
+    const sp = spaceship();
+    stubHttp(
+      sp,
+      unprocessable(
+        "Dns provider hasn't been updated because domain 'example.com' has already used the same provider Basic"
+      )
+    );
+    expect((await sp.resetNameservers('example.com')).success).toBe(true);
+    stubHttp(sp, unprocessable('Domain is locked'));
+    expect(await sp.resetNameservers('example.com')).toMatchObject({ success: false, status: 422 });
+  });
+
+  it("updateNameservers routes Spaceship's own hosts to basic instead of custom", async () => {
+    const sp = spaceship();
+    const calls = stubHttp(sp, () => '');
+    // Spaceship 422s these as custom: "Cannot set basic nameservers as custom"
+    await sp.updateNameservers('example.com', ['LAUNCH2.spaceship.net.', 'launch1.spaceship.net']);
+    expect(calls[0].body).toEqual({ provider: 'basic' });
+    // a mix with a foreign host stays custom (and Spaceship decides)
+    await sp.updateNameservers('example.com', ['launch1.spaceship.net', 'ns1.x.net']);
+    expect(calls[1].body).toEqual({
+      provider: 'custom',
+      hosts: ['launch1.spaceship.net', 'ns1.x.net'],
+    });
   });
 
   it('setPrivacy maps enabled to privacyLevel + userConsent', async () => {

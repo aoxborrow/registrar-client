@@ -57,6 +57,7 @@ export const Feature = {
   SetEmailForwarding: 'setEmailForwarding', // alias-style email forwarding (redirect only)
   GetDomainForwarding: 'getDomainForwarding', // read URL redirect / domain forwarding
   SetDomainForwarding: 'setDomainForwarding', // URL redirect / domain forwarding
+  ResetNameservers: 'resetNameservers', // put a domain back on the registrar's own default nameservers
 } as const;
 
 // A registrar capability identifier — the value of one of the `Feature` members.
@@ -97,6 +98,7 @@ export const EXTENDED_FEATURES = [
   Feature.SetEmailForwarding,
   Feature.GetDomainForwarding,
   Feature.SetDomainForwarding,
+  Feature.ResetNameservers,
 ] as const satisfies readonly RegistrarFeature[];
 
 // Every feature, core first.
@@ -152,4 +154,5 @@ export const FEATURE_CALLS: Record<
   setEmailForwarding: { intent: 'write', optsIndex: 2 },
   getDomainForwarding: { intent: 'read', optsIndex: 1 },
   setDomainForwarding: { intent: 'write', optsIndex: 2 },
+  resetNameservers: { intent: 'write', optsIndex: 1 },
 };

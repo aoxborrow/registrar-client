@@ -149,6 +149,14 @@ interface PbCheckResponse extends PbResponse {
   };
 }
 
+// Porkbun's own nameservers, which serve its DNS hosting
+const PORKBUN_DEFAULT_NS = [
+  'curitiba.ns.porkbun.com',
+  'fortaleza.ns.porkbun.com',
+  'maceio.ns.porkbun.com',
+  'salvador.ns.porkbun.com',
+];
+
 /**
  * Porkbun Registrar
  * API docs: https://porkbun.com/api/json/v3/documentation
@@ -211,6 +219,7 @@ export class PorkbunRegistrar extends BaseRegistrar {
     Feature.DisableDnssec,
     Feature.GetDomainForwarding,
     Feature.SetDomainForwarding,
+    Feature.ResetNameservers,
   ];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
@@ -465,6 +474,14 @@ export class PorkbunRegistrar extends BaseRegistrar {
       opts
     );
     return statusResult(res);
+  }
+
+  /**
+   * Put the domain back on Porkbun's own nameservers (*.ns.porkbun.com). Porkbun
+   * has no separate mode for it; its hosts are accepted as a plain updateNs set.
+   */
+  override resetNameservers(domainName: string, opts?: RequestOptions): Promise<OperationResult> {
+    return this.updateNameservers(domainName, [...PORKBUN_DEFAULT_NS], opts);
   }
 
   /**

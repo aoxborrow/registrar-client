@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  Feature,
   createRegistrar,
   registrars,
   AuthenticationError,
@@ -229,6 +230,16 @@ describe('Unstoppable Domains provider', () => {
     ]);
     expect(calls[1].path).toBe('/mcp/v1/actions/ud_dns_nameservers_set_default');
     expect(calls[1].body).toEqual({ domains: [{ name: 'example.com' }] });
+  });
+
+  it('resetNameservers posts ud_dns_nameservers_set_default', async () => {
+    const u = ud();
+    const calls = stubHttp(u, () => OK_WRITE);
+    const res = await u.resetNameservers('Example.com');
+    expect(res.success).toBe(true);
+    expect(calls[0].path).toBe('/mcp/v1/actions/ud_dns_nameservers_set_default');
+    expect(calls[0].body).toEqual({ domains: [{ name: 'example.com' }] });
+    expect(u.supports(Feature.ResetNameservers)).toBe(true);
   });
 
   it('writes report a per-domain failure, and keep the status of an HTTP error', async () => {

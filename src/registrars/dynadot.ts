@@ -105,6 +105,10 @@ interface V2TransferStatus {
 // (there is no dedicated "clear forwarding" endpoint).
 const DYNADOT_DEFAULT_NS = ['ns1.dynadot.com', 'ns2.dynadot.com'];
 
+// Dynadot DNS, the nameservers its DNS hosting, forwarding and site builder
+// use. (ns1/ns2.dynadot.com above are the older pair.)
+const DYNADOT_DNS_NS = ['ns1.dyna-ns.net', 'ns2.dyna-ns.net'];
+
 interface V2DomainInfo {
   domain_name?: string;
   expiration_date?: number;
@@ -265,6 +269,7 @@ export class DynadotRegistrar extends BaseRegistrar {
     Feature.SetEmailForwarding,
     Feature.GetDomainForwarding,
     Feature.SetDomainForwarding,
+    Feature.ResetNameservers,
   ];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
@@ -708,6 +713,14 @@ export class DynadotRegistrar extends BaseRegistrar {
       'Nameservers updated successfully',
       opts
     );
+  }
+
+  /**
+   * Put the domain back on Dynadot DNS (ns1/ns2.dyna-ns.net). Dynadot has no
+   * separate mode for it; its own hosts are accepted as a plain nameserver set.
+   */
+  override resetNameservers(domainName: string, opts?: RequestOptions): Promise<OperationResult> {
+    return this.updateNameservers(domainName, [...DYNADOT_DNS_NS], opts);
   }
 
   // Transfer lock via PUT .../domain_lock with a boolean `lock`.

@@ -348,6 +348,18 @@ describe('Dynadot provider (RESTful v2)', () => {
     await expect(dy.updateNameservers('example.com', ['only1.x.com'])).rejects.toThrow(/2-13/);
   });
 
+  it('resetNameservers sets the Dynadot DNS pair (ns1/ns2.dyna-ns.net)', async () => {
+    const dy = dynadot();
+    const calls = stubHttp(dy, () => ok({}));
+    expect((await dy.resetNameservers('example.com')).success).toBe(true);
+    expect(calls[0]).toMatchObject({
+      method: 'PUT',
+      path: '/restful/v2/domains/example.com/nameservers',
+      body: { nameserver_list: ['ns1.dyna-ns.net', 'ns2.dyna-ns.net'] },
+    });
+    expect(dy.supports(Feature.ResetNameservers)).toBe(true);
+  });
+
   it('updateNameservers sends lowercase hostnames (Dynadot rejects capitals)', async () => {
     // Called on the provider itself, not through RegistrarClient: the base
     // feature wrapper normalizes the list before Dynadot's code sees it.

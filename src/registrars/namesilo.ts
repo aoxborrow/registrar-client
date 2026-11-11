@@ -181,6 +181,7 @@ export class NameSiloRegistrar extends BaseRegistrar {
     Feature.SetEmailForwarding,
     Feature.GetDomainForwarding,
     Feature.SetDomainForwarding,
+    Feature.ResetNameservers,
   ];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
@@ -441,6 +442,15 @@ export class NameSiloRegistrar extends BaseRegistrar {
     });
     const res = await this.call('changeNameServers', query, opts);
     return statusResult(res);
+  }
+
+  /**
+   * Put the domain back on NameSilo DNS hosting (ns1-3.dnsowl.com), not the
+   * ns1/ns2.namesilo.com parking servers. changeNameServers has no default flag;
+   * the DNSOWL hosts are accepted as a plain set.
+   */
+  override resetNameservers(domainName: string, opts?: RequestOptions): Promise<OperationResult> {
+    return this.updateNameservers(domainName, [...NAMESILO_DEFAULT_NS], opts);
   }
 
   override async lockDomain(domainName: string, opts?: RequestOptions): Promise<OperationResult> {

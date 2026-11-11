@@ -547,6 +547,11 @@ export interface Registrar {
   // disable/turn off DNSSEC for a domain (removes the registrar's DS records at
   // the parent). Enabling DNSSEC is intentionally not part of this interface.
   disableDnssec(domainName: string, opts?: RequestOptions): Promise<OperationResult>;
+
+  // put the domain back on the registrar's own default nameservers (its DNS
+  // hosting). Some registrars switch modes for this rather than accepting their
+  // own hostnames as a custom set (Spaceship "basic", Namecheap BasicDNS).
+  resetNameservers(domainName: string, opts?: RequestOptions): Promise<OperationResult>;
 }
 
 // static side of a registrar class: the constructor plus discovery metadata

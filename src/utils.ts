@@ -145,6 +145,19 @@ export function normalizeNameservers(nameservers: unknown): string[] {
 
 // build a normalized Domain from loose provider input:
 // lowercases status, normalizes nameservers, and coerces dates.
+// True when `nameservers` is a non-empty set drawn only from a registrar's own
+// default hostnames (in any order). Providers that keep their default DNS in a
+// separate mode (Spaceship "basic", Namecheap BasicDNS) use this to route an
+// updateNameservers call naming those hosts to that mode, since their custom-NS
+// endpoint rejects them.
+export function isDefaultNameserverSet(
+  nameservers: readonly string[],
+  defaults: readonly string[]
+): boolean {
+  const wanted = normalizeNameservers([...nameservers]);
+  return wanted.length > 0 && wanted.every(ns => defaults.includes(ns));
+}
+
 export function createDomain(data: DomainInput = {}): Domain {
   return {
     domainName: data.domainName ?? '',

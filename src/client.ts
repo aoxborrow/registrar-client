@@ -136,6 +136,12 @@ export class RegistrarClient {
     );
   }
 
+  // Extended (gate on `provider.supports(Feature.ResetNameservers)`): put the
+  // domain back on the registrar's own default nameservers.
+  resetNameservers(domainName: string, opts?: RequestOptions): Promise<OperationResult> {
+    return this.provider.resetNameservers(normalizeDomain(domainName), opts);
+  }
+
   async getNameservers(domainName: string, opts?: RequestOptions): Promise<string[]> {
     return normalizeNameservers(
       await this.provider.getNameservers(normalizeDomain(domainName), opts)

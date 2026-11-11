@@ -21,6 +21,7 @@ import {
   asRead,
   createDomain,
   filterDomains,
+  isDefaultNameserverSet,
   normalizeDomain,
   requireConsent,
   settableForwards,
@@ -149,6 +150,8 @@ interface NcCommandResponse {
   DomainGetRegistrarLockResult?: { '@_RegistrarLockStatus'?: string };
   // namecheap.domains.setAutoRenew result (carries its own IsSuccess flag)
   SetAutoRenewResult?: { '@_IsSuccess'?: string };
+  // namecheap.domains.dns.setDefault result
+  DomainDNSSetDefaultResult?: { '@_Domain'?: string; '@_Updated'?: string };
 }
 
 interface NcResponse {
@@ -255,6 +258,7 @@ export class NamecheapRegistrar extends BaseRegistrar {
     Feature.SetEmailForwarding,
     Feature.GetDomainForwarding,
     Feature.SetDomainForwarding,
+    Feature.ResetNameservers,
   ];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
@@ -588,6 +592,11 @@ export class NamecheapRegistrar extends BaseRegistrar {
     nameservers: string[],
     opts?: RequestOptions
   ): Promise<OperationResult> {
+    // BasicDNS can't be set as custom DNS ("Namecheap BasicDNS can not be used
+    // as Custom DNS"), so naming its hosts means switching back to it.
+    if (isDefaultNameserverSet(nameservers, NAMECHEAP_DEFAULT_NS)) {
+      return this.resetNameservers(domainName, opts);
+    }
     if (nameservers.length < 2 || nameservers.length > 12) {
       throw new Error('Namecheap requires 2-12 nameservers');
     }
@@ -598,6 +607,25 @@ export class NamecheapRegistrar extends BaseRegistrar {
       opts
     );
     return statusResult(res);
+  }
+
+  /**
+   * Switch the domain back to Namecheap BasicDNS (dns1/dns2.registrar-servers.com)
+   * via namecheap.domains.dns.setDefault. The custom-DNS command refuses those
+   * hosts, so this is the only way back from custom nameservers.
+   */
+  override async resetNameservers(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const { sld, tld } = splitDomain(domainName);
+    const res = await this.call('namecheap.domains.dns.setDefault', { SLD: sld, TLD: tld }, opts);
+    if (!isOk(res)) return statusResult(res);
+    const updated = res.ApiResponse?.CommandResponse?.DomainDNSSetDefaultResult?.['@_Updated'];
+    if (updated === 'false') {
+      return { success: false, message: 'Namecheap did not switch the domain to BasicDNS' };
+    }
+    return { success: true, message: 'Nameservers reset to Namecheap BasicDNS' };
   }
 
   override async lockDomain(domainName: string, opts?: RequestOptions): Promise<OperationResult> {
@@ -890,6 +918,11 @@ function statusResult(res: NcResponse): OperationResult {
   if (isOk(res)) return { success: true, message: 'OK' };
   return failureResult(res, 'Unknown response');
 }
+
+// Namecheap BasicDNS, the nameservers a domain gets by default
+// (namecheap.domains.dns.setDefault). FreeDNS (freedns1-5.registrar-servers.com)
+// is a separate product for domains registered elsewhere, so it isn't matched.
+const NAMECHEAP_DEFAULT_NS = ['dns1.registrar-servers.com', 'dns2.registrar-servers.com'];
 
 // split a domain into second-level label + TLD (the TLD may contain a dot, e.g.
 // "co.uk"). Namecheap's DNS/nameserver commands take SLD and TLD separately.

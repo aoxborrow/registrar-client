@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createRegistrar, ConsentRequiredError, RateLimitError } from '../src/index';
+import { createRegistrar, ConsentRequiredError, Feature, RateLimitError } from '../src/index';
 import type { RequestConfig } from '../src/http';
 
 // Namecheap speaks XML, so its HttpClient uses requestText (not request). Stub
@@ -246,6 +246,55 @@ describe('Namecheap provider', () => {
     const ns = await nc.getNameservers('example.com');
     expect(ns).toEqual(['ns1.example.net', 'ns2.example.net']);
     expect(calls[0].query).toMatchObject({ SLD: 'example', TLD: 'com' });
+  });
+
+  it('updateNameservers sends dns.setCustom with SLD/TLD and a comma list', async () => {
+    const nc = namecheap();
+    const calls = stubXml(nc, () =>
+      ok(`<DomainDNSSetCustomResult Domain="example.co.uk" Updated="true"/>`)
+    );
+    const res = await nc.updateNameservers('example.co.uk', ['ns1.x.net', 'ns2.x.net']);
+    expect(res.success).toBe(true);
+    expect(calls[0].query).toMatchObject({
+      Command: 'namecheap.domains.dns.setCustom',
+      SLD: 'example',
+      TLD: 'co.uk',
+      Nameservers: 'ns1.x.net,ns2.x.net',
+    });
+  });
+
+  it('resetNameservers sends dns.setDefault and reads its Updated flag', async () => {
+    const nc = namecheap();
+    const calls = stubXml(nc, () =>
+      ok(`<DomainDNSSetDefaultResult Domain="example.com" Updated="true"/>`)
+    );
+    const res = await nc.resetNameservers('example.com');
+    expect(res.success).toBe(true);
+    expect(calls[0].query).toMatchObject({
+      Command: 'namecheap.domains.dns.setDefault',
+      SLD: 'example',
+      TLD: 'com',
+    });
+    expect(calls[0].query).not.toHaveProperty('Nameservers');
+    expect(nc.supports(Feature.ResetNameservers)).toBe(true);
+
+    stubXml(nc, () => ok(`<DomainDNSSetDefaultResult Domain="example.com" Updated="false"/>`));
+    expect((await nc.resetNameservers('example.com')).success).toBe(false);
+  });
+
+  it('updateNameservers routes the BasicDNS hosts to dns.setDefault', async () => {
+    const nc = namecheap();
+    const calls = stubXml(nc, () =>
+      ok(`<DomainDNSSetDefaultResult Domain="example.com" Updated="true"/>`)
+    );
+    // setCustom rejects these: "Namecheap BasicDNS can not be used as Custom DNS"
+    const res = await nc.updateNameservers('example.com', [
+      'dns1.registrar-servers.com',
+      'DNS2.registrar-servers.com.',
+    ]);
+    expect(res.success).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].query?.Command).toBe('namecheap.domains.dns.setDefault');
   });
 
   it('getContacts maps the Registrant group (AuxBilling -> billing)', async () => {

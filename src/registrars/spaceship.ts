@@ -15,11 +15,20 @@ import type {
   TransferDomainInput,
 } from '../types';
 import { REST_SAFE_METHODS } from '../http';
-import { createDomain, filterDomains, requireConsent, sleep } from '../utils';
-import { NotImplementedError, failedResult } from '../errors';
+import {
+  createDomain,
+  filterDomains,
+  isDefaultNameserverSet,
+  requireConsent,
+  sleep,
+} from '../utils';
+import { NotImplementedError, failedResult, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
+
+// Spaceship's own ("basic") nameservers
+const SPACESHIP_DEFAULT_NS = ['launch1.spaceship.net', 'launch2.spaceship.net'];
 
 interface SpaceshipNameservers {
   provider?: string;
@@ -146,9 +155,12 @@ export class SpaceshipRegistrar extends BaseRegistrar {
   ];
   static readonly supportsSandbox = false; // Spaceship has no public sandbox environment
   // Modern REST API. Beyond core: transfer-out auth-code retrieval
-  // (GET .../transfer/auth-code). No DNSSEC or forwarding via the API; Spacemail
+  // (GET .../transfer/auth-code) and resetting to its basic nameservers. No DNSSEC or forwarding via the API; Spacemail
   // (email) has no public API.
-  static readonly extendedFeatures: readonly RegistrarFeature[] = [Feature.GetAuthCode];
+  static readonly extendedFeatures: readonly RegistrarFeature[] = [
+    Feature.GetAuthCode,
+    Feature.ResetNameservers,
+  ];
 
   constructor(credentials: RegistrarCredentials, options?: RegistrarOptions) {
     super(
@@ -377,6 +389,11 @@ export class SpaceshipRegistrar extends BaseRegistrar {
     nameservers: string[],
     opts?: RequestOptions
   ): Promise<OperationResult> {
+    // Spaceship refuses its own hosts as a custom set ("Cannot set basic
+    // nameservers as custom"); naming them means switching back to basic.
+    if (isDefaultNameserverSet(nameservers, SPACESHIP_DEFAULT_NS)) {
+      return this.resetNameservers(domainName, opts);
+    }
     return this.mutate(
       {
         method: 'PUT',
@@ -387,6 +404,34 @@ export class SpaceshipRegistrar extends BaseRegistrar {
       'Nameservers updated successfully',
       opts
     );
+  }
+
+  /**
+   * Switch the domain back to Spaceship's own nameservers
+   * (launch1/launch2.spaceship.net) with provider "basic" on the same endpoint;
+   * Spaceship assigns the hosts itself. A domain already on basic answers 422
+   * "has already used the same provider Basic", which is the state asked for,
+   * so it counts as success. (Live-verified 2026-11-11.)
+   */
+  override async resetNameservers(
+    domainName: string,
+    opts?: RequestOptions
+  ): Promise<OperationResult> {
+    const message = 'Nameservers reset to Spaceship basic nameservers';
+    try {
+      await this.http.request({
+        method: 'PUT',
+        path: `/v1/domains/${encodeURIComponent(domainName)}/nameservers`,
+        body: { provider: 'basic' },
+        ...opts,
+      });
+      return { success: true, message };
+    } catch (error) {
+      if (/already used the same provider basic/i.test(toRegistrarError(error).message)) {
+        return { success: true, message };
+      }
+      return failedResult(error);
+    }
   }
 
   override async lockDomain(domainName: string, opts?: RequestOptions): Promise<OperationResult> {

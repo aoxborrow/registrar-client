@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createRegistrar } from '../src/index';
+import { createRegistrar, Feature } from '../src/index';
 import type { RequestConfig } from '../src/http';
 
 // NameSilo speaks JSON over HttpClient.request, plus raw XML over requestText for
@@ -74,6 +74,19 @@ describe('NameSilo provider', () => {
       },
     }));
     expect(await ns.getNameservers('example.com')).toEqual(['a.ns', 'b.ns']);
+  });
+
+  it('resetNameservers sets the DNSOWL hosting hosts, not the parking servers', async () => {
+    const ns = namesilo();
+    const calls = stubHttp(ns, () => ({ reply: { code: 300, detail: 'success' } }));
+    expect((await ns.resetNameservers('example.com')).success).toBe(true);
+    expect(calls[0].query).toMatchObject({
+      domain: 'example.com',
+      ns1: 'ns1.dnsowl.com',
+      ns2: 'ns2.dnsowl.com',
+      ns3: 'ns3.dnsowl.com',
+    });
+    expect(ns.supports(Feature.ResetNameservers)).toBe(true);
   });
 
   it('listDomains applies limit and client-side search', async () => {

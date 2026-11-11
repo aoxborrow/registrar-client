@@ -66,7 +66,10 @@ afterEach(() => {
 describe('Name.com metadata and authentication', () => {
   it('constructs from the public registry and advertises only implemented extended features', () => {
     expect(provider()).toBeInstanceOf(NamecomRegistrar);
-    expect(NamecomRegistrar.extendedFeatures).toEqual([Feature.GetAuthCode]);
+    expect(NamecomRegistrar.extendedFeatures).toEqual([
+      Feature.GetAuthCode,
+      Feature.ResetNameservers,
+    ]);
     expect(provider().supports(Feature.GetEmailForwarding)).toBe(false);
     expect(provider().requiresNameserversFetch).toBe(false);
     expect(NamecomRegistrar.configFields.map(f => f.name)).toEqual(['username', 'apiToken']);
@@ -465,6 +468,14 @@ describe('Name.com management and contacts', () => {
     await provider().updateNameservers('example.com', ['ns1.name.com', 'ns2.name.com']);
     expect(requestUrl(mock.mock.calls[0][0]).endsWith(':setNameservers')).toBe(true);
     expect(body(mock)).toEqual({ nameservers: ['ns1.name.com', 'ns2.name.com'] });
+  });
+  it('resetNameservers sets ns1-ns4.name.com through the same action', async () => {
+    const mock = responses({});
+    expect((await provider().resetNameservers('example.com')).success).toBe(true);
+    expect(requestUrl(mock.mock.calls[0][0]).endsWith('/example.com:setNameservers')).toBe(true);
+    expect(body(mock)).toEqual({
+      nameservers: ['ns1.name.com', 'ns2.name.com', 'ns3.name.com', 'ns4.name.com'],
+    });
   });
   it('maps legacy null contacts and writes only supplied complete roles', async () => {
     const mock = responses(
