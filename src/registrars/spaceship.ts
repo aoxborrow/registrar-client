@@ -22,7 +22,7 @@ import {
   requireConsent,
   sleep,
 } from '../utils';
-import { NotImplementedError, failedResult } from '../errors';
+import { NotImplementedError, failedResult, toRegistrarError } from '../errors';
 import { BaseRegistrar, selectBaseUrl } from '../registrar';
 import { Feature, type RegistrarFeature } from '../features';
 import type { RegistrarCredentials } from '../types';
@@ -409,21 +409,29 @@ export class SpaceshipRegistrar extends BaseRegistrar {
   /**
    * Switch the domain back to Spaceship's own nameservers
    * (launch1/launch2.spaceship.net) with provider "basic" on the same endpoint;
-   * Spaceship assigns the hosts itself.
+   * Spaceship assigns the hosts itself. A domain already on basic answers 422
+   * "has already used the same provider Basic", which is the state asked for,
+   * so it counts as success. (Live-verified 2026-11-11.)
    */
   override async resetNameservers(
     domainName: string,
     opts?: RequestOptions
   ): Promise<OperationResult> {
-    return this.mutate(
-      {
+    const message = 'Nameservers reset to Spaceship basic nameservers';
+    try {
+      await this.http.request({
         method: 'PUT',
         path: `/v1/domains/${encodeURIComponent(domainName)}/nameservers`,
         body: { provider: 'basic' },
-      },
-      'Nameservers reset to Spaceship basic nameservers',
-      opts
-    );
+        ...opts,
+      });
+      return { success: true, message };
+    } catch (error) {
+      if (/already used the same provider basic/i.test(toRegistrarError(error).message)) {
+        return { success: true, message };
+      }
+      return failedResult(error);
+    }
   }
 
   override async lockDomain(domainName: string, opts?: RequestOptions): Promise<OperationResult> {

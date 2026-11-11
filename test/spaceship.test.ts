@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { createRegistrar, ConsentRequiredError, Feature, NotImplementedError } from '../src/index';
+import {
+  createRegistrar,
+  ConsentRequiredError,
+  Feature,
+  NotImplementedError,
+  RegistrarError,
+} from '../src/index';
 import type { RequestConfig } from '../src/http';
 
 // Stub the provider's HttpClient. `handler` receives each RequestConfig and
@@ -136,6 +142,24 @@ describe('Spaceship provider', () => {
       body: { provider: 'basic' },
     });
     expect(sp.supports(Feature.ResetNameservers)).toBe(true);
+  });
+
+  it('resetNameservers treats "already used the same provider Basic" as success', async () => {
+    const unprocessable = (detail: string) => () => {
+      const error = new RegistrarError(`Request failed with 422: {"detail":"${detail}"}`);
+      error.status = 422;
+      throw error;
+    };
+    const sp = spaceship();
+    stubHttp(
+      sp,
+      unprocessable(
+        "Dns provider hasn't been updated because domain 'example.com' has already used the same provider Basic"
+      )
+    );
+    expect((await sp.resetNameservers('example.com')).success).toBe(true);
+    stubHttp(sp, unprocessable('Domain is locked'));
+    expect(await sp.resetNameservers('example.com')).toMatchObject({ success: false, status: 422 });
   });
 
   it("updateNameservers routes Spaceship's own hosts to basic instead of custom", async () => {
