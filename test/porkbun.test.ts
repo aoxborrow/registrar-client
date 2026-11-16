@@ -74,6 +74,20 @@ describe('Porkbun provider', () => {
     await expect(pb.getDomain('missing.com')).rejects.toThrow(/not found/i);
   });
 
+  it('listDomains skips external (notLocal) domains registered elsewhere', async () => {
+    const pb = porkbun();
+    stubHttp(pb, () => ({
+      status: SUCCESS,
+      domains: [
+        { domain: 'kept.com', status: 'ACTIVE', notLocal: 0 },
+        { domain: 'gone.com', status: 'ACTIVE', expireDate: '2027-01-01 00:00:00', notLocal: 1 },
+      ],
+    }));
+    const names = (await pb.listDomains()).map(d => d.domainName);
+    expect(names).toEqual(['kept.com']);
+    await expect(pb.getDomain('gone.com')).rejects.toThrow(/not found/i);
+  });
+
   it('getNameservers POSTs to /domain/getNs/{domain} and returns ns', async () => {
     const pb = porkbun();
     const calls = stubHttp(pb, () => ({

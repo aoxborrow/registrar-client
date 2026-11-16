@@ -38,6 +38,9 @@ interface PbDomain {
   securityLock?: string | number;
   whoisPrivacy?: string | number;
   autoRenew?: string | number;
+  // 1 for an "external" domain: added to the account but registered elsewhere
+  // (e.g. sold and transferred out). It still reports ACTIVE with an expiry.
+  notLocal?: string | number;
 }
 
 // domain/getNs response — `ns` is the current nameserver list
@@ -283,6 +286,8 @@ export class PorkbunRegistrar extends BaseRegistrar {
 
       const list = res.domains ?? [];
       for (const d of list) {
+        // External domains aren't registered at Porkbun, so they aren't ours here
+        if (isYes(d.notLocal)) continue;
         domains.push(
           createDomain({
             domainName: d.domain,
